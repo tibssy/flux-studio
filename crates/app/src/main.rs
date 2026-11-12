@@ -128,6 +128,9 @@ fn install_styles() {
              color: @accent_fg_color;
              border-radius: 6px;
              padding: 4px 10px;
+         }
+         .sidebar-pane, .overlay-pane {
+             background-color: @sidebar_bg_color;
          }",
     );
     gtk::style_context_add_provider_for_display(
@@ -165,14 +168,6 @@ fn build_ui(app: &adw::Application) {
     let view = main_view::build();
     let side = sidebar::build(&config, size_cell.clone());
 
-    let split = adw::OverlaySplitView::builder()
-        .sidebar(&side.root)
-        .content(&view.root)
-        .min_sidebar_width(340.0)
-        .max_sidebar_width(420.0)
-        .show_sidebar(config.sidebar_visible)
-        .build();
-
     let header = adw::HeaderBar::new();
     let sidebar_toggle = gtk::ToggleButton::builder()
         .icon_name("sidebar-show-symbolic")
@@ -187,11 +182,21 @@ fn build_ui(app: &adw::Application) {
         .build();
     header.pack_end(&preferences_button);
 
-    let toolbar_view = adw::ToolbarView::builder().content(&split).build();
-    toolbar_view.add_top_bar(&header);
+    // The toggle and window controls live in the content pane's header, so the
+    // sidebar can occupy the full window height.
+    let content_view = adw::ToolbarView::builder().content(&view.root).build();
+    content_view.add_top_bar(&header);
+
+    let split = adw::OverlaySplitView::builder()
+        .sidebar(&side.root)
+        .content(&content_view)
+        .min_sidebar_width(340.0)
+        .max_sidebar_width(420.0)
+        .show_sidebar(config.sidebar_visible)
+        .build();
 
     let toast = adw::ToastOverlay::new();
-    toast.set_child(Some(&toolbar_view));
+    toast.set_child(Some(&split));
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -690,7 +695,7 @@ fn start_generation(ui: &Rc<Ui>) {
     let output_dir = ui.config.borrow().output_dir.clone();
     let offload = ui.config.borrow().offload;
 
-    let output = output_dir.join(format!("{}-{}-{}.png", model.id, now_millis(), seed));
+    let output = output_dir.join(format!("{}-{}.png", slugify(&base_prompt), now_millis()));
 
     let mut request = GenerateRequest::new(effective_prompt, output);
     request.preset_id = model.id.to_string();
@@ -924,4 +929,67 @@ fn unix_seconds() -> i64 {
 
 fn preset_label(id: &str) -> &str {
     preset(id).map(|preset| preset.label).unwrap_or(id)
+}
+
+/// Build a short, filesystem-friendly name from the prompt.
+fn slugify(prompt: &str) -> String {
+    const MAX_WORDS: usize = 5;
+    const MAX_CHARS: usize = 48;
+
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for character in prompt.chars() {
+        if character.is_alphanumeric() {
+            current.extend(character.to_lowercase());
+        } else if !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+            if words.len() == MAX_WORDS {
+                break;
+            }
+        }
+    }
+    if !current.is_empty() && words.len() < MAX_WORDS {
+        words.push(current);
+    }
+
+    let mut slug = words.join("-");
+    if slug.chars().count() > MAX_CHARS {
+        slug = slug.chars().take(MAX_CHARS).collect();
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+    }
+
+    if slug.is_empty() {
+        "image".to_string()
+    } else {
+        slug
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn slugifies_prompts() {
+        assert_eq!(
+            slugify("A brass lighthouse on a stormy cliff at dusk"),
+            "a-brass-lighthouse-on-a"
+        );
+        assert_eq!(slugify("  Hello,   world!!  "), "hello-world");
+        assert_eq!(slugify("café au lait"), "café-au-lait");
+        assert_eq!(slugify(""), "image");
+        assert_eq!(slugify("!!! ???"), "image");
+    }
+
+    #[test]
+    fn slug_has_no_trailing_dash_and_is_short() {
+        let prompt = "an extremely long prompt about a very detailed mechanical whale \
+                      floating above a neon city at night, cinematic";
+        let slug = slugify(prompt);
+        assert!(!slug.ends_with('-'));
+        assert!(slug.chars().count() <= 48, "{slug}");
+        assert!(!slug.is_empty());
+    }
 }

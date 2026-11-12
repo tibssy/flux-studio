@@ -147,6 +147,7 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     ratio_text.append(&size_hint);
 
     let ratio_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    ratio_row.set_halign(gtk::Align::Center);
     ratio_row.append(&ratio_area);
     ratio_row.append(&ratio_text);
 

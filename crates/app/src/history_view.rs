@@ -181,14 +181,14 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
 
     let scroller = gtk::ScrolledWindow::builder()
         .child(&content)
-        .min_content_width(360)
+        .min_content_width(760)
         .max_content_height(380)
         .propagate_natural_height(true)
         .build();
 
     let dialog = adw::AlertDialog::builder()
         .heading("Image details")
-        .content_width(440)
+        .content_width(880)
         .extra_child(&scroller)
         .build();
     dialog.add_response("close", "Close");
