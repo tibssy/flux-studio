@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/backend-sdcpp",
+    "crates/models",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }
+anyhow = "1.0"
+async-channel = "2.5"
+dirs = "7.0"
+futures-util = "0.3"
+glib = "0.22"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
+image = "0.25"
+reqwest = { version = "0.13", default-features = false, features = ["stream", "native-tls"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt", "time", "net"] }
+toml = "1.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

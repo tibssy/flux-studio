@@ -1,0 +1,13 @@
+[package]
+name = "flux-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+flux-core = { path = "../core" }
+futures-util.workspace = true
+reqwest.workspace = true
+tracing.workspace = true

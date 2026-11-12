@@ -1,0 +1,59 @@
+# Maintainer: ltux <ltux@users.noreply.github.com>
+#
+# Build from a release tarball. Until the repository is published you can
+# produce one from the working tree:
+#
+#   tar --transform 's,^,flux-studio-0.1.0/,' -czf flux-studio-0.1.0.tar.gz \
+#       Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
+#       packaging/PKGBUILD packaging/io.github.ltux.FluxStudio.desktop \
+#       packaging/io.github.ltux.FluxStudio.svg
+#
+# then run `makepkg -si` in this directory.
+#
+# The CUDA backend is compiled for Maxwell (sm_52) by default. Override with
+# FLUX_CUDA_ARCH=86 (Ampere), 89 (Ada), 120 (Blackwell), etc.
+
+pkgname=flux-studio
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='GTK4/libadwaita desktop app for local image generation with stable-diffusion.cpp'
+arch=('x86_64')
+url='https://github.com/ltux/flux-studio'
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libadwaita' 'hicolor-icon-theme' 'openssl')
+makedepends=('cargo' 'rust' 'cmake' 'ninja' 'git' 'cuda' 'gcc14')
+optdepends=('nvidia-utils: CUDA inference on NVIDIA GPUs')
+source=("$pkgname-$pkgver.tar.gz"
+        "stable-diffusion.cpp::git+https://github.com/leejet/stable-diffusion.cpp#commit=32d516c0197ed5ca31305b8575e14eb1451fad33")
+sha256sums=('SKIP' 'SKIP')
+
+_cuda_arch="${FLUX_CUDA_ARCH:-52}"
+
+build() {
+  cd "$pkgname-$pkgver"
+  SDCPP_SRC="$srcdir/stable-diffusion.cpp" CUDA_ARCH="$_cuda_arch" \
+    HOST_CC=gcc-14 HOST_CXX=g++-14 ./scripts/build-sdcpp.sh
+
+  # Bundled C deps (sqlite3) are compiled with the distro CFLAGS, which
+  # include -flto=auto. Those GCC LTO objects cannot be read by rustc's lld,
+  # which shows up as undefined sqlite3 symbols at link time.
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
+  export LDFLAGS="${LDFLAGS//-flto=auto/}"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -Dm755 target/release/flux-studio "$pkgdir/usr/bin/flux-studio"
+  install -Dm755 "$srcdir/stable-diffusion.cpp/build/bin/sd-cli" \
+    "$pkgdir/usr/lib/flux-studio/sd-cli"
+
+  install -Dm644 packaging/io.github.ltux.FluxStudio.desktop \
+    "$pkgdir/usr/share/applications/io.github.ltux.FluxStudio.desktop"
+  install -Dm644 packaging/io.github.ltux.FluxStudio.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.ltux.FluxStudio.svg"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,12 @@
+/target
+/models
+/vendor
+*.part
+*.log
+
+# makepkg artifacts
+/packaging/src
+/packaging/pkg
+/packaging/stable-diffusion.cpp
+/packaging/*.tar.gz
+/packaging/*.pkg.tar.*

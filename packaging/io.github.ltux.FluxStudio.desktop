@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Flux Studio
+GenericName=Local Image Generator
+Comment=Generate and edit images locally with FLUX and other diffusion models
+Exec=flux-studio
+Icon=io.github.ltux.FluxStudio
+Terminal=false
+Categories=Graphics;2DGraphics;
+Keywords=AI;image;generation;diffusion;FLUX;stable-diffusion;
+StartupNotify=true
+StartupWMClass=io.github.ltux.FluxStudio

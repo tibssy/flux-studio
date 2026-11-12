@@ -1,0 +1,24 @@
+[package]
+name = "flux-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flux-studio"
+path = "src/main.rs"
+
+[dependencies]
+adw.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+flux-backend-sdcpp = { path = "../backend-sdcpp" }
+flux-core = { path = "../core" }
+flux-models = { path = "../models" }
+glib.workspace = true
+gtk.workspace = true
+image.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
