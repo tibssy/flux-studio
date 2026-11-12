@@ -4,6 +4,8 @@ pub mod identity;
 pub mod paths;
 pub mod preset;
 pub mod request;
+pub mod size;
+pub mod style;
 
 pub use backend::{Backend, BackendInfo};
 pub use config::Config;

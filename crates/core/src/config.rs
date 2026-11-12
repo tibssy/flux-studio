@@ -17,6 +17,10 @@ pub struct Config {
     pub offload: bool,
     /// Id of the preset selected in the model dropdown.
     pub active_preset: String,
+    /// Id of the style selected in the sidebar.
+    pub style_id: String,
+    /// Whether the left sidebar is shown.
+    pub sidebar_visible: bool,
 }
 
 impl Default for Config {
@@ -30,6 +34,8 @@ impl Default for Config {
             default_height: preset.default_height,
             offload: true,
             active_preset: preset.id.to_string(),
+            style_id: crate::style::default_style().id.to_string(),
+            sidebar_visible: true,
         }
     }
 }
@@ -49,5 +55,27 @@ impl Config {
         }
         std::fs::write(path, toml::to_string_pretty(self)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_configs_get_new_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+            models_dir = "/models"
+            output_dir = "/out"
+            default_width = 768
+            default_height = 768
+            offload = true
+            active_preset = "flux2-klein-4b"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.style_id, "none");
+        assert!(config.sidebar_visible);
     }
 }

@@ -11,12 +11,20 @@ editing, so text-to-image and image-to-image share the same weights.
 
 Milestone 3 (packaged desktop app):
 
-- libadwaita window with prompt composer, live progress and cancel
-- **model dropdown** with per-preset defaults (steps, CFG, sampler, files)
-- **reference-image editing** (`-r`) for models that support it
-- **generation history** in a sidebar gallery (SQLite + 128 px thumbnails)
-- **seed control**; the seed actually used is stored and shown
-- **resolution presets** (512² to 1152×768)
+- **hideable sidebar** with a Setup section and a History section
+- **resolution sliders** (256–1280 px in 64 px steps) with a live aspect-ratio
+  preview and megapixel readout
+- **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
+  as prompt suffixes
+- **model dropdown**, seed control and an Advanced group (fixed steps/CFG,
+  sampler, CPU offload) in the sidebar
+- focused composer: prompt, Generate/Cancel and a reference-image button
+- **reference-image editing** (`-r`); edits promote their result to the next
+  reference, while text-to-image runs stay text-to-image
+- **history** with details and delete actions per row; delete removes the PNG,
+  thumbnail and database entry
+- clicking a history image restores its prompt, model, style, size and seed and
+  loads it as the reference
 - **preferences dialog**: output folder, CPU offload, models folder
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
@@ -59,23 +67,30 @@ backend unless you are on a card/driver where Vulkan wins.
 |---|---|
 | Generate | `Ctrl+Enter` or **Generate** |
 | Cancel | **Cancel** (kills the `sd-cli` process) |
-| Edit an image | **Reference image…**, then describe the change in the prompt |
-| Reproduce an image | click it in the history, then **Generate** |
+| Toggle the sidebar | `Ctrl+B` or the header button |
+| New image (no reference) | `Ctrl+N` or **New** at the top of History |
+| Edit an image | pick a reference with the image button, or click a history row |
+| Delete an image | trash button on the history row (permanent, with confirmation) |
+| Image details | info button on the history row |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
 
-Editing with klein: pick a reference image, write what should change
-("make it winter, snow on the hills"), and generate. It runs at 4 steps and
-keeps the composition of the reference.
+Editing is iterative: the first edit uses the selected reference, and each
+following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
+leave edit mode and generate from text alone; the prompt is kept.
+
+Styles are prompt suffixes, e.g. *Cinematic* appends
+"cinematic film still, dramatic lighting, shallow depth of field, 35mm". The
+selected style is stored with each history entry.
 
 Data locations:
 
 | Path | Contents |
 |---|---|
-| `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, seed, reference) |
+| `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
 | `~/.local/share/flux-studio/models/` | downloaded model files |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
-| `~/.config/flux-studio/config.toml` | output dir, offload, active preset, size |
+| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
 ## Setup from source
@@ -125,10 +140,16 @@ The installed binary looks for the backend at `/usr/lib/flux-studio/sd-cli`.
 ## Layout
 
 ```
-crates/core           request types, Backend trait, presets, config, XDG paths
+crates/core           request types, Backend trait, presets, styles, size rules
 crates/backend-sdcpp  sd-cli process management, arg builder, progress parser
 crates/models         resumable downloader driven by the preset registry
 crates/app            GTK4 / libadwaita UI, history database
+  main.rs             window, layout, generation flow
+  sidebar.rs          setup controls, aspect preview, history list container
+  main_view.rs        image area and composer
+  history_view.rs     rows, details dialog, delete flow
+  preferences.rs      preferences + model downloader
+  state.rs            text-to-image vs edit state transitions
 packaging/            PKGBUILD, .desktop, icon
 scripts/              reproducible backend + model setup
 ```
@@ -141,8 +162,10 @@ strings.
 
 Add a `ModelPreset` in `crates/core/src/preset.rs` (files, URLs, steps, CFG,
 sampler, edit support) and append it to `PRESETS`. The dropdown, downloader,
-history and backend pick it up automatically. Arbitrary user-supplied models
-from Hugging Face are planned next.
+history and backend pick it up automatically. Styles live in
+`crates/core/src/style.rs`; add a `StylePreset` with a prompt suffix and append
+it to `STYLES`. Arbitrary user-supplied models from Hugging Face are planned
+next.
 
 ## Notes for Maxwell / 8 GB cards
 
