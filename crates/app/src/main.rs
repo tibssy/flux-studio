@@ -424,11 +424,12 @@ fn build_ui(app: &adw::Application) {
         let ui = ui.clone();
         let list = ui.history_list.clone();
         list.connect_row_activated(move |_, row| {
-            let index = row.index();
-            if index < 0 {
+            // Resolve by stored id: row position and entry order must never be
+            // assumed to match.
+            let Ok(id) = row.widget_name().parse::<i64>() else {
                 return;
-            }
-            let entry = ui.entries.borrow().get(index as usize).cloned();
+            };
+            let entry = ui.entries.borrow().iter().find(|e| e.id == id).cloned();
             let Some(entry) = entry else {
                 return;
             };
@@ -486,7 +487,7 @@ fn build_ui(app: &adw::Application) {
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         for entry in &entries {
-            add_history_row(&ui, entry);
+            add_history_row(&ui, entry, false);
         }
         *ui.entries.borrow_mut() = entries;
     }
@@ -1115,7 +1116,7 @@ fn start_generation(ui: &Rc<Ui>) {
                                 reference_path: reference_for_history.clone(),
                             };
                             ui.entries.borrow_mut().insert(0, entry.clone());
-                            add_history_row(&ui, &entry);
+                            add_history_row(&ui, &entry, true);
                             trim_history(&ui);
                         }
                         Err(error) => {
@@ -1156,8 +1157,11 @@ fn finish(ui: &Rc<Ui>, message: &str) {
     ui.status.set_text(message);
 }
 
-fn add_history_row(ui: &Rc<Ui>, entry: &Generation) {
+fn add_history_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     let row = gtk::ListBoxRow::new();
+    // Keep the history id on the widget so activation never depends on the
+    // row's position relative to `ui.entries`.
+    row.set_widget_name(&entry.id.to_string());
 
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row_box.set_margin_top(6);
@@ -1228,7 +1232,11 @@ fn add_history_row(ui: &Rc<Ui>, entry: &Generation) {
             .unwrap_or_default()
     )));
 
-    ui.history_list.append(&row);
+    if prepend {
+        ui.history_list.prepend(&row);
+    } else {
+        ui.history_list.append(&row);
+    }
 }
 
 fn model_label(id: &str) -> &str {
