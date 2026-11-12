@@ -73,7 +73,33 @@ struct Ui {
     generating: Cell<bool>,
 }
 
+fn install_styles() {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(
+        ".prompt-field {
+             background-color: @card_bg_color;
+             border: 1px solid alpha(@view_fg_color, 0.15);
+             border-radius: 9px;
+         }
+         .prompt-field textview {
+             background-color: transparent;
+         }
+         .prompt-field:focus-within {
+             border-color: @accent_bg_color;
+         }",
+    );
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
 fn build_ui(app: &adw::Application) {
+    install_styles();
     let config = Config::load();
     let models_dir = resolve_models_dir(&config);
     let sd_cli = resolve_sd_cli(&config);
@@ -152,7 +178,7 @@ fn build_ui(app: &adw::Application) {
         .max_content_height(150)
         .propagate_natural_height(true)
         .build();
-    prompt_scroller.add_css_class("card");
+    prompt_scroller.add_css_class("prompt-field");
 
     let model_labels: Vec<&str> = PRESETS.iter().map(|item| item.label).collect();
     let model_dropdown = gtk::DropDown::from_strings(&model_labels);
