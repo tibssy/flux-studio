@@ -286,9 +286,17 @@ fn build_ui(app: &adw::Application) {
     composer.append(&status);
     composer.append(&controls);
 
-    let toolbar_view = adw::ToolbarView::builder().content(&content).build();
+    // The composer must not be an AdwToolbarView bottom bar: libadwaita
+    // wraps every bottom bar in a GtkWindowHandle, which makes the whole
+    // prompt area drag the window and double-click maximize it. Keep the
+    // composer in the normal content area and only the header as a toolbar.
+    let page_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page_content.set_vexpand(true);
+    page_content.append(&content);
+    page_content.append(&composer);
+
+    let toolbar_view = adw::ToolbarView::builder().content(&page_content).build();
     toolbar_view.add_top_bar(&header);
-    toolbar_view.add_bottom_bar(&composer);
 
     let history_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
