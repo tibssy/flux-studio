@@ -21,6 +21,8 @@ pub struct Config {
     pub style_id: String,
     /// Whether the left sidebar is shown.
     pub sidebar_visible: bool,
+    /// Optional override for the `sd-server` binary.
+    pub sd_server: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -36,6 +38,7 @@ impl Default for Config {
             active_preset: preset.id.to_string(),
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
+            sd_server: None,
         }
     }
 }
@@ -77,5 +80,6 @@ mod tests {
         .unwrap();
         assert_eq!(config.style_id, "none");
         assert!(config.sidebar_visible);
+        assert!(config.sd_server.is_none());
     }
 }

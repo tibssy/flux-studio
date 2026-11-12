@@ -1,8 +1,12 @@
-//! Backend that drives the `sd-cli` binary from stable-diffusion.cpp.
+//! Backends that drive stable-diffusion.cpp.
 //!
-//! The CLI is spawned per generation. It prints its progress bar to stdout
-//! using `\r` (no newlines) and its logs to stderr, so stdout is consumed as a
-//! raw byte stream and split on `\r`/`\n` before parsing.
+//! `SdCpp` spawns the one-shot `sd-cli` per generation (reloads weights each
+//! time). `SdServer` keeps the persistent `sd-server` context alive instead and
+//! is what the desktop app uses.
+
+pub mod server;
+
+pub use server::{SdServer, SdServerConfig};
 
 use std::collections::VecDeque;
 use std::ffi::OsString;

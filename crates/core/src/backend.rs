@@ -23,4 +23,9 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Ask the running generation to stop. Must be safe to call when idle.
     fn cancel(&self) -> Result<()>;
+
+    /// Release cached model weights, if the backend keeps any.
+    ///
+    /// The default is a no-op for backends that load models per request.
+    fn unload(&self) {}
 }

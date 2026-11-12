@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
-use flux_backend_sdcpp::{SdCpp, SdCppConfig};
+use flux_backend_sdcpp::{SdServer, SdServerConfig};
 use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
@@ -53,6 +53,7 @@ pub(crate) struct Ui {
     pub status: gtk::Label,
     pub reference_button: gtk::Button,
     pub backend: Arc<dyn Backend>,
+    pub worker: GenerationWorker,
     pub models_dir: PathBuf,
     pub config: RefCell<Config>,
     pub history: RefCell<History>,
@@ -78,6 +79,31 @@ pub(crate) struct Ui {
     pub generating: Cell<bool>,
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
+}
+
+/// Runs generations on one long-lived thread.
+///
+/// The persistent `sd-server` backend sets `PR_SET_PDEATHSIG` on the server
+/// process, which follows the thread that spawned it. Keeping a single worker
+/// alive for the app lifetime lets the server survive across generations while
+/// still dying with the app.
+struct GenerationWorker {
+    jobs: async_channel::Sender<(GenerateRequest, async_channel::Sender<Progress>)>,
+}
+
+impl GenerationWorker {
+    fn new(backend: Arc<dyn Backend>) -> Self {
+        let (jobs, queue) =
+            async_channel::unbounded::<(GenerateRequest, async_channel::Sender<Progress>)>();
+        std::thread::spawn(move || {
+            while let Ok((request, progress)) = queue.recv_blocking() {
+                if let Err(error) = backend.generate(&request, progress.clone()) {
+                    let _ = progress.send_blocking(Progress::Failed(error.to_string()));
+                }
+            }
+        });
+        Self { jobs }
+    }
 }
 
 fn install_styles() {
@@ -116,10 +142,10 @@ fn build_ui(app: &adw::Application) {
 
     let config = Config::load();
     let models_dir = resolve_models_dir(&config);
-    let sd_cli = resolve_sd_cli(&config);
+    let sd_server = resolve_sd_server(&config);
 
-    let backend: Arc<dyn Backend> = Arc::new(SdCpp::new(SdCppConfig {
-        cli: sd_cli,
+    let backend: Arc<dyn Backend> = Arc::new(SdServer::new(SdServerConfig {
+        cli: sd_server,
         models_dir: models_dir.clone(),
     }));
 
@@ -175,6 +201,8 @@ fn build_ui(app: &adw::Application) {
         .build();
     window.set_content(Some(&toast));
 
+    let worker = GenerationWorker::new(backend.clone());
+
     let ui = Rc::new(Ui {
         window,
         split: split.clone(),
@@ -190,6 +218,7 @@ fn build_ui(app: &adw::Application) {
         status: view.status,
         reference_button: view.reference_button,
         backend,
+        worker,
         models_dir,
         config: RefCell::new(config),
         history: RefCell::new(history),
@@ -288,6 +317,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 config.active_preset = model.id.to_string();
                 let _ = config.save();
             }
+            // Free the previous model right away instead of waiting for the
+            // idle timeout.
+            ui.backend.unload();
             refresh_model(&ui);
         });
     }
@@ -331,6 +363,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 config.offload = active;
                 let _ = config.save();
             }
+            drop(config);
+            // Offload is a server start-up flag, so release the context.
+            ui.backend.unload();
         });
     }
     {
@@ -676,13 +711,17 @@ fn start_generation(ui: &Rc<Ui>) {
     ui.status.set_text("Loading models…");
 
     let (sender, receiver) = async_channel::unbounded();
-    let backend = ui.backend.clone();
-    let worker_request = request.clone();
-    std::thread::spawn(move || {
-        if let Err(error) = backend.generate(&worker_request, sender.clone()) {
-            let _ = sender.send_blocking(Progress::Failed(error.to_string()));
-        }
-    });
+    if ui
+        .worker
+        .jobs
+        .send_blocking((request.clone(), sender))
+        .is_err()
+    {
+        ui.toast
+            .add_toast(adw::Toast::new("Generation worker is unavailable."));
+        finish(ui, "Generation failed");
+        return;
+    }
 
     let ui = ui.clone();
     let prompt_for_history = base_prompt;
@@ -834,23 +873,39 @@ fn resolve_models_dir(config: &Config) -> PathBuf {
     config.models_dir.clone()
 }
 
-fn resolve_sd_cli(config: &Config) -> PathBuf {
-    if let Ok(path) = std::env::var("FLUX_SD_CLI") {
+fn resolve_sd_server(config: &Config) -> PathBuf {
+    if let Ok(path) = std::env::var("FLUX_SD_SERVER") {
         return PathBuf::from(path);
     }
-    if let Some(path) = &config.sd_cli {
+    if let Some(path) = &config.sd_server {
         return path.clone();
     }
-    let installed = PathBuf::from("/usr/lib/flux-studio/sd-cli");
+    // Older setups configured an sd-cli path; use the sibling server binary.
+    if let Ok(path) = std::env::var("FLUX_SD_CLI")
+        && let Some(server) = sibling_server(&PathBuf::from(path))
+    {
+        return server;
+    }
+    if let Some(path) = &config.sd_cli
+        && let Some(server) = sibling_server(path)
+    {
+        return server;
+    }
+    let installed = PathBuf::from("/usr/lib/flux-studio/sd-server");
     if installed.exists() {
         return installed;
     }
     let vendored = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/stable-diffusion.cpp/build/bin/sd-cli");
+        .join("../../vendor/stable-diffusion.cpp/build/bin/sd-server");
     if vendored.exists() {
         return vendored;
     }
-    PathBuf::from("sd-cli")
+    PathBuf::from("sd-server")
+}
+
+fn sibling_server(cli: &Path) -> Option<PathBuf> {
+    let server = cli.parent()?.join("sd-server");
+    server.exists().then_some(server)
 }
 
 fn now_millis() -> u128 {

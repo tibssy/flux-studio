@@ -47,8 +47,8 @@ package() {
   cd "$pkgname-$pkgver"
 
   install -Dm755 target/release/flux-studio "$pkgdir/usr/bin/flux-studio"
-  install -Dm755 "$srcdir/stable-diffusion.cpp/build/bin/sd-cli" \
-    "$pkgdir/usr/lib/flux-studio/sd-cli"
+  install -Dm755 "$srcdir/stable-diffusion.cpp/build/bin/sd-server" \
+    "$pkgdir/usr/lib/flux-studio/sd-server"
 
   install -Dm644 packaging/io.github.ltux.FluxStudio.desktop \
     "$pkgdir/usr/share/applications/io.github.ltux.FluxStudio.desktop"

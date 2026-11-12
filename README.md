@@ -25,6 +25,8 @@ Milestone 3 (packaged desktop app):
   thumbnail and database entry
 - clicking a history image restores its prompt, model, style, size and seed and
   loads it as the reference
+- **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
+  and releases it immediately when you switch models
 - **preferences dialog**: output folder, CPU offload, models folder
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
@@ -66,7 +68,7 @@ backend unless you are on a card/driver where Vulkan wins.
 | Action | Shortcut / control |
 |---|---|
 | Generate | `Ctrl+Enter` or **Generate** |
-| Cancel | **Cancel** (kills the `sd-cli` process) |
+| Cancel | **Cancel** (cancels the running server job) |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
 | Edit an image | pick a reference with the image button, or click a history row |
@@ -90,13 +92,14 @@ Data locations:
 | `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
 | `~/.local/share/flux-studio/models/` | downloaded model files |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
+| `~/.cache/flux-studio/sd-server.log` | backend server log |
 | `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
 ## Setup from source
 
 ```bash
-# 1. backend binary (~5 min; needs /opt/cuda and gcc-14)
+# 1. backend binaries, sd-cli + sd-server (~5 min; needs /opt/cuda and gcc-14)
 ./scripts/build-sdcpp.sh
 
 # 2. model weights (5.4 GB, or pass flux3-klein / all)
@@ -109,11 +112,17 @@ cargo run --release
 The app also downloads models itself: **Preferences → Models**, or on first run
 when the active preset is missing.
 
+`sd-server` keeps the model loaded between generations and releases it after
+60 seconds without activity. Switching the model in the sidebar releases the
+previous context immediately; changing CPU offload does the same. A headless
+check of the backend is available with
+`cargo run -p flux-backend-sdcpp --example smoke`.
+
 Environment overrides:
 
 | Variable | Meaning |
 |---|---|
-| `FLUX_SD_CLI` | path to the `sd-cli` binary |
+| `FLUX_SD_SERVER` | path to the `sd-server` binary (falls back to a sibling of `FLUX_SD_CLI`) |
 | `FLUX_MODELS_DIR` | model directory (defaults to `./models` when run from the repo) |
 | `FLUX_DEVICE` | label shown by the backend info |
 | `CUDA_ARCH` | SM architectures for `build-sdcpp.sh` (default `52`) |
@@ -135,13 +144,13 @@ cd packaging
 FLUX_CUDA_ARCH=52 makepkg -si
 ```
 
-The installed binary looks for the backend at `/usr/lib/flux-studio/sd-cli`.
+The installed binary looks for the backend at `/usr/lib/flux-studio/sd-server`.
 
 ## Layout
 
 ```
 crates/core           request types, Backend trait, presets, styles, size rules
-crates/backend-sdcpp  sd-cli process management, arg builder, progress parser
+crates/backend-sdcpp  sd-server process/HTTP backend, sd-cli fallback, progress parsing
 crates/models         resumable downloader driven by the preset registry
 crates/app            GTK4 / libadwaita UI, history database
   main.rs             window, layout, generation flow
@@ -173,6 +182,9 @@ next.
   scales with `params × steps`.
 - Disable NCCL (`-DGGML_CUDA_NCCL=OFF`) unless your NCCL matches the toolkit.
 - `--offload-to-cpu --vae-tiling` keeps peak VRAM around 5 GB.
+- Generation keeps roughly one CPU core busy: CUDA work is dispatched from a
+  single thread while the GPU computes. This is expected and `--threads` does
+  not change GPU sampling time.
 - Avoid models whose text encoder alone exceeds ~8 GB (FLUX.2 dev, Krea2 Q4,
   Qwen-Image-2.1, MOSS-Image): they run, but swap and take 10+ minutes.
 

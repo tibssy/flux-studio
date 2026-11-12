@@ -36,8 +36,9 @@ cmake -S "$SRC" -B "$SRC/build" -G Ninja \
   -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
   -DCMAKE_C_COMPILER="$HOST_CC" \
   -DCMAKE_CXX_COMPILER="$HOST_CXX" \
-  -DCMAKE_CUDA_HOST_COMPILER="$HOST_CXX"
+  -DCMAKE_CUDA_HOST_COMPILER="$HOST_CXX" \
+  -DSD_SERVER_BUILD_FRONTEND=OFF
 
-cmake --build "$SRC/build" --target sd-cli -j"$(nproc)"
+cmake --build "$SRC/build" --target sd-cli sd-server -j"$(nproc)"
 
-echo "built: $SRC/build/bin/sd-cli"
+echo "built: $SRC/build/bin/sd-cli and $SRC/build/bin/sd-server"
