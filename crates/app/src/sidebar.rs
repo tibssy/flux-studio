@@ -83,8 +83,8 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     let height_value = value_label(height);
 
     let ratio_area = gtk::DrawingArea::builder()
-        .content_width(56)
-        .content_height(56)
+        .content_width(112)
+        .content_height(112)
         .valign(gtk::Align::Start)
         .build();
     {
@@ -92,7 +92,7 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
         ratio_area.set_draw_func(move |area, cr, width, height| {
             let (image_w, image_h) = size_cell.get();
             let color = area.color();
-            let pad = 6.0;
+            let pad = 8.0;
             let available_w = (width as f64 - 2.0 * pad).max(1.0);
             let available_h = (height as f64 - 2.0 * pad).max(1.0);
             let ratio = image_w as f64 / image_h.max(1) as f64;
@@ -118,7 +118,7 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
                 color.blue() as f64,
                 0.6,
             );
-            cr.set_line_width(1.5);
+            cr.set_line_width(2.0);
             cr.stroke().ok();
         });
     }
