@@ -8,6 +8,7 @@ pub(crate) struct MainView {
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
     pub reference_button: gtk::Button,
+    pub improve_button: gtk::Button,
     pub generate: gtk::Button,
     pub cancel: gtk::Button,
     pub progress: gtk::ProgressBar,
@@ -74,11 +75,10 @@ pub(crate) fn build() -> MainView {
     let prompt_scroller = gtk::ScrolledWindow::builder()
         .child(&prompt)
         .hexpand(true)
-        .min_content_height(64)
+        .min_content_height(58)
         .max_content_height(120)
         .propagate_natural_height(true)
         .build();
-    prompt_scroller.add_css_class("prompt-field");
 
     let reference_button = gtk::Button::builder()
         .icon_name("image-x-generic-symbolic")
@@ -87,17 +87,26 @@ pub(crate) fn build() -> MainView {
         .css_classes(["flat"])
         .build();
 
-    let generate = gtk::Button::builder()
-        .label("Generate")
-        .css_classes(["suggested-action", "pill"])
+    let improve_button = gtk::Button::builder()
+        .icon_name("star-new-symbolic")
+        .tooltip_text("Improve the prompt with a local language model")
         .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+
+    let generate = gtk::Button::builder()
+        .icon_name("document-send-symbolic")
+        .tooltip_text("Generate (Ctrl+Enter)")
+        .valign(gtk::Align::Center)
+        .css_classes(["suggested-action", "circular"])
         .build();
 
     let cancel = gtk::Button::builder()
-        .label("Cancel")
-        .css_classes(["pill"])
+        .icon_name("process-stop-symbolic")
+        .tooltip_text("Cancel generation")
         .valign(gtk::Align::Center)
         .visible(false)
+        .css_classes(["destructive-action", "circular"])
         .build();
 
     let progress = gtk::ProgressBar::builder()
@@ -113,11 +122,24 @@ pub(crate) fn build() -> MainView {
         .css_classes(["caption", "dim-label"])
         .build();
 
-    let composer_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    composer_row.append(&reference_button);
-    composer_row.append(&prompt_scroller);
-    composer_row.append(&cancel);
-    composer_row.append(&generate);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    actions.set_margin_start(6);
+    actions.set_margin_end(6);
+    actions.set_margin_bottom(6);
+    actions.append(&reference_button);
+    actions.append(&improve_button);
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    actions.append(&spacer);
+    actions.append(&cancel);
+    actions.append(&generate);
+
+    // One bordered surface contains both the text and its action buttons.
+    let prompt_field = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    prompt_field.add_css_class("prompt-field");
+    prompt_field.set_hexpand(true);
+    prompt_field.append(&prompt_scroller);
+    prompt_field.append(&actions);
 
     let bottom = gtk::Box::new(gtk::Orientation::Vertical, 8);
     bottom.set_margin_top(12);
@@ -125,7 +147,7 @@ pub(crate) fn build() -> MainView {
     bottom.set_margin_start(12);
     bottom.set_margin_end(12);
     bottom.append(&progress);
-    bottom.append(&composer_row);
+    bottom.append(&prompt_field);
     bottom.append(&status);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -141,6 +163,7 @@ pub(crate) fn build() -> MainView {
         reference_name,
         prompt,
         reference_button,
+        improve_button,
         generate,
         cancel,
         progress,

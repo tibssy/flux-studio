@@ -2,6 +2,7 @@ mod history;
 mod history_view;
 mod main_view;
 mod preferences;
+mod prompt_ai;
 mod sidebar;
 mod state;
 
@@ -52,6 +53,8 @@ pub(crate) struct Ui {
     pub progress: gtk::ProgressBar,
     pub status: gtk::Label,
     pub reference_button: gtk::Button,
+    pub improve_button: gtk::Button,
+    pub improving: Cell<bool>,
     pub backend: Arc<dyn Backend>,
     pub worker: GenerationWorker,
     pub models_dir: PathBuf,
@@ -118,6 +121,9 @@ fn install_styles() {
              border-radius: 9px;
          }
          .prompt-field textview {
+             background-color: transparent;
+         }
+         .prompt-field scrolledwindow {
              background-color: transparent;
          }
          .prompt-field:focus-within {
@@ -222,6 +228,8 @@ fn build_ui(app: &adw::Application) {
         progress: view.progress,
         status: view.status,
         reference_button: view.reference_button,
+        improve_button: view.improve_button,
+        improving: Cell::new(false),
         backend,
         worker,
         models_dir,
@@ -302,6 +310,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.reference_button.clone();
         button.connect_clicked(move |_| choose_reference(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.improve_button.clone();
+        button.connect_clicked(move |_| improve_prompt(&ui));
     }
     {
         let ui = ui.clone();
@@ -597,6 +610,8 @@ fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.new_button.set_sensitive(enabled);
     ui.history_list.set_sensitive(enabled);
     ui.reference_button.set_sensitive(enabled);
+    ui.improve_button
+        .set_sensitive(enabled && !ui.improving.get());
     ui.generate.set_visible(enabled);
     ui.cancel.set_visible(!enabled);
     ui.cancel.set_sensitive(!enabled);
@@ -635,6 +650,94 @@ fn choose_reference(ui: &Rc<Ui>) {
         ui.status.set_text(&format!("Editing reference · {name}"));
         ui.prompt.grab_focus();
     });
+}
+
+fn improve_prompt(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.improving.get() {
+        return;
+    }
+
+    let original = current_prompt(ui).trim().to_string();
+    if original.is_empty() {
+        ui.toast.add_toast(adw::Toast::new("Write a prompt first."));
+        return;
+    }
+
+    let config = ui.config.borrow().clone();
+    let original_for_worker = original.clone();
+    ui.improving.set(true);
+    ui.improve_button.set_sensitive(false);
+    ui.status.set_text("Improving prompt…");
+
+    let (sender, receiver) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let _ = sender.send_blocking(prompt_ai::improve(&original_for_worker, &config));
+    });
+
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let result = receiver.recv().await;
+        ui.improving.set(false);
+        if !ui.generating.get() {
+            ui.improve_button.set_sensitive(true);
+        }
+
+        match result {
+            Ok(Ok(improved)) => {
+                if ui.generating.get() {
+                    ui.status.set_text("Improvement discarded");
+                    ui.toast.add_toast(adw::Toast::new(
+                        "Generation started; improvement discarded.",
+                    ));
+                    return;
+                }
+                if current_prompt(&ui).trim() != original {
+                    ui.status.set_text("Prompt changed");
+                    ui.toast
+                        .add_toast(adw::Toast::new("Prompt changed; improvement discarded."));
+                    return;
+                }
+
+                ui.prompt.buffer().set_text(&improved);
+                ui.prompt.grab_focus();
+                ui.status.set_text("Prompt improved");
+
+                let toast = adw::Toast::new("Prompt improved.");
+                toast.set_button_label(Some("Undo"));
+                let prompt = ui.prompt.clone();
+                let old = original.clone();
+                let new = improved.clone();
+                toast.connect_button_clicked(move |_| {
+                    let buffer = prompt.buffer();
+                    let current = buffer
+                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                        .trim()
+                        .to_string();
+                    if current == new.trim() {
+                        buffer.set_text(&old);
+                    }
+                });
+                ui.toast.add_toast(toast);
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "prompt improvement failed");
+                ui.status.set_text("Prompt helper unavailable");
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Could not improve prompt: {error}"
+                )));
+            }
+            Err(_) => {
+                ui.status.set_text("Prompt helper unavailable");
+            }
+        }
+    });
+}
+
+fn current_prompt(ui: &Rc<Ui>) -> String {
+    let buffer = ui.prompt.buffer();
+    buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+        .to_string()
 }
 
 fn start_generation(ui: &Rc<Ui>) {

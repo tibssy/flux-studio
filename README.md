@@ -27,6 +27,7 @@ Milestone 3 (packaged desktop app):
   loads it as the reference
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
+- **prompt improvement** through a local Ollama model, with undo
 - **preferences dialog**: output folder, CPU offload, models folder
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
@@ -74,6 +75,7 @@ backend unless you are on a card/driver where Vulkan wins.
 | Edit an image | pick a reference with the image button, or click a history row |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
+| Improve the prompt | ✨ button in the prompt field (needs a running Ollama) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
 
@@ -84,6 +86,12 @@ leave edit mode and generate from text alone; the prompt is kept.
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". The
 selected style is stored with each history entry.
+
+Prompt improvement uses a local [Ollama](https://ollama.com) instance at
+`http://127.0.0.1:11434`. It picks the smallest installed model between 1B and
+8B parameters by default; set `llm_model` (and optionally `llm_url`) in
+`config.toml` to choose another one. The improved text replaces the prompt and
+a toast offers an **Undo**.
 
 Data locations:
 
