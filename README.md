@@ -12,7 +12,7 @@ editing, so text-to-image and image-to-image share the same weights.
 Milestone 3 (packaged desktop app):
 
 - **hideable sidebar** with a Setup section and a History section
-- **resolution sliders** (256–1280 px in 64 px steps) with a live aspect-ratio
+- **resolution sliders** (128–1280 px in 64 px steps) with a live aspect-ratio
   preview and megapixel readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
   as prompt suffixes

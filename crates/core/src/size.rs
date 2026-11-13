@@ -1,7 +1,7 @@
 //! Resolution limits shared by the UI and the backend.
 
 /// Smallest side the UI offers.
-pub const MIN_SIZE: u32 = 256;
+pub const MIN_SIZE: u32 = 128;
 /// Largest side the UI offers (8 GB cards start struggling above this).
 pub const MAX_SIZE: u32 = 1280;
 /// Sliders snap to this grid; FLUX works on multiples of 16/64.
@@ -45,7 +45,8 @@ mod tests {
     #[test]
     fn snaps_to_the_grid() {
         assert_eq!(snap(0), MIN_SIZE);
-        assert_eq!(snap(250), MIN_SIZE);
+        assert_eq!(snap(130), MIN_SIZE);
+        assert_eq!(snap(250), 256);
         assert_eq!(snap(320), 320);
         assert_eq!(snap(830), 832);
         assert_eq!(snap(2000), MAX_SIZE);
@@ -53,9 +54,11 @@ mod tests {
 
     #[test]
     fn validates_range_and_step() {
+        assert!(is_valid(128));
         assert!(is_valid(256));
         assert!(is_valid(1280));
         assert!(!is_valid(250));
+        assert!(!is_valid(120));
         assert!(!is_valid(1300));
         assert!(!is_valid(300));
     }
