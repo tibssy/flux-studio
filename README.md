@@ -172,8 +172,8 @@ the CUDA backend for Maxwell by default:
 # artifacts are not shipped)
 tar --transform 's,^,flux-studio-0.1.0/,' -czf packaging/flux-studio-0.1.0.tar.gz \
     Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
-    packaging/PKGBUILD packaging/io.github.ltux.FluxStudio.desktop \
-    packaging/io.github.ltux.FluxStudio.svg
+    packaging/PKGBUILD packaging/io.github.tibssy.FluxStudio.desktop \
+    packaging/io.github.tibssy.FluxStudio.svg
 
 cd packaging
 FLUX_CUDA_ARCH=52 makepkg -si

@@ -7,7 +7,7 @@
 pub const APP_NAME: &str = "Flux Studio";
 
 /// Reverse-DNS application id used by GApplication and the desktop entry.
-pub const APP_ID: &str = "io.github.ltux.FluxStudio";
+pub const APP_ID: &str = "io.github.tibssy.FluxStudio";
 
 /// Directory name under `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
 /// `$XDG_CACHE_HOME`. Changing this relocates existing user data.

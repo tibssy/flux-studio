@@ -1,12 +1,12 @@
-# Maintainer: ltux <ltux@users.noreply.github.com>
+# Maintainer: tibssy <tibssy@users.noreply.github.com>
 #
 # Build from a release tarball. Until the repository is published you can
 # produce one from the working tree:
 #
 #   tar --transform 's,^,flux-studio-0.1.0/,' -czf flux-studio-0.1.0.tar.gz \
 #       Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
-#       packaging/PKGBUILD packaging/io.github.ltux.FluxStudio.desktop \
-#       packaging/io.github.ltux.FluxStudio.svg
+#       packaging/PKGBUILD packaging/io.github.tibssy.FluxStudio.desktop \
+#       packaging/io.github.tibssy.FluxStudio.svg
 #
 # then run `makepkg -si` in this directory.
 #
@@ -18,7 +18,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='GTK4/libadwaita desktop app for local image generation with stable-diffusion.cpp'
 arch=('x86_64')
-url='https://github.com/ltux/flux-studio'
+url='https://github.com/tibssy/flux-studio'
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'hicolor-icon-theme' 'openssl')
 makedepends=('cargo' 'rust' 'cmake' 'ninja' 'git' 'cuda' 'gcc14')
@@ -51,10 +51,10 @@ package() {
   install -Dm755 "$srcdir/stable-diffusion.cpp/build/bin/sd-server" \
     "$pkgdir/usr/lib/flux-studio/sd-server"
 
-  install -Dm644 packaging/io.github.ltux.FluxStudio.desktop \
-    "$pkgdir/usr/share/applications/io.github.ltux.FluxStudio.desktop"
-  install -Dm644 packaging/io.github.ltux.FluxStudio.svg \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.ltux.FluxStudio.svg"
+  install -Dm644 packaging/io.github.tibssy.FluxStudio.desktop \
+    "$pkgdir/usr/share/applications/io.github.tibssy.FluxStudio.desktop"
+  install -Dm644 packaging/io.github.tibssy.FluxStudio.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.tibssy.FluxStudio.svg"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
