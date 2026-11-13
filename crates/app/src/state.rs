@@ -31,10 +31,38 @@ impl AppState {
     }
 }
 
+/// A small LIFO history for crop/zoom steps.
+#[derive(Debug, Default)]
+pub(crate) struct UndoStack {
+    states: Vec<AppState>,
+}
+
+impl UndoStack {
+    const LIMIT: usize = 20;
+
+    pub fn push(&mut self, state: &AppState) {
+        self.states.push(state.clone());
+        if self.states.len() > Self::LIMIT {
+            self.states.remove(0);
+        }
+    }
+
+    pub fn undo(&mut self) -> Option<AppState> {
+        self.states.pop()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.states.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.states.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn text_to_image_result_does_not_become_a_reference() {
         let mut state = AppState::default();
@@ -59,5 +87,33 @@ mod tests {
         state.new_image();
         assert_eq!(state.display, None);
         assert_eq!(state.reference, None);
+    }
+
+    #[test]
+    fn undo_restores_crops_in_reverse_order() {
+        let mut stack = UndoStack::default();
+        let first = AppState {
+            display: Some(PathBuf::from("/tmp/a.png")),
+            reference: None,
+        };
+        let second = AppState {
+            display: Some(PathBuf::from("/tmp/b.png")),
+            reference: Some(PathBuf::from("/tmp/b.png")),
+        };
+        stack.push(&first);
+        stack.push(&second);
+        assert!(stack.can_undo());
+        assert_eq!(stack.undo(), Some(second));
+        assert_eq!(stack.undo(), Some(first));
+        assert!(!stack.can_undo());
+        assert_eq!(stack.undo(), None);
+    }
+
+    #[test]
+    fn undo_stack_clears() {
+        let mut stack = UndoStack::default();
+        stack.push(&AppState::default());
+        stack.clear();
+        assert!(!stack.can_undo());
     }
 }

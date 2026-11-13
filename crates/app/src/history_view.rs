@@ -7,7 +7,7 @@ use flux_core::style::STYLES;
 use gtk::{gdk, glib};
 
 use crate::history::Generation;
-use crate::{Ui, refresh_model, set_size, thumb_path, update_image_view};
+use crate::{Ui, refresh_model, set_size, show_composer, thumb_path, update_image_view};
 
 pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     let row = gtk::ListBoxRow::new();
@@ -131,9 +131,11 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
 
     set_size(ui, entry.width, entry.height);
 
+    ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
     update_image_view(ui);
     refresh_model(ui);
+    show_composer(ui, true);
 
     let name = Path::new(&entry.image_path)
         .file_name()

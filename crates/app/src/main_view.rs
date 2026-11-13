@@ -7,12 +7,18 @@ pub(crate) struct MainView {
     pub reference_bar: gtk::Box,
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
+    pub composer: gtk::Revealer,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub generate: gtk::Button,
-    pub cancel: gtk::Button,
+    pub progress_row: gtk::Box,
     pub progress: gtk::ProgressBar,
+    pub cancel: gtk::Button,
     pub status: gtk::Label,
+    pub crop_overlay: gtk::DrawingArea,
+    pub edit_button: gtk::Button,
+    pub crop_button: gtk::ToggleButton,
+    pub undo_button: gtk::Button,
 }
 
 pub(crate) fn build() -> MainView {
@@ -27,10 +33,6 @@ pub(crate) fn build() -> MainView {
         .can_shrink(true)
         .hexpand(true)
         .vexpand(true)
-        .margin_top(12)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
         .build();
 
     let stack = gtk::Stack::builder()
@@ -41,6 +43,52 @@ pub(crate) fn build() -> MainView {
     stack.add_named(&empty, Some("empty"));
     stack.add_named(&picture, Some("image"));
     stack.set_visible_child_name("empty");
+
+    let crop_overlay = gtk::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .focusable(true)
+        .visible(false)
+        .build();
+
+    let edit_button = gtk::Button::builder()
+        .icon_name("document-edit-symbolic")
+        .tooltip_text("Edit this image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let crop_button = gtk::ToggleButton::builder()
+        .icon_name("edit-select-symbolic")
+        .tooltip_text("Select an area to crop and use as reference")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let undo_button = gtk::Button::builder()
+        .icon_name("edit-undo-symbolic")
+        .tooltip_text("Undo crop")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let image_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    image_actions.set_halign(gtk::Align::End);
+    image_actions.set_valign(gtk::Align::Start);
+    image_actions.set_margin_top(12);
+    image_actions.set_margin_end(12);
+    image_actions.append(&edit_button);
+    image_actions.append(&crop_button);
+    image_actions.append(&undo_button);
+
+    let image_overlay = gtk::Overlay::builder()
+        .child(&stack)
+        .hexpand(true)
+        .vexpand(true)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    image_overlay.add_overlay(&crop_overlay);
+    image_overlay.add_overlay(&image_actions);
 
     let reference_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     reference_bar.add_css_class("reference-bar");
@@ -101,27 +149,6 @@ pub(crate) fn build() -> MainView {
         .css_classes(["suggested-action", "circular"])
         .build();
 
-    let cancel = gtk::Button::builder()
-        .icon_name("process-stop-symbolic")
-        .tooltip_text("Cancel generation")
-        .valign(gtk::Align::Center)
-        .visible(false)
-        .css_classes(["destructive-action", "circular"])
-        .build();
-
-    let progress = gtk::ProgressBar::builder()
-        .hexpand(true)
-        .show_text(true)
-        .visible(false)
-        .build();
-
-    let status = gtk::Label::builder()
-        .label("Ready")
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["caption", "dim-label"])
-        .build();
-
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     actions.set_margin_start(6);
     actions.set_margin_end(6);
@@ -131,28 +158,54 @@ pub(crate) fn build() -> MainView {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     actions.append(&spacer);
-    actions.append(&cancel);
     actions.append(&generate);
 
-    // One bordered surface contains both the text and its action buttons.
     let prompt_field = gtk::Box::new(gtk::Orientation::Vertical, 0);
     prompt_field.add_css_class("prompt-field");
     prompt_field.set_hexpand(true);
     prompt_field.append(&prompt_scroller);
     prompt_field.append(&actions);
 
+    let composer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(250)
+        .reveal_child(true)
+        .child(&prompt_field)
+        .build();
+
+    let progress = gtk::ProgressBar::builder()
+        .hexpand(true)
+        .show_text(true)
+        .build();
+    let cancel = gtk::Button::builder()
+        .label("Cancel")
+        .tooltip_text("Cancel generation")
+        .css_classes(["pill"])
+        .build();
+    let progress_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    progress_row.set_visible(false);
+    progress_row.append(&progress);
+    progress_row.append(&cancel);
+
+    let status = gtk::Label::builder()
+        .label("Ready")
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .css_classes(["caption", "dim-label"])
+        .build();
+
     let bottom = gtk::Box::new(gtk::Orientation::Vertical, 8);
     bottom.set_margin_top(12);
     bottom.set_margin_bottom(12);
     bottom.set_margin_start(12);
     bottom.set_margin_end(12);
-    bottom.append(&progress);
-    bottom.append(&prompt_field);
+    bottom.append(&progress_row);
+    bottom.append(&composer);
     bottom.append(&status);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.append(&reference_bar);
-    root.append(&stack);
+    root.append(&image_overlay);
     root.append(&bottom);
 
     MainView {
@@ -162,11 +215,17 @@ pub(crate) fn build() -> MainView {
         reference_bar,
         reference_name,
         prompt,
+        composer,
         reference_button,
         improve_button,
         generate,
-        cancel,
+        progress_row,
         progress,
+        cancel,
         status,
+        crop_overlay,
+        edit_button,
+        crop_button,
+        undo_button,
     }
 }

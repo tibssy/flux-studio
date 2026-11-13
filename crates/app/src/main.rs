@@ -20,9 +20,11 @@ use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 use gtk::{gdk, glib};
 
 use history::{Generation, History, NewGeneration};
-use state::AppState;
+use state::{AppState, UndoStack};
 
 const HISTORY_LIMIT: usize = 100;
+
+type CropRect = (f64, f64, f64, f64);
 
 fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
@@ -51,7 +53,13 @@ pub(crate) struct Ui {
     pub generate: gtk::Button,
     pub cancel: gtk::Button,
     pub progress: gtk::ProgressBar,
+    pub progress_row: gtk::Box,
     pub status: gtk::Label,
+    pub composer: gtk::Revealer,
+    pub crop_overlay: gtk::DrawingArea,
+    pub edit_button: gtk::Button,
+    pub crop_button: gtk::ToggleButton,
+    pub undo_button: gtk::Button,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -83,6 +91,15 @@ pub(crate) struct Ui {
     pub generating: Cell<bool>,
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
+    pub image_size: Cell<(u32, u32)>,
+    pub crop_mode: Cell<bool>,
+    pub crop_rect: Rc<RefCell<Option<CropRect>>>,
+    pub undo: RefCell<UndoStack>,
+    pub sidebar_root: gtk::Box,
+    pub sidebar_focused: Cell<bool>,
+    pub pointer_in_sidebar: Cell<bool>,
+    pub auto_hiding: Cell<bool>,
+    pub auto_hide_source: RefCell<Option<glib::SourceId>>,
 }
 
 /// Runs generations on one long-lived thread.
@@ -216,6 +233,7 @@ fn build_ui(app: &adw::Application) {
     window.set_content(Some(&toast));
 
     let worker = GenerationWorker::new(backend.clone());
+    let crop_rect = Rc::new(RefCell::new(None));
 
     let ui = Rc::new(Ui {
         window,
@@ -229,7 +247,13 @@ fn build_ui(app: &adw::Application) {
         generate: view.generate,
         cancel: view.cancel,
         progress: view.progress,
+        progress_row: view.progress_row,
         status: view.status,
+        composer: view.composer,
+        crop_overlay: view.crop_overlay,
+        edit_button: view.edit_button,
+        crop_button: view.crop_button,
+        undo_button: view.undo_button,
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -261,6 +285,15 @@ fn build_ui(app: &adw::Application) {
         generating: Cell::new(false),
         size_guard: Cell::new(false),
         size_cell,
+        image_size: Cell::new((0, 0)),
+        crop_mode: Cell::new(false),
+        crop_rect,
+        undo: RefCell::new(UndoStack::default()),
+        sidebar_root: side.root.clone(),
+        sidebar_focused: Cell::new(false),
+        pointer_in_sidebar: Cell::new(false),
+        auto_hiding: Cell::new(false),
+        auto_hide_source: RefCell::new(None),
     });
 
     sidebar_toggle
@@ -269,6 +302,8 @@ fn build_ui(app: &adw::Application) {
         .build();
 
     wire_events(&ui, &preferences_button);
+    setup_crop_overlay(&ui);
+    setup_auto_hide(&ui);
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         for entry in &entries {
@@ -286,7 +321,7 @@ fn build_ui(app: &adw::Application) {
     update_image_view(&ui);
 
     ui.window.present();
-    ui.prompt.grab_focus();
+    show_composer(&ui, true);
 
     if !active_preset(&ui).is_installed(&ui.models_dir) {
         preferences::show_preferences(&ui, true);
@@ -421,12 +456,34 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let split = ui.split.clone();
         split.connect_show_sidebar_notify(move |split| {
             let visible = split.shows_sidebar();
+            if !visible {
+                ui.sidebar_focused.set(false);
+                cancel_auto_hide(&ui);
+            }
+            if ui.auto_hiding.get() {
+                return;
+            }
             let mut config = ui.config.borrow_mut();
             if config.sidebar_visible != visible {
                 config.sidebar_visible = visible;
                 let _ = config.save();
             }
         });
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.edit_button.clone();
+        button.connect_clicked(move |_| edit_current_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.crop_button.clone();
+        button.connect_toggled(move |button| set_crop_mode(&ui, button.is_active()));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.undo_button.clone();
+        button.connect_clicked(move |_| undo_crop(&ui));
     }
     {
         let ui = ui.clone();
@@ -444,12 +501,18 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let split = ui.split.clone();
         key_controller.connect_key_pressed(move |_, key, _, state| {
+            if key == gdk::Key::Escape && ui.crop_mode.get() {
+                ui.crop_button.set_active(false);
+                return glib::Propagation::Stop;
+            }
             if !state.contains(gdk::ModifierType::CONTROL_MASK) {
                 return glib::Propagation::Proceed;
             }
             match key {
                 gdk::Key::Return => {
-                    start_generation(&ui);
+                    if ui.composer.reveals_child() {
+                        start_generation(&ui);
+                    }
                     glib::Propagation::Stop
                 }
                 gdk::Key::b | gdk::Key::B => {
@@ -577,16 +640,20 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
     match display {
         Some(path) => match gdk::Texture::from_filename(&path) {
             Ok(texture) => {
+                ui.image_size
+                    .set((texture.width() as u32, texture.height() as u32));
                 ui.picture.set_paintable(Some(&texture));
                 ui.stack.set_visible_child_name("image");
             }
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "failed to load image");
+                ui.image_size.set((0, 0));
                 ui.picture.set_paintable(gdk::Paintable::NONE);
                 ui.stack.set_visible_child_name("empty");
             }
         },
         None => {
+            ui.image_size.set((0, 0));
             ui.picture.set_paintable(gdk::Paintable::NONE);
             ui.stack.set_visible_child_name("empty");
         }
@@ -609,16 +676,303 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
             ui.reference_bar.set_visible(false);
         }
     }
+
+    update_image_actions(ui);
+}
+
+pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
+    ui.composer.set_reveal_child(show);
+    update_image_actions(ui);
+    if show {
+        ui.prompt.grab_focus();
+    }
+}
+
+pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
+    let has_image = ui.state.borrow().display.is_some();
+    let composing = ui.composer.reveals_child();
+    let generating = ui.generating.get();
+
+    ui.edit_button
+        .set_visible(has_image && !composing && !generating);
+    ui.crop_button.set_visible(has_image && !generating);
+    ui.undo_button
+        .set_visible(has_image && !generating && ui.undo.borrow().can_undo());
+
+    if !has_image || generating {
+        ui.crop_button.set_active(false);
+    }
+}
+
+fn edit_current_image(ui: &Rc<Ui>) {
+    if ui.generating.get() {
+        return;
+    }
+    let Some(path) = ui.state.borrow().display.clone() else {
+        return;
+    };
+    ui.state.borrow_mut().reference = Some(path);
+    update_image_view(ui);
+    show_composer(ui, true);
+    ui.status.set_text("Editing reference");
+}
+
+fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
+    ui.crop_mode.set(active);
+    ui.crop_overlay.set_visible(active);
+    *ui.crop_rect.borrow_mut() = None;
+    if active {
+        ui.crop_overlay.set_cursor_from_name(Some("crosshair"));
+        ui.crop_overlay.grab_focus();
+        ui.status.set_text("Drag to select an area · Esc to cancel");
+    } else {
+        ui.crop_overlay.set_cursor_from_name(None);
+        ui.crop_overlay.queue_draw();
+    }
+}
+
+fn undo_crop(ui: &Rc<Ui>) {
+    if ui.generating.get() {
+        return;
+    }
+    if let Some(previous) = ui.undo.borrow_mut().undo() {
+        *ui.state.borrow_mut() = previous;
+        update_image_view(ui);
+        ui.status.set_text("Crop undone");
+    }
+}
+
+fn setup_crop_overlay(ui: &Rc<Ui>) {
+    let rect = ui.crop_rect.clone();
+    ui.crop_overlay
+        .set_draw_func(move |_area, cr, width, height| {
+            let Some((x0, y0, x1, y1)) = *rect.borrow() else {
+                return;
+            };
+            let left = x0.min(x1);
+            let top = y0.min(y1);
+            let right = x0.max(x1);
+            let bottom = y0.max(y1);
+
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.4);
+            cr.rectangle(0.0, 0.0, width as f64, height as f64);
+            let _ = cr.fill();
+
+            if right - left > 0.0 && bottom - top > 0.0 {
+                cr.set_operator(gtk::cairo::Operator::Clear);
+                cr.rectangle(left, top, right - left, bottom - top);
+                let _ = cr.fill();
+                cr.set_operator(gtk::cairo::Operator::Over);
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
+                cr.set_line_width(2.0);
+                cr.rectangle(left, top, right - left, bottom - top);
+                let _ = cr.stroke();
+            }
+        });
+
+    let gesture = gtk::GestureDrag::new();
+    {
+        let ui = ui.clone();
+        gesture.connect_drag_begin(move |_, x, y| {
+            *ui.crop_rect.borrow_mut() = Some((x, y, x, y));
+            ui.crop_overlay.queue_draw();
+        });
+    }
+    {
+        let ui = ui.clone();
+        gesture.connect_drag_update(move |gesture, dx, dy| {
+            let (sx, sy) = gesture.start_point().unwrap_or((0.0, 0.0));
+            *ui.crop_rect.borrow_mut() = Some((sx, sy, sx + dx, sy + dy));
+            ui.crop_overlay.queue_draw();
+        });
+    }
+    {
+        let ui = ui.clone();
+        gesture.connect_drag_end(move |gesture, dx, dy| {
+            let (sx, sy) = gesture.start_point().unwrap_or((0.0, 0.0));
+            let (ex, ey) = (sx + dx, sy + dy);
+            *ui.crop_rect.borrow_mut() = Some((sx, sy, ex, ey));
+            ui.crop_overlay.queue_draw();
+            apply_crop(&ui, (sx, sy, ex, ey));
+        });
+    }
+    ui.crop_overlay.add_controller(gesture);
+}
+
+fn apply_crop(ui: &Rc<Ui>, selection: CropRect) {
+    let area_w = ui.crop_overlay.width() as f64;
+    let area_h = ui.crop_overlay.height() as f64;
+    let (image_w, image_h) = ui.image_size.get();
+    let Some((x, y, width, height)) =
+        crop_rect_from_drag((area_w, area_h), (image_w, image_h), selection)
+    else {
+        *ui.crop_rect.borrow_mut() = None;
+        ui.crop_overlay.queue_draw();
+        ui.status.set_text("Select a larger area");
+        return;
+    };
+
+    let Some(source) = ui.state.borrow().display.clone() else {
+        ui.crop_button.set_active(false);
+        return;
+    };
+
+    let result = (|| -> anyhow::Result<PathBuf> {
+        let image = image::open(&source)?;
+        let cropped = image.crop_imm(x, y, width, height);
+        let directory = paths::cache_dir().join("crops");
+        std::fs::create_dir_all(&directory)?;
+        let destination = directory.join(format!("crop-{}.png", now_millis()));
+        cropped.save(&destination)?;
+        Ok(destination)
+    })();
+
+    match result {
+        Ok(destination) => {
+            let previous = ui.state.borrow().clone();
+            ui.undo.borrow_mut().push(&previous);
+            ui.state.borrow_mut().load(destination);
+            update_image_view(ui);
+            show_composer(ui, true);
+            ui.status
+                .set_text(&format!("Cropped to {width} × {height}"));
+            ui.toast
+                .add_toast(adw::Toast::new(&format!("Cropped to {width} × {height}.")));
+            ui.crop_button.set_active(false);
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to crop image");
+            ui.toast
+                .add_toast(adw::Toast::new(&format!("Could not crop: {error}")));
+            ui.crop_button.set_active(false);
+        }
+    }
+}
+
+/// Map a drag in widget coordinates to image pixels, honoring letterboxing.
+pub(crate) fn crop_rect_from_drag(
+    area: (f64, f64),
+    image: (u32, u32),
+    selection: CropRect,
+) -> Option<(u32, u32, u32, u32)> {
+    let (area_width, area_height) = area;
+    let (image_width, image_height) = image;
+    if area_width <= 0.0 || area_height <= 0.0 || image_width == 0 || image_height == 0 {
+        return None;
+    }
+    let image_w = image_width as f64;
+    let image_h = image_height as f64;
+    let scale = (area_width / image_w).min(area_height / image_h);
+    if scale <= 0.0 {
+        return None;
+    }
+    let rendered_w = image_w * scale;
+    let rendered_h = image_h * scale;
+    let offset_x = (area_width - rendered_w) / 2.0;
+    let offset_y = (area_height - rendered_h) / 2.0;
+    let (x0, y0, x1, y1) = selection;
+
+    let left = x0.min(x1).clamp(offset_x, offset_x + rendered_w);
+    let right = x0.max(x1).clamp(offset_x, offset_x + rendered_w);
+    let top = y0.min(y1).clamp(offset_y, offset_y + rendered_h);
+    let bottom = y0.max(y1).clamp(offset_y, offset_y + rendered_h);
+
+    let px = (((left - offset_x) / scale).round() as i64).clamp(0, image_width as i64) as u32;
+    let py = (((top - offset_y) / scale).round() as i64).clamp(0, image_height as i64) as u32;
+    let px_end = (((right - offset_x) / scale).round() as i64).clamp(0, image_width as i64) as u32;
+    let py_end =
+        (((bottom - offset_y) / scale).round() as i64).clamp(0, image_height as i64) as u32;
+
+    let width = px_end.saturating_sub(px);
+    let height = py_end.saturating_sub(py);
+    if width < 16 || height < 16 {
+        return None;
+    }
+    Some((px, py, width, height))
+}
+
+fn cancel_auto_hide(ui: &Rc<Ui>) {
+    if let Some(source) = ui.auto_hide_source.borrow_mut().take() {
+        source.remove();
+    }
+}
+
+fn schedule_auto_hide(ui: &Rc<Ui>) {
+    if !ui.split.shows_sidebar() || ui.generating.get() {
+        return;
+    }
+    cancel_auto_hide(ui);
+    let callback_ui = ui.clone();
+    let source = glib::timeout_add_seconds_local(5, move || {
+        let ui = &callback_ui;
+        *ui.auto_hide_source.borrow_mut() = None;
+        if !ui.split.shows_sidebar()
+            || ui.generating.get()
+            || ui.pointer_in_sidebar.get()
+            || !ui.window.is_active()
+        {
+            return glib::ControlFlow::Break;
+        }
+        let focus_inside = gtk::prelude::GtkWindowExt::focus(&ui.window)
+            .map(|focus| focus.is_ancestor(&ui.sidebar_root))
+            .unwrap_or(false);
+        if focus_inside {
+            return glib::ControlFlow::Break;
+        }
+        ui.auto_hiding.set(true);
+        ui.split.set_show_sidebar(false);
+        ui.auto_hiding.set(false);
+        glib::ControlFlow::Break
+    });
+    *ui.auto_hide_source.borrow_mut() = Some(source);
+}
+
+fn setup_auto_hide(ui: &Rc<Ui>) {
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let ui = ui.clone();
+        motion.connect_enter(move |_, _, _| {
+            ui.pointer_in_sidebar.set(true);
+            cancel_auto_hide(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        motion.connect_leave(move |_| {
+            ui.pointer_in_sidebar.set(false);
+            if ui.sidebar_focused.get() {
+                schedule_auto_hide(&ui);
+            }
+        });
+    }
+    ui.sidebar_root.add_controller(motion);
+
+    {
+        let ui = ui.clone();
+        let window = ui.window.clone();
+        window.connect_focus_widget_notify(move |window| {
+            let inside = gtk::prelude::GtkWindowExt::focus(window)
+                .map(|focus| focus.is_ancestor(&ui.sidebar_root))
+                .unwrap_or(false);
+            if inside {
+                ui.sidebar_focused.set(true);
+                cancel_auto_hide(&ui);
+            } else if ui.sidebar_focused.get() && !ui.pointer_in_sidebar.get() {
+                schedule_auto_hide(&ui);
+            }
+        });
+    }
 }
 
 pub(crate) fn new_image(ui: &Rc<Ui>) {
     if ui.generating.get() {
         return;
     }
+    ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
     update_image_view(ui);
+    show_composer(ui, true);
     ui.status.set_text("New image");
-    ui.prompt.grab_focus();
 }
 
 fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
@@ -634,9 +988,7 @@ fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.reference_button.set_sensitive(enabled);
     ui.improve_button
         .set_sensitive(enabled && !ui.improving.get());
-    ui.generate.set_visible(enabled);
-    ui.cancel.set_visible(!enabled);
-    ui.cancel.set_sensitive(!enabled);
+    ui.generate.set_sensitive(enabled);
 }
 
 fn choose_reference(ui: &Rc<Ui>) {
@@ -667,10 +1019,11 @@ fn choose_reference(ui: &Rc<Ui>) {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
+        ui.undo.borrow_mut().clear();
         ui.state.borrow_mut().load(path);
         update_image_view(&ui);
+        show_composer(&ui, true);
         ui.status.set_text(&format!("Editing reference · {name}"));
-        ui.prompt.grab_focus();
     });
 }
 
@@ -781,7 +1134,7 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 }
 
 fn start_generation(ui: &Rc<Ui>) {
-    if ui.generating.get() || !ui.generate.is_sensitive() {
+    if ui.generating.get() || !ui.generate.is_sensitive() || !ui.composer.reveals_child() {
         return;
     }
 
@@ -853,10 +1206,14 @@ fn start_generation(ui: &Rc<Ui>) {
 
     ui.generating.set(true);
     set_controls_enabled(ui, false);
+    ui.composer.set_reveal_child(false);
+    ui.progress_row.set_visible(true);
+    ui.cancel.set_sensitive(true);
     ui.progress.set_visible(true);
     ui.progress.set_fraction(0.0);
     ui.progress.set_text(Some("Loading models…"));
     ui.status.set_text("Loading models…");
+    update_image_actions(ui);
 
     let (sender, receiver) = async_channel::unbounded();
     if ui
@@ -868,6 +1225,7 @@ fn start_generation(ui: &Rc<Ui>) {
         ui.toast
             .add_toast(adw::Toast::new("Generation worker is unavailable."));
         finish(ui, "Generation failed");
+        show_composer(ui, true);
         return;
     }
 
@@ -899,6 +1257,7 @@ fn start_generation(ui: &Rc<Ui>) {
                 Progress::Cancelled => {
                     ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
                     finish(&ui, "Cancelled");
+                    show_composer(&ui, true);
                     break;
                 }
                 Progress::Done(path) => {
@@ -906,6 +1265,7 @@ fn start_generation(ui: &Rc<Ui>) {
                     let image_path = path.to_string_lossy().into_owned();
                     let created_at = unix_seconds();
 
+                    ui.undo.borrow_mut().clear();
                     ui.state.borrow_mut().on_result(path.clone(), was_edit);
                     update_image_view(&ui);
 
@@ -968,6 +1328,7 @@ fn start_generation(ui: &Rc<Ui>) {
                     ui.toast
                         .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
                     finish(&ui, "Generation failed");
+                    show_composer(&ui, true);
                     break;
                 }
             }
@@ -977,10 +1338,13 @@ fn start_generation(ui: &Rc<Ui>) {
 
 fn finish(ui: &Rc<Ui>, message: &str) {
     ui.generating.set(false);
+    ui.progress_row.set_visible(false);
+    ui.cancel.set_sensitive(false);
     ui.progress.set_visible(false);
     ui.progress.set_fraction(0.0);
     set_controls_enabled(ui, true);
     refresh_model(ui);
+    update_image_actions(ui);
     ui.status.set_text(message);
 }
 
@@ -1112,7 +1476,7 @@ fn slugify(prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{crop_rect_from_drag, slugify};
 
     #[test]
     fn slugifies_prompts() {
@@ -1134,5 +1498,39 @@ mod tests {
         assert!(!slug.ends_with('-'));
         assert!(slug.chars().count() <= 48, "{slug}");
         assert!(!slug.is_empty());
+    }
+
+    #[test]
+    fn maps_a_full_letterboxed_selection() {
+        // 1000x1000 image in a 1000x500 area: rendered at 500x500, centered.
+        assert_eq!(
+            crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (250.0, 0.0, 750.0, 500.0)),
+            Some((0, 0, 1000, 1000))
+        );
+    }
+
+    #[test]
+    fn maps_a_region_inside_the_image() {
+        // Same letterboxing; select the middle quarter in image coordinates.
+        assert_eq!(
+            crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (375.0, 125.0, 625.0, 375.0)),
+            Some((250, 250, 500, 500))
+        );
+    }
+
+    #[test]
+    fn clamps_selections_from_the_letterbox_margin() {
+        assert_eq!(
+            crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (0.0, 0.0, 500.0, 250.0)),
+            Some((0, 0, 500, 500))
+        );
+    }
+
+    #[test]
+    fn rejects_tiny_selections() {
+        assert_eq!(
+            crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (250.0, 0.0, 256.0, 6.0)),
+            None
+        );
     }
 }

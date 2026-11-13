@@ -29,6 +29,8 @@ Milestone 3 (packaged desktop app):
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
+- **image actions** over the canvas: edit, crop-to-reference, and undo
+- the composer slides away during generation and returns via Edit/New
 - **preferences dialog**: output folder, CPU offload, models folder
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
@@ -72,6 +74,9 @@ backend unless you are on a card/driver where Vulkan wins.
 | Generate | `Ctrl+Enter` or **Generate** |
 | Cancel | **Cancel** (cancels the running server job) |
 | Toggle the sidebar | `Ctrl+B` or the header button |
+| Edit the image | pencil button at the top-right of the image |
+| Crop to a reference | selection button, drag a rectangle, release |
+| Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
 | Edit an image | pick a reference with the image button, or click a history row |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
@@ -83,6 +88,13 @@ backend unless you are on a card/driver where Vulkan wins.
 Editing is iterative: the first edit uses the selected reference, and each
 following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
 leave edit mode and generate from text alone; the prompt is kept.
+
+After a generation the prompt field slides away. Use the pencil button on the
+image (or `New`, or a history entry) to bring it back; the pencil makes the
+current image the edit reference. The selection button crops a region of the
+image, uses the crop as the new reference, and opens the composer. The sidebar
+hides itself after 5 seconds when neither the keyboard focus nor the pointer is
+inside it; `Ctrl+B` brings it back.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". The
@@ -111,6 +123,7 @@ Data locations:
 | `~/.local/share/flux-studio/models/` | downloaded model files |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
+| `~/.cache/flux-studio/crops/` | cropped reference images |
 | `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, prompt-helper paths |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
