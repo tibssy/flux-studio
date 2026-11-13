@@ -9,7 +9,7 @@ use gtk::{gdk, glib};
 
 use crate::history::Generation;
 use crate::{
-    Comparison, Ui, cancel_zoom, refresh_model, set_size, show_composer, thumb_path,
+    Ui, cancel_zoom, refresh_model, set_size, show_composer, thumb_path, update_image_actions,
     update_image_view,
 };
 
@@ -142,25 +142,8 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     cancel_zoom(ui);
 
     if entry.kind == "upscale" {
-        let after = PathBuf::from(&entry.image_path);
-        if let Some(before) = entry
-            .source_path
-            .as_deref()
-            .map(PathBuf::from)
-            .filter(|path| path.exists())
-        {
-            *ui.comparison.borrow_mut() = Some(Comparison {
-                before,
-                after: after.clone(),
-            });
-            ui.compare_guard.set(true);
-            ui.compare_button.set_active(false);
-            ui.compare_guard.set(false);
-            ui.compare_button
-                .set_tooltip_text(Some("Show the original image"));
-        }
         ui.undo.borrow_mut().clear();
-        ui.state.borrow_mut().load(after);
+        ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
         update_image_view(ui);
         refresh_model(ui);
         show_composer(ui, true);
@@ -363,6 +346,8 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
         ui.state.borrow_mut().new_image();
         update_image_view(ui);
         ui.status.set_text("Image deleted");
+    } else {
+        update_image_actions(ui);
     }
 
     ui.toast.add_toast(adw::Toast::new("Image deleted."));
@@ -424,7 +409,7 @@ fn model_label(id: &str) -> &str {
     preset(id).map(|model| model.label).unwrap_or(id)
 }
 
-fn entry_model_label(entry: &Generation) -> &str {
+pub(crate) fn entry_model_label(entry: &Generation) -> &str {
     if entry.kind == "upscale" {
         upscaler(entry.model.as_str())
             .map(|model| model.label)

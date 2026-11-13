@@ -4,7 +4,7 @@ pub(crate) struct MainView {
     pub root: gtk::Box,
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
-    pub picture_before: gtk::Picture,
+    pub picture_back: gtk::Picture,
     pub reference_bar: gtk::Box,
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
@@ -20,7 +20,8 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
-    pub compare_button: gtk::ToggleButton,
+    pub nav_up_button: gtk::Button,
+    pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
 }
@@ -38,7 +39,7 @@ pub(crate) fn build() -> MainView {
         .hexpand(true)
         .vexpand(true)
         .build();
-    let picture_before = gtk::Picture::builder()
+    let picture_back = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Contain)
         .can_shrink(true)
         .hexpand(true)
@@ -52,7 +53,7 @@ pub(crate) fn build() -> MainView {
         .transition_duration(350)
         .build();
     stack.add_named(&empty, Some("empty"));
-    stack.add_named(&picture_before, Some("before"));
+    stack.add_named(&picture_back, Some("back"));
     stack.add_named(&picture, Some("image"));
     stack.set_visible_child_name("empty");
 
@@ -81,9 +82,15 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
-    let compare_button = gtk::ToggleButton::builder()
-        .icon_name("view-reveal-symbolic")
-        .tooltip_text("Show the original image")
+    let nav_up_button = gtk::Button::builder()
+        .icon_name("go-up-symbolic")
+        .tooltip_text("Older image (scroll up)")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let nav_down_button = gtk::Button::builder()
+        .icon_name("go-down-symbolic")
+        .tooltip_text("Newer image (scroll down)")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
@@ -104,7 +111,6 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
-    image_actions.append(&compare_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
@@ -119,9 +125,17 @@ pub(crate) fn build() -> MainView {
         .margin_start(12)
         .margin_end(12)
         .build();
+    let nav_actions = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    nav_actions.set_halign(gtk::Align::End);
+    nav_actions.set_valign(gtk::Align::Center);
+    nav_actions.set_margin_end(12);
+    nav_actions.append(&nav_up_button);
+    nav_actions.append(&nav_down_button);
+
     image_overlay.add_overlay(&crop_overlay);
     image_overlay.add_overlay(&zoom_overlay);
     image_overlay.add_overlay(&image_actions);
+    image_overlay.add_overlay(&nav_actions);
 
     let reference_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     reference_bar.add_css_class("reference-bar");
@@ -245,7 +259,7 @@ pub(crate) fn build() -> MainView {
         root,
         stack,
         picture,
-        picture_before,
+        picture_back,
         reference_bar,
         reference_name,
         prompt,
@@ -261,7 +275,8 @@ pub(crate) fn build() -> MainView {
         zoom_overlay,
         edit_button,
         upscale_button,
-        compare_button,
+        nav_up_button,
+        nav_down_button,
         crop_button,
         undo_button,
     }

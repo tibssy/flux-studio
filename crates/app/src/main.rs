@@ -36,13 +36,6 @@ struct ZoomState {
     progress: f64,
 }
 
-/// Original and upscaled images kept together for a before/after fade.
-#[derive(Debug, Clone)]
-pub(crate) struct Comparison {
-    pub before: PathBuf,
-    pub after: PathBuf,
-}
-
 fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -64,7 +57,7 @@ pub(crate) struct Ui {
     pub toast: adw::ToastOverlay,
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
-    pub picture_before: gtk::Picture,
+    pub picture_back: gtk::Picture,
     pub reference_bar: gtk::Box,
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
@@ -81,7 +74,8 @@ pub(crate) struct Ui {
     pub zooming: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
-    pub compare_button: gtk::ToggleButton,
+    pub nav_up_button: gtk::Button,
+    pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
     pub reference_button: gtk::Button,
@@ -119,8 +113,7 @@ pub(crate) struct Ui {
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
     pub image_size: Cell<(u32, u32)>,
-    pub comparison: RefCell<Option<Comparison>>,
-    pub compare_guard: Cell<bool>,
+    pub last_scroll: Cell<Option<Instant>>,
     pub crop_mode: Cell<bool>,
     pub crop_rect: Rc<RefCell<Option<CropRect>>>,
     pub undo: RefCell<UndoStack>,
@@ -270,7 +263,7 @@ fn build_ui(app: &adw::Application) {
         toast,
         stack: view.stack,
         picture: view.picture,
-        picture_before: view.picture_before,
+        picture_back: view.picture_back,
         reference_bar: view.reference_bar,
         reference_name: view.reference_name,
         prompt: view.prompt,
@@ -287,7 +280,8 @@ fn build_ui(app: &adw::Application) {
         zooming: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
-        compare_button: view.compare_button,
+        nav_up_button: view.nav_up_button,
+        nav_down_button: view.nav_down_button,
         crop_button: view.crop_button,
         undo_button: view.undo_button,
         reference_button: view.reference_button,
@@ -325,8 +319,7 @@ fn build_ui(app: &adw::Application) {
         size_guard: Cell::new(false),
         size_cell,
         image_size: Cell::new((0, 0)),
-        comparison: RefCell::new(None),
-        compare_guard: Cell::new(false),
+        last_scroll: Cell::new(None),
         crop_mode: Cell::new(false),
         crop_rect,
         undo: RefCell::new(UndoStack::default()),
@@ -535,20 +528,38 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
-        let button = ui.compare_button.clone();
-        button.connect_toggled(move |button| {
-            if ui.compare_guard.get() || ui.comparison.borrow().is_none() {
-                return;
+        let button = ui.nav_up_button.clone();
+        button.connect_clicked(move |_| navigate_history(&ui, 1));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.nav_down_button.clone();
+        button.connect_clicked(move |_| navigate_history(&ui, -1));
+    }
+    {
+        let ui = ui.clone();
+        let stack = ui.stack.clone();
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        scroll.connect_scroll(move |_, _dx, dy| {
+            if dy == 0.0 || ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+                return glib::Propagation::Proceed;
             }
-            let show_before = button.is_active();
-            ui.stack
-                .set_visible_child_name(if show_before { "before" } else { "image" });
-            button.set_tooltip_text(Some(if show_before {
-                "Show the upscaled image"
+            if ui
+                .last_scroll
+                .get()
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(180))
+            {
+                return glib::Propagation::Stop;
+            }
+            ui.last_scroll.set(Some(Instant::now()));
+            if dy < 0.0 {
+                navigate_history(&ui, 1);
             } else {
-                "Show the original image"
-            }));
+                navigate_history(&ui, -1);
+            }
+            glib::Propagation::Stop
         });
+        stack.add_controller(scroll);
     }
     {
         let ui = ui.clone();
@@ -602,10 +613,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                     upscale_dialog::show(&ui);
                     glib::Propagation::Stop
                 }
-                gdk::Key::c | gdk::Key::C if state.contains(gdk::ModifierType::SHIFT_MASK) => {
-                    if ui.comparison.borrow().is_some() {
-                        ui.compare_button.set_active(!ui.compare_button.is_active());
-                    }
+                gdk::Key::Up => {
+                    navigate_history(&ui, 1);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Down => {
+                    navigate_history(&ui, -1);
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -783,30 +796,13 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         (state.display.clone(), state.reference.clone())
     };
 
-    let comparison = ui.comparison.borrow().clone();
-    let keep_comparison = match (&comparison, &display) {
-        (Some(comparison), Some(path)) => comparison.after == *path,
-        _ => false,
-    };
-    if !keep_comparison {
-        ui.comparison.borrow_mut().take();
-        ui.compare_guard.set(true);
-        ui.compare_button.set_active(false);
-        ui.compare_guard.set(false);
-        ui.compare_button
-            .set_tooltip_text(Some("Show the original image"));
-        ui.picture_before.set_paintable(gdk::Paintable::NONE);
-    }
-
     match display {
         Some(path) => match gdk::Texture::from_filename(&path) {
             Ok(texture) => {
                 ui.image_size
                     .set((texture.width() as u32, texture.height() as u32));
                 ui.picture.set_paintable(Some(&texture));
-                if !keep_comparison || ui.stack.visible_child_name().as_deref() != Some("before") {
-                    ui.stack.set_visible_child_name("image");
-                }
+                ui.stack.set_visible_child_name("image");
             }
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "failed to load image");
@@ -818,22 +814,8 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         None => {
             ui.image_size.set((0, 0));
             ui.picture.set_paintable(gdk::Paintable::NONE);
-            ui.picture_before.set_paintable(gdk::Paintable::NONE);
+            ui.picture_back.set_paintable(gdk::Paintable::NONE);
             ui.stack.set_visible_child_name("empty");
-        }
-    }
-
-    if keep_comparison && let Some(comparison) = comparison {
-        match gdk::Texture::from_filename(&comparison.before) {
-            Ok(texture) => ui.picture_before.set_paintable(Some(&texture)),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    path = %comparison.before.display(),
-                    "failed to load the original for comparison"
-                );
-                ui.picture_before.set_paintable(gdk::Paintable::NONE);
-            }
         }
     }
 
@@ -873,10 +855,13 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let generating = ui.generating.get();
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
-    let comparing = ui.comparison.borrow().is_some();
+    let position = history_position(ui);
+    let navigation = has_image && !generating && !upscaling && !zooming;
 
-    ui.compare_button
-        .set_visible(has_image && comparing && !generating && !upscaling && !zooming);
+    ui.nav_up_button
+        .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
+    ui.nav_down_button
+        .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.upscale_button
         .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
     ui.edit_button
@@ -1746,6 +1731,7 @@ fn start_generation(ui: &Rc<Ui>) {
                             ui.entries.borrow_mut().insert(0, entry.clone());
                             history_view::add_row(&ui, &entry, true);
                             trim_history(&ui);
+                            update_image_actions(&ui);
                         }
                         Err(error) => {
                             tracing::error!(%error, "failed to record history");
@@ -1777,17 +1763,71 @@ fn start_generation(ui: &Rc<Ui>) {
     });
 }
 
-/// Fade the upscaled image in over the original right after a run.
-fn reveal_comparison(ui: &Rc<Ui>) {
-    ui.stack.set_transition_type(gtk::StackTransitionType::None);
-    ui.stack.set_visible_child_name("before");
-    ui.stack
-        .set_transition_type(gtk::StackTransitionType::Crossfade);
-    let ui = ui.clone();
-    glib::timeout_add_local_once(Duration::from_millis(60), move || {
-        if ui.comparison.borrow().is_some() && !ui.compare_button.is_active() {
-            ui.stack.set_visible_child_name("image");
+/// Show an image with a crossfade from the currently visible canvas image.
+fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
+    let texture = match gdk::Texture::from_filename(path) {
+        Ok(texture) => texture,
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "failed to load image");
+            return false;
         }
+    };
+
+    // Alternate between the two picture children so the stack can crossfade.
+    let (target, back) = if ui.stack.visible_child_name().as_deref() == Some("image") {
+        ("back", &ui.picture_back)
+    } else {
+        ("image", &ui.picture)
+    };
+    back.set_paintable(Some(&texture));
+    ui.image_size
+        .set((texture.width() as u32, texture.height() as u32));
+    ui.state.borrow_mut().preview(path.to_path_buf());
+    ui.reference_name.set_text("");
+    ui.reference_name.set_tooltip_text(None);
+    ui.reference_bar.set_visible(false);
+    ui.stack.set_visible_child_name(target);
+    update_image_actions(ui);
+    true
+}
+
+/// Position of the displayed image in the history list and the list length.
+fn history_position(ui: &Ui) -> Option<(usize, usize)> {
+    let display = ui.state.borrow().display.clone()?;
+    let entries = ui.entries.borrow();
+    let index = entries
+        .iter()
+        .position(|entry| Path::new(&entry.image_path) == display.as_path())?;
+    Some((index, entries.len()))
+}
+
+/// Move `delta` entries through history: positive is older, negative newer.
+fn navigate_history(ui: &Rc<Ui>, delta: isize) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+        return;
+    }
+    let Some((index, count)) = history_position(ui) else {
+        return;
+    };
+    let target = index as isize + delta;
+    if target < 0 || target >= count as isize {
+        return;
+    }
+    let entry = ui.entries.borrow()[target as usize].clone();
+    let path = PathBuf::from(&entry.image_path);
+    if !fade_to_image(ui, &path) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Could not open {}",
+            path.display()
+        )));
+        return;
+    }
+
+    let label = history_view::entry_model_label(&entry);
+    ui.status.set_text(&if entry.kind == "upscale" {
+        format!("Upscaled · {label} · {} × {}", entry.width, entry.height)
+    } else {
+        format!("History · {label} · {} × {}", entry.width, entry.height)
     });
 }
 
@@ -1867,7 +1907,6 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
     let started = Instant::now();
     let model_id = preset.id.to_string();
     let source_path = input.to_string_lossy().into_owned();
-    let before_path = input;
     glib::spawn_future_local(async move {
         let ticker = glib::timeout_add_local(Duration::from_millis(500), {
             let ui = ui.clone();
@@ -1897,18 +1936,6 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                 let prompt = format!("Upscaled {factor}×");
 
                 ui.undo.borrow_mut().clear();
-                *ui.comparison.borrow_mut() = Some(Comparison {
-                    before: before_path,
-                    after: image.path.clone(),
-                });
-                ui.compare_guard.set(true);
-                ui.compare_button.set_active(false);
-                ui.compare_guard.set(false);
-                ui.compare_button
-                    .set_tooltip_text(Some("Show the original image"));
-                ui.state.borrow_mut().on_result(image.path.clone(), false);
-                update_image_view(&ui);
-                reveal_comparison(&ui);
 
                 let inserted = ui.history.borrow().insert(&NewGeneration {
                     prompt: &prompt,
@@ -1956,6 +1983,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                     }
                 }
 
+                fade_to_image(&ui, &image.path);
                 ui.toast.add_toast(adw::Toast::new(&format!(
                     "Upscaled to {} × {}.",
                     image.width, image.height
@@ -1963,7 +1991,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                 finish(
                     &ui,
                     &format!(
-                        "{} · {} × {} · {:.1}s · toggle to compare",
+                        "{} · {} × {} · {:.1}s · scroll to compare",
                         upscaler_label(&model_id),
                         image.width,
                         image.height,

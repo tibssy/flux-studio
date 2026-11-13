@@ -24,6 +24,12 @@ impl AppState {
         self.reference = Some(path);
     }
 
+    /// Show an image without making it the edit reference.
+    pub fn preview(&mut self, path: PathBuf) {
+        self.display = Some(path);
+        self.reference = None;
+    }
+
     /// Apply a finished generation.
     pub fn on_result(&mut self, path: PathBuf, was_edit: bool) {
         self.display = Some(path.clone());

@@ -32,8 +32,8 @@ Milestone 3 (packaged desktop app):
 - **image actions** over the canvas: upscale, edit, crop-to-reference, and undo
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
-- **before/after comparison** after an upscale: the result fades in over the
-  original, and an eye button crossfades between the two
+- **history navigation** with a crossfade: scroll over the image or use the
+  up/down arrows to step through history and compare an upscale with its source
 - the composer slides away during generation and returns via Edit/New
 - **preferences dialog**: output folder, CPU offload, models folder, auto-hide
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
@@ -101,9 +101,11 @@ Upscaled images are saved to the output folder and appear in history with their
 source path, upscaler and output size. Deleting an upscale never deletes the
 source image.
 
-After a run the upscaled image fades in over the original. The eye button over
-the canvas crossfades between the original and the upscaled result, so detail
-and artifacts can be compared without leaving the app.
+After a run the upscaled image fades in over the original. Scroll up or down
+over the canvas, or use the arrows on the right edge, to step through history
+with the same crossfade. Since an upscale is recorded next to its source, one
+scroll switches between the two so detail and artifacts can be compared
+without leaving the app.
 
 ## Usage
 
@@ -115,7 +117,7 @@ and artifacts can be compared without leaving the app.
 | Edit the image | pencil button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Upscale from the keyboard | `Ctrl+U` |
-| Compare before/after | eye button at the top-right, after an upscale (`Ctrl+Shift+C`) |
+| Older/newer image | scroll over the canvas, use the up/down arrows, or `Ctrl+Up` / `Ctrl+Down` |
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
