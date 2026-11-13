@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::preset::{PRESETS, preset};
+use flux_core::preset::preset;
 use flux_core::style::STYLES;
 use gtk::{gdk, glib};
 
@@ -125,8 +125,18 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     ui.prompt.buffer().set_text(&entry.prompt);
     ui.seed_entry.set_text(&entry.seed);
 
-    if let Some(index) = PRESETS.iter().position(|preset| preset.id == entry.model) {
+    if let Some(index) = ui
+        .models
+        .borrow()
+        .iter()
+        .position(|preset| preset.id == entry.model)
+    {
         ui.model_dropdown.set_selected(index as u32);
+    } else {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} is not installed; using the selected model.",
+            model_label(&entry.model)
+        )));
     }
     if let Some(index) = STYLES.iter().position(|style| style.id == entry.style) {
         ui.style_dropdown.set_selected(index as u32);

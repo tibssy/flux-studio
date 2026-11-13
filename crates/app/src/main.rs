@@ -85,6 +85,8 @@ pub(crate) struct Ui {
     pub new_button: gtk::Button,
     pub entries: RefCell<Vec<Generation>>,
     pub model_dropdown: gtk::DropDown,
+    pub models: RefCell<Vec<&'static ModelPreset>>,
+    pub rebuilding_models: Cell<bool>,
     pub model_hint: gtk::Label,
     pub style_dropdown: gtk::DropDown,
     pub width_scale: gtk::Scale,
@@ -284,6 +286,8 @@ fn build_ui(app: &adw::Application) {
         new_button: side.new_button,
         entries: RefCell::new(Vec::new()),
         model_dropdown: side.model_dropdown,
+        models: RefCell::new(Vec::new()),
+        rebuilding_models: Cell::new(false),
         model_hint: side.model_hint,
         style_dropdown: side.style_dropdown,
         width_scale: side.width_scale,
@@ -334,14 +338,14 @@ fn build_ui(app: &adw::Application) {
         tracing::warn!(%error, "failed to write config");
     }
 
-    refresh_model(&ui);
+    refresh_model_list(&ui);
     update_size_ui(&ui);
     update_image_view(&ui);
 
     ui.window.present();
     show_composer(&ui, true);
 
-    if !active_preset(&ui).is_installed(&ui.models_dir) {
+    if ui.models.borrow().is_empty() {
         preferences::show_preferences(&ui, true);
     }
 }
@@ -382,8 +386,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let dropdown = ui.model_dropdown.clone();
         dropdown.connect_selected_notify(move |dropdown| {
+            if ui.rebuilding_models.get() {
+                return;
+            }
             let index = dropdown.selected() as usize;
-            let Some(model) = PRESETS.get(index) else {
+            let Some(model) = ui.models.borrow().get(index).copied() else {
                 return;
             };
             dropdown.set_tooltip_text(Some(model.description));
@@ -548,11 +555,72 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     ui.window.add_controller(key_controller);
 }
 
+pub(crate) fn refresh_model_list(ui: &Rc<Ui>) {
+    let installed: Vec<&'static ModelPreset> = PRESETS
+        .iter()
+        .filter(|preset| preset.is_installed(&ui.models_dir))
+        .collect();
+    let labels: Vec<&str> = installed.iter().map(|preset| preset.label).collect();
+    let list = gtk::StringList::new(&labels);
+    *ui.models.borrow_mut() = installed;
+    ui.model_dropdown.set_model(Some(&list));
+
+    let is_empty = ui.models.borrow().is_empty();
+    ui.model_dropdown
+        .set_sensitive(!is_empty && !ui.generating.get());
+
+    if is_empty {
+        ui.model_dropdown.set_selected(gtk::INVALID_LIST_POSITION);
+        refresh_model(ui);
+        return;
+    }
+
+    let active = ui.config.borrow().active_preset.clone();
+    let index = ui
+        .models
+        .borrow()
+        .iter()
+        .position(|preset| preset.id == active)
+        .unwrap_or(0);
+    ui.model_dropdown.set_selected(index as u32);
+
+    let selected_id = ui.models.borrow()[index].id.to_string();
+    {
+        let mut config = ui.config.borrow_mut();
+        if config.active_preset != selected_id {
+            config.active_preset = selected_id;
+            let _ = config.save();
+        }
+    }
+    refresh_model(ui);
+}
+
 pub(crate) fn active_preset(ui: &Rc<Ui>) -> &'static ModelPreset {
+    let index = ui.model_dropdown.selected() as usize;
+    if let Some(model) = ui.models.borrow().get(index).copied() {
+        return model;
+    }
     preset(&ui.config.borrow().active_preset).unwrap_or_else(default_preset)
 }
 
 pub(crate) fn refresh_model(ui: &Rc<Ui>) {
+    if ui.models.borrow().is_empty() {
+        ui.model_dropdown
+            .set_tooltip_text(Some("No models installed"));
+        ui.model_hint
+            .set_text("No models installed — download in Preferences");
+        ui.model_hint.add_css_class("error");
+        ui.advanced_summary
+            .set_text("Download a model in Preferences");
+        ui.generate.set_sensitive(false);
+        if ui.prompt_helper.is_some() {
+            ui.improve_button
+                .set_tooltip_text(Some("No model installed"));
+            ui.improve_button.set_sensitive(false);
+        }
+        return;
+    }
+
     let model = active_preset(ui);
     let missing = model.missing(&ui.models_dir);
 

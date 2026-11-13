@@ -16,7 +16,7 @@ Milestone 3 (packaged desktop app):
   preview and megapixel readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
   as prompt suffixes
-- **model dropdown**, seed control and an Advanced group (fixed steps/CFG,
+- **model dropdown restricted to installed presets**, seed control and an Advanced group (fixed steps/CFG,
   sampler, CPU offload) in the sidebar
 - focused composer: prompt, Generate/Cancel and a reference-image button
 - **reference-image editing** (`-r`); edits promote their result to the next
@@ -147,7 +147,8 @@ cargo run --release
 ```
 
 The app also downloads models itself: **Preferences → Models**, or on first run
-when the active preset is missing.
+when no model is installed. Only installed presets appear in the sidebar
+selector; missing ones can be downloaded or removed from the Models tab.
 
 `sd-server` keeps the model loaded between generations and releases it after
 60 seconds without activity. Switching the model in the sidebar releases the

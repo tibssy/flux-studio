@@ -6,7 +6,7 @@ use adw::prelude::*;
 use flux_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
 use gtk::glib;
 
-use crate::{Ui, active_preset, refresh_model};
+use crate::{Ui, active_preset, refresh_model_list};
 
 const REPO_URL: &str = "https://github.com/tibssy/flux-studio";
 const ISSUES_URL: &str = "https://github.com/tibssy/flux-studio/issues";
@@ -194,9 +194,10 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .subtitle(preset_status(preset, &ui.models_dir))
             .build();
         let button = gtk::Button::builder()
-            .label("Download")
+            .icon_name("document-save-symbolic")
+            .tooltip_text("Download model files")
             .valign(gtk::Align::Center)
-            .css_classes(["pill"])
+            .css_classes(["flat"])
             .build();
         button.set_sensitive(!preset.is_installed(&ui.models_dir));
         let delete_button = gtk::Button::builder()
@@ -233,9 +234,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
                     .row
                     .set_subtitle(&preset_status(entry.preset, &models_dir));
                 let installed = entry.preset.is_installed(&models_dir);
-                entry
-                    .button
-                    .set_label(if installed { "Installed" } else { "Download" });
+                entry.button.set_visible(!installed);
                 entry.button.set_sensitive(!installed);
 
                 let deletable = deletable_files(entry.preset, &models_dir);
@@ -539,7 +538,7 @@ fn confirm_delete_model(
                 ui.backend.unload();
             }
             refresh();
-            refresh_model(&ui);
+            refresh_model_list(&ui);
             match result {
                 Ok(freed) => ui.toast.add_toast(adw::Toast::new(&format!(
                     "Deleted {} file(s) · {}.",
@@ -713,7 +712,7 @@ fn start_download(
                 Err(_) => {}
             }
             refresh();
-            refresh_model(&ui);
+            refresh_model_list(&ui);
         });
     }
 }

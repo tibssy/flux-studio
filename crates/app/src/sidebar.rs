@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::preset::PRESETS;
 use flux_core::style::STYLES;
 use flux_core::{Config, size};
 
@@ -40,23 +39,12 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
         .css_classes(["heading"])
         .build();
 
-    let model_labels: Vec<&str> = PRESETS.iter().map(|preset| preset.label).collect();
-    let model_dropdown = gtk::DropDown::from_strings(&model_labels);
-    let model_index = PRESETS
-        .iter()
-        .position(|preset| preset.id == config.active_preset)
-        .unwrap_or(0);
-    model_dropdown.set_selected(model_index as u32);
+    let model_dropdown = gtk::DropDown::from_strings(&[]);
     model_dropdown.set_hexpand(true);
-    model_dropdown.set_tooltip_text(Some(PRESETS[model_index].description));
+    model_dropdown.set_tooltip_text(Some("Installed models"));
 
-    let m = &PRESETS[model_index];
     let model_hint = gtk::Label::builder()
-        .label(format!(
-            "{} steps · {:.1} GB",
-            m.steps,
-            m.total_bytes() as f64 / 1e9
-        ))
+        .label("Looking for installed models…")
         .xalign(0.0)
         .wrap(true)
         .max_width_chars(34)
