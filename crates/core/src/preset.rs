@@ -9,6 +9,7 @@ pub enum ModelRole {
     Vae,
     TextEncoder,
     VisionEncoder,
+    Upscaler,
 }
 
 /// A single downloadable file belonging to a preset.

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use async_channel::Sender;
 use flux_core::preset::{ModelFileSpec, ModelPreset};
+use flux_core::upscaler::UpscalerPreset;
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::RANGE;
@@ -118,6 +119,15 @@ pub async fn download_preset(
         paths.push(download(file, models_dir, index, file_count, progress.clone()).await?);
     }
     Ok(paths)
+}
+
+/// Download one upscaler weight, resuming a partial `.part` file when present.
+pub async fn download_upscaler(
+    preset: &UpscalerPreset,
+    models_dir: &Path,
+    progress: Sender<DownloadProgress>,
+) -> Result<PathBuf> {
+    download(&preset.file, models_dir, 0, 1, progress).await
 }
 
 #[cfg(test)]

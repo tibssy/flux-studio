@@ -5,6 +5,7 @@ mod preferences;
 mod prompt_ai;
 mod sidebar;
 mod state;
+mod upscale_dialog;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use adw::prelude::*;
 use flux_backend_sdcpp::{SdServer, SdServerConfig};
 use flux_core::preset::{ModelPreset, ModelRole, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
+use flux_core::upscaler::{self, UpscaleRequest, UpscalerPreset};
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 use gtk::{gdk, glib};
 
@@ -70,6 +72,7 @@ pub(crate) struct Ui {
     pub zoom_source: RefCell<Option<glib::SourceId>>,
     pub zooming: Cell<bool>,
     pub edit_button: gtk::Button,
+    pub upscale_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
     pub reference_button: gtk::Button,
@@ -103,6 +106,7 @@ pub(crate) struct Ui {
     pub advanced_summary: gtk::Label,
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
+    pub upscaling: Cell<bool>,
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
     pub image_size: Cell<(u32, u32)>,
@@ -271,6 +275,7 @@ fn build_ui(app: &adw::Application) {
         zoom_source: RefCell::new(None),
         zooming: Cell::new(false),
         edit_button: view.edit_button,
+        upscale_button: view.upscale_button,
         crop_button: view.crop_button,
         undo_button: view.undo_button,
         reference_button: view.reference_button,
@@ -304,6 +309,7 @@ fn build_ui(app: &adw::Application) {
         advanced_summary: side.advanced_summary,
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
+        upscaling: Cell::new(false),
         size_guard: Cell::new(false),
         size_cell,
         image_size: Cell::new((0, 0)),
@@ -360,7 +366,13 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.cancel.clone();
         button.connect_clicked(move |_| {
-            if let Err(error) = ui.backend.cancel() {
+            let upscaling = ui.upscaling.get();
+            let result = if upscaling {
+                ui.backend.cancel_upscale()
+            } else {
+                ui.backend.cancel()
+            };
+            if let Err(error) = result {
                 ui.toast
                     .add_toast(adw::Toast::new(&format!("Cancel failed: {error}")));
             }
@@ -454,7 +466,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let list = ui.history_list.clone();
         list.connect_row_activated(move |_, row| {
-            if ui.generating.get() {
+            if ui.generating.get() || ui.upscaling.get() {
                 return;
             }
             let Ok(id) = row.widget_name().parse::<i64>() else {
@@ -499,6 +511,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.edit_button.clone();
         button.connect_clicked(move |_| edit_current_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.upscale_button.clone();
+        button.connect_clicked(move |_| upscale_dialog::show(&ui));
     }
     {
         let ui = ui.clone();
@@ -778,22 +795,26 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let has_image = ui.state.borrow().display.is_some();
     let composing = ui.composer.reveals_child();
     let generating = ui.generating.get();
+    let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
 
+    ui.upscale_button
+        .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
     ui.edit_button
-        .set_visible(has_image && !composing && !generating && !zooming);
+        .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
     ui.crop_button
-        .set_visible(has_image && !generating && !zooming);
-    ui.undo_button
-        .set_visible(has_image && !generating && !zooming && ui.undo.borrow().can_undo());
+        .set_visible(has_image && !generating && !upscaling && !zooming);
+    ui.undo_button.set_visible(
+        has_image && !generating && !upscaling && !zooming && ui.undo.borrow().can_undo(),
+    );
 
-    if !has_image || generating || zooming {
+    if !has_image || generating || upscaling || zooming {
         ui.crop_button.set_active(false);
     }
 }
 
 fn edit_current_image(ui: &Rc<Ui>) {
-    if ui.generating.get() {
+    if ui.generating.get() || ui.upscaling.get() {
         return;
     }
     let Some(path) = ui.state.borrow().display.clone() else {
@@ -1251,7 +1272,7 @@ fn setup_auto_hide(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn new_image(ui: &Rc<Ui>) {
-    if ui.generating.get() {
+    if ui.generating.get() || ui.upscaling.get() {
         return;
     }
     cancel_zoom(ui);
@@ -1422,6 +1443,7 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 
 fn start_generation(ui: &Rc<Ui>) {
     if ui.generating.get()
+        || ui.upscaling.get()
         || ui.zooming.get()
         || !ui.generate.is_sensitive()
         || !ui.composer.reveals_child()
@@ -1572,6 +1594,8 @@ fn start_generation(ui: &Rc<Ui>) {
                         duration_ms,
                         image_path: &image_path,
                         reference_path: reference_for_history.as_deref(),
+                        kind: "generate",
+                        source_path: None,
                     });
 
                     match inserted {
@@ -1592,6 +1616,8 @@ fn start_generation(ui: &Rc<Ui>) {
                                 duration_ms,
                                 image_path,
                                 reference_path: reference_for_history.clone(),
+                                kind: "generate".into(),
+                                source_path: None,
                             };
                             ui.entries.borrow_mut().insert(0, entry.clone());
                             history_view::add_row(&ui, &entry, true);
@@ -1627,8 +1653,195 @@ fn start_generation(ui: &Rc<Ui>) {
     });
 }
 
+/// Run one upscale on a worker thread and show the result like a generation.
+pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor: u32) {
+    if ui.generating.get() || ui.upscaling.get() {
+        return;
+    }
+    let Some(input) = ui.state.borrow().display.clone() else {
+        ui.toast.add_toast(adw::Toast::new("No image to upscale."));
+        return;
+    };
+    let (width, height) = ui.image_size.get();
+    let Some((output_width, output_height)) = upscaler::output_size(width, height, factor) else {
+        ui.toast.add_toast(adw::Toast::new(
+            "This image is too large: the 4× pass would exceed 8192 px.",
+        ));
+        return;
+    };
+    if !preset.is_installed(&ui.models_dir) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} is not installed (see Preferences).",
+            preset.label
+        )));
+        return;
+    }
+
+    let output_dir = ui.config.borrow().output_dir.clone();
+    let stem = input
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(slugify)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "image".into());
+    let output = output_dir.join(format!("{stem}-upscaled-{factor}x-{}.png", now_millis()));
+
+    {
+        let mut config = ui.config.borrow_mut();
+        config.upscaler_id = preset.id.to_string();
+        config.upscale_factor = factor;
+        let _ = config.save();
+    }
+
+    let request = UpscaleRequest {
+        input: input.clone(),
+        output,
+        upscaler_id: preset.id.to_string(),
+        factor,
+        tile_size: upscaler::DEFAULT_TILE_SIZE,
+    };
+
+    ui.upscaling.set(true);
+    set_controls_enabled(ui, false);
+    ui.composer.set_reveal_child(false);
+    ui.progress_row.set_visible(true);
+    ui.cancel.set_sensitive(true);
+    ui.progress.set_visible(true);
+    ui.progress.set_fraction(0.0);
+    ui.progress.set_text(Some("Upscaling…"));
+    ui.status.set_text(&format!(
+        "Upscaling {width} × {height} → {output_width} × {output_height}…"
+    ));
+    update_image_actions(ui);
+
+    // The generation server may still hold the diffusion model. Free it before
+    // the upscale server requests VRAM.
+    ui.backend.unload();
+
+    let backend = ui.backend.clone();
+    let (sender, receiver) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = backend.upscale(&request);
+        let _ = sender.send_blocking(result);
+    });
+
+    let ui = ui.clone();
+    let started = Instant::now();
+    let model_id = preset.id.to_string();
+    let source_path = input.to_string_lossy().into_owned();
+    glib::spawn_future_local(async move {
+        let ticker = glib::timeout_add_local(Duration::from_millis(500), {
+            let ui = ui.clone();
+            move || {
+                ui.progress.pulse();
+                ui.status.set_text(&format!(
+                    "Upscaling {width} × {height} → {output_width} × {output_height}… {:.0}s",
+                    started.elapsed().as_secs_f64()
+                ));
+                glib::ControlFlow::Continue
+            }
+        });
+
+        let result = receiver.recv().await;
+        ticker.remove();
+
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!("upscale worker stopped unexpectedly")),
+        };
+
+        match result {
+            Ok(image) => {
+                let duration_ms = started.elapsed().as_millis() as i64;
+                let image_path = image.path.to_string_lossy().into_owned();
+                let created_at = unix_seconds();
+                let prompt = format!("Upscaled {factor}×");
+
+                ui.undo.borrow_mut().clear();
+                ui.state.borrow_mut().on_result(image.path.clone(), false);
+                update_image_view(&ui);
+
+                let inserted = ui.history.borrow().insert(&NewGeneration {
+                    prompt: &prompt,
+                    model: &model_id,
+                    style: "none",
+                    width: image.width,
+                    height: image.height,
+                    steps: 0,
+                    seed: "",
+                    created_at,
+                    duration_ms,
+                    image_path: &image_path,
+                    reference_path: None,
+                    kind: "upscale",
+                    source_path: Some(&source_path),
+                });
+
+                match inserted {
+                    Ok(id) => {
+                        if let Err(error) = write_thumbnail(&image.path, id) {
+                            tracing::warn!(%error, "failed to write thumbnail");
+                        }
+                        let entry = Generation {
+                            id,
+                            prompt: prompt.clone(),
+                            model: model_id.clone(),
+                            style: "none".into(),
+                            width: image.width,
+                            height: image.height,
+                            steps: 0,
+                            seed: String::new(),
+                            created_at,
+                            duration_ms,
+                            image_path,
+                            reference_path: None,
+                            kind: "upscale".into(),
+                            source_path: Some(source_path),
+                        };
+                        ui.entries.borrow_mut().insert(0, entry.clone());
+                        history_view::add_row(&ui, &entry, true);
+                        trim_history(&ui);
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to record upscale");
+                    }
+                }
+
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Upscaled to {} × {}.",
+                    image.width, image.height
+                )));
+                finish(
+                    &ui,
+                    &format!(
+                        "{} · {} × {} · {:.1}s",
+                        upscaler_label(&model_id),
+                        image.width,
+                        image.height,
+                        duration_ms as f64 / 1000.0
+                    ),
+                );
+            }
+            Err(error) => {
+                let text = error.to_string();
+                if text.contains("cancelled") {
+                    ui.toast.add_toast(adw::Toast::new("Upscaling cancelled."));
+                    finish(&ui, "Cancelled");
+                } else {
+                    tracing::error!(%error, "upscaling failed");
+                    let short = text.lines().next().unwrap_or(&text);
+                    ui.toast
+                        .add_toast(adw::Toast::new(&format!("Upscaling failed: {short}")));
+                    finish(&ui, "Upscaling failed");
+                }
+            }
+        }
+    });
+}
+
 fn finish(ui: &Rc<Ui>, message: &str) {
     ui.generating.set(false);
+    ui.upscaling.set(false);
     ui.progress_row.set_visible(false);
     ui.cancel.set_sensitive(false);
     ui.progress.set_visible(false);
@@ -1727,6 +1940,12 @@ fn unix_seconds() -> i64 {
 
 fn preset_label(id: &str) -> &str {
     preset(id).map(|preset| preset.label).unwrap_or(id)
+}
+
+fn upscaler_label(id: &str) -> &str {
+    flux_core::upscaler::upscaler(id)
+        .map(|preset| preset.label)
+        .unwrap_or(id)
 }
 
 /// Build a short, filesystem-friendly name from the prompt.

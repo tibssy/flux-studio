@@ -5,8 +5,10 @@
 //! is what the desktop app uses.
 
 pub mod server;
+pub mod upscale;
 
 pub use server::{SdServer, SdServerConfig};
+pub use upscale::SdUpscaleServer;
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -71,6 +73,7 @@ fn role_label(role: ModelRole) -> &'static str {
         ModelRole::Vae => "VAE",
         ModelRole::TextEncoder => "text encoder",
         ModelRole::VisionEncoder => "vision encoder",
+        ModelRole::Upscaler => "upscaler",
     }
 }
 

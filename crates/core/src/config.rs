@@ -17,6 +17,10 @@ pub struct Config {
     pub offload: bool,
     /// Id of the preset selected in the model dropdown.
     pub active_preset: String,
+    /// Id of the upscaler selected in the upscale dialog.
+    pub upscaler_id: String,
+    /// Requested output scale for upscaling (2 or 4).
+    pub upscale_factor: u32,
     /// Id of the style selected in the sidebar.
     pub style_id: String,
     /// Whether the left sidebar is shown.
@@ -43,6 +47,8 @@ impl Default for Config {
             default_height: preset.default_height,
             offload: true,
             active_preset: preset.id.to_string(),
+            upscaler_id: crate::upscaler::default_upscaler().id.to_string(),
+            upscale_factor: crate::upscaler::NATIVE_SCALE,
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
             sidebar_auto_hide: true,
@@ -94,5 +100,7 @@ mod tests {
         assert!(config.sd_server.is_none());
         assert!(config.prompt_helper_cli.is_none());
         assert!(config.prompt_helper_model.is_none());
+        assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
+        assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
     }
 }

@@ -16,9 +16,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_channel::Sender;
 use base64::Engine;
 use flux_core::preset::{ModelPreset, ModelRole, preset};
+use flux_core::upscaler::{UpscaleRequest, UpscaledImage};
 use flux_core::{Backend, BackendInfo, GenerateRequest, Progress};
 use serde::Deserialize;
 use serde_json::json;
+
+use crate::upscale::SdUpscaleServer;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const START_TIMEOUT: Duration = Duration::from_secs(180);
@@ -34,6 +37,7 @@ pub struct SdServer {
     inner: Arc<Mutex<Inner>>,
     job: Arc<Mutex<Option<String>>>,
     cancelling: Arc<AtomicBool>,
+    upscaler: SdUpscaleServer,
 }
 
 struct Inner {
@@ -51,6 +55,7 @@ struct Inner {
 impl SdServer {
     pub fn new(config: SdServerConfig) -> Self {
         let log = flux_core::paths::cache_dir().join("sd-server.log");
+        let upscaler = SdUpscaleServer::new(config.clone());
         let inner = Arc::new(Mutex::new(Inner {
             config,
             client: reqwest::blocking::Client::builder()
@@ -88,6 +93,7 @@ impl SdServer {
             inner,
             job: Arc::new(Mutex::new(None)),
             cancelling: Arc::new(AtomicBool::new(false)),
+            upscaler,
         }
     }
 }
@@ -134,11 +140,21 @@ impl Backend for SdServer {
         Ok(())
     }
 
+    fn upscale(&self, request: &UpscaleRequest) -> Result<UpscaledImage> {
+        self.upscaler.upscale(request)
+    }
+
+    fn cancel_upscale(&self) -> Result<()> {
+        self.upscaler.cancel()
+    }
+
     fn unload(&self) {
         let mut inner = self.inner.lock().expect("server mutex");
         if !inner.busy {
             inner.stop();
         }
+        drop(inner);
+        self.upscaler.unload();
     }
 }
 

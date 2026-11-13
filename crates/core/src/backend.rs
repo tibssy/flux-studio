@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_channel::Sender;
 
 use crate::request::{GenerateRequest, Progress};
+use crate::upscaler::{UpscaleRequest, UpscaledImage};
 
 #[derive(Debug, Clone)]
 pub struct BackendInfo {
@@ -23,6 +24,19 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Ask the running generation to stop. Must be safe to call when idle.
     fn cancel(&self) -> Result<()>;
+
+    /// Upscale one image with a registered upscaler preset.
+    ///
+    /// Backends that cannot upscale return an error; the default keeps the
+    /// trait usable for generation-only implementations.
+    fn upscale(&self, _request: &UpscaleRequest) -> Result<UpscaledImage> {
+        bail!("upscaling is not supported by this backend")
+    }
+
+    /// Ask the running upscale to stop. Must be safe to call when idle.
+    fn cancel_upscale(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// Release cached model weights, if the backend keeps any.
     ///

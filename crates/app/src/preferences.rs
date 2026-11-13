@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use flux_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
+use flux_core::upscaler::{UPSCALERS, UpscalerPreset};
 use gtk::glib;
 
 use crate::{Ui, active_preset, refresh_model_list};
@@ -19,9 +20,18 @@ const SDCPP_URL: &str = "https://github.com/leejet/stable-diffusion.cpp";
 const LLAMA_CPP_URL: &str = "https://github.com/ggml-org/llama.cpp";
 const FLUX2_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF";
 const FLUX3_GGUF_URL: &str = "https://huggingface.co/leejet/flux-3-image-klein-GGUF";
+const REALESRGAN_URL: &str = "https://github.com/xinntao/Real-ESRGAN";
+const PHIPS_URL: &str = "https://huggingface.co/Phips";
 
 struct PresetRow {
     preset: &'static ModelPreset,
+    row: adw::ActionRow,
+    button: gtk::Button,
+    delete_button: gtk::Button,
+}
+
+struct UpscalerRow {
+    preset: &'static UpscalerPreset,
     row: adw::ActionRow,
     button: gtk::Button,
     delete_button: gtk::Button,
@@ -50,6 +60,23 @@ fn preset_status(preset: &ModelPreset, models_dir: &Path) -> String {
             missing.len(),
             format_bytes(preset.total_bytes()),
             preset.steps
+        )
+    }
+}
+
+fn upscaler_status(preset: &UpscalerPreset, models_dir: &Path) -> String {
+    if preset.is_installed(models_dir) {
+        format!(
+            "Installed · {} · {}",
+            format_bytes(preset.approx_bytes()),
+            preset.license
+        )
+    } else {
+        format!(
+            "{} · {} · {}",
+            format_bytes(preset.approx_bytes()),
+            preset.license,
+            preset.description
         )
     }
 }
@@ -218,6 +245,43 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     }
     models_page.add(&presets_group);
 
+    let upscalers_group = adw::PreferencesGroup::builder()
+        .title("Upscaler models")
+        .description("Optional weights for upscaling images. Download only the ones you need.")
+        .build();
+    let upscaler_rows: Rc<RefCell<Vec<UpscalerRow>>> = Rc::new(RefCell::new(Vec::new()));
+    for preset in UPSCALERS {
+        let row = adw::ActionRow::builder()
+            .title(preset.label)
+            .subtitle(upscaler_status(preset, &ui.models_dir))
+            .build();
+        let button = gtk::Button::builder()
+            .icon_name("document-save-symbolic")
+            .tooltip_text("Download this upscaler")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        button.set_sensitive(!preset.is_installed(&ui.models_dir));
+        let delete_button = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Delete this upscaler from disk")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        button.set_visible(!preset.is_installed(&ui.models_dir));
+        delete_button.set_visible(preset.is_installed(&ui.models_dir));
+        row.add_suffix(&delete_button);
+        row.add_suffix(&button);
+        upscalers_group.add(&row);
+        upscaler_rows.borrow_mut().push(UpscalerRow {
+            preset,
+            row,
+            button,
+            delete_button,
+        });
+    }
+    models_page.add(&upscalers_group);
+
     let download_group = adw::PreferencesGroup::builder().title("Downloads").build();
     let download_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     download_box.append(&progress);
@@ -244,6 +308,59 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         })
     };
     refresh();
+
+    let refresh_upscalers: Rc<dyn Fn()> = {
+        let rows = upscaler_rows.clone();
+        let models_dir = ui.models_dir.clone();
+        Rc::new(move || {
+            for entry in rows.borrow().iter() {
+                let installed = entry.preset.is_installed(&models_dir);
+                entry
+                    .row
+                    .set_subtitle(&upscaler_status(entry.preset, &models_dir));
+                entry.button.set_visible(!installed);
+                entry.button.set_sensitive(!installed);
+                entry.delete_button.set_visible(installed);
+                entry.delete_button.set_sensitive(installed);
+            }
+        })
+    };
+    refresh_upscalers();
+
+    let upscaler_buttons: Vec<gtk::Button> = upscaler_rows
+        .borrow()
+        .iter()
+        .flat_map(|entry| [entry.button.clone(), entry.delete_button.clone()])
+        .collect();
+    for entry in upscaler_rows.borrow().iter() {
+        let ui = ui.clone();
+        let preset = entry.preset;
+        let refresh = refresh_upscalers.clone();
+        let dialog_ref = dialog.downgrade();
+        entry.delete_button.connect_clicked(move |_| {
+            if let Some(dialog) = dialog_ref.upgrade() {
+                confirm_delete_upscaler(&ui, preset, &dialog, refresh.clone());
+            }
+        });
+    }
+    for entry in upscaler_rows.borrow().iter() {
+        let ui = ui.clone();
+        let preset = entry.preset;
+        let progress = progress.clone();
+        let download_status = download_status.clone();
+        let buttons = upscaler_buttons.clone();
+        let refresh = refresh_upscalers.clone();
+        entry.button.connect_clicked(move |_| {
+            start_upscaler_download(
+                &ui,
+                preset,
+                &progress,
+                &download_status,
+                &buttons,
+                refresh.clone(),
+            );
+        });
+    }
 
     let buttons: Vec<gtk::Button> = rows
         .borrow()
@@ -362,6 +479,16 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "leejet · follows the FLUX.3 license",
         FLUX3_GGUF_URL,
     ));
+    credits_group.add(&link_row(
+        "Real-ESRGAN upscalers",
+        "Xintao Wang and contributors · BSD-3-Clause",
+        REALESRGAN_URL,
+    ));
+    credits_group.add(&link_row(
+        "Nomos and MoSR upscalers",
+        "Philip Hofmann (Phips) · CC-BY-4.0",
+        PHIPS_URL,
+    ));
     credits_page.add(&credits_group);
     let credits_navigation = adw::NavigationPage::new(&page_toolbar(&credits_page), "Credits");
 
@@ -395,6 +522,16 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "Qwen3 and Qwen3-VL weights",
         "Apache-2.0",
         QWEN3_URL,
+    ));
+    legal_group.add(&link_row(
+        "Real-ESRGAN upscaler weights",
+        "BSD-3-Clause",
+        REALESRGAN_URL,
+    ));
+    legal_group.add(&link_row(
+        "Nomos and MoSR upscaler weights",
+        "CC-BY-4.0 · Philip Hofmann (Phips)",
+        PHIPS_URL,
     ));
     legal_group.add(&link_row("stable-diffusion.cpp", "MIT", SDCPP_URL));
     legal_group.add(&link_row("llama.cpp", "MIT", LLAMA_CPP_URL));
@@ -554,6 +691,64 @@ fn confirm_delete_model(
                     "Could not delete all files: {error}"
                 ))),
             }
+        });
+    }
+
+    dialog.present(Some(parent));
+}
+
+fn confirm_delete_upscaler(
+    ui: &Rc<Ui>,
+    preset: &'static UpscalerPreset,
+    parent: &adw::PreferencesDialog,
+    refresh: Rc<dyn Fn()>,
+) {
+    if ui.generating.get() || ui.upscaling.get() {
+        ui.toast.add_toast(adw::Toast::new(
+            "Cannot delete upscalers while an image is running.",
+        ));
+        return;
+    }
+
+    let path = preset.path(&ui.models_dir);
+    if !path.exists() {
+        refresh();
+        return;
+    }
+
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Delete {}?", preset.label))
+        .body(format!(
+            "This permanently removes {} ({}) from disk.",
+            path.display(),
+            format_bytes(file_size(&path))
+        ))
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    {
+        let ui = ui.clone();
+        let refresh = refresh.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "delete" {
+                return;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    ui.toast
+                        .add_toast(adw::Toast::new(&format!("{} deleted.", preset.label)));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    ui.toast
+                        .add_toast(adw::Toast::new(&format!("Could not delete: {error}")));
+                }
+            }
+            refresh();
         });
     }
 
@@ -720,6 +915,81 @@ fn start_download(
             refresh_model_list(&ui);
         });
     }
+}
+
+fn start_upscaler_download(
+    ui: &Rc<Ui>,
+    preset: &'static UpscalerPreset,
+    progress: &gtk::ProgressBar,
+    status: &gtk::Label,
+    buttons: &[gtk::Button],
+    refresh: Rc<dyn Fn()>,
+) {
+    if preset.is_installed(&ui.models_dir) {
+        return;
+    }
+    for button in buttons {
+        button.set_sensitive(false);
+    }
+    progress.set_visible(true);
+    progress.set_fraction(0.0);
+    progress.set_text(Some("Starting…"));
+    status.set_text(&format!("Downloading {}…", preset.label));
+
+    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
+    let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
+    let models_dir = ui.models_dir.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(flux_models::download_upscaler(
+                preset,
+                &models_dir,
+                progress_tx,
+            ))?;
+            Ok(())
+        })();
+        let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
+    });
+
+    let progress = progress.clone();
+    let status = status.clone();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        while let Ok(event) = progress_rx.recv().await {
+            let fraction = if event.total > 0 {
+                event.downloaded as f64 / event.total as f64
+            } else {
+                0.0
+            };
+            progress.set_fraction(fraction.min(1.0));
+            progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
+            status.set_text(&format!(
+                "{} · {} / {}",
+                event.file,
+                format_bytes(event.downloaded),
+                format_bytes(event.total)
+            ));
+        }
+        let result = done_rx.recv().await;
+        progress.set_visible(false);
+        match result {
+            Ok(Ok(())) => {
+                status.set_text(&format!("{} is ready.", preset.label));
+                ui.toast
+                    .add_toast(adw::Toast::new(&format!("{} downloaded.", preset.label)));
+            }
+            Ok(Err(error)) => {
+                status.set_text(&format!("Download failed: {error}"));
+                ui.toast
+                    .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
+            }
+            Err(_) => {}
+        }
+        refresh();
+    });
 }
 
 #[cfg(test)]

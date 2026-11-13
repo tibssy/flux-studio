@@ -503,6 +503,7 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "flux-core",
+ "image",
  "libc",
  "reqwest",
  "serde",

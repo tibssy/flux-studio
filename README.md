@@ -29,7 +29,9 @@ Milestone 3 (packaged desktop app):
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
-- **image actions** over the canvas: edit, crop-to-reference, and undo
+- **image actions** over the canvas: upscale, edit, crop-to-reference, and undo
+- **image upscaling** with five permissive 4× models, 2×/4× output, model
+  downloads and tile-size fallback for 8 GB GPUs
 - the composer slides away during generation and returns via Edit/New
 - **preferences dialog**: output folder, CPU offload, models folder, auto-hide
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
@@ -69,6 +71,34 @@ CUDA is 2–3× faster than CPU. **Vulkan is slower than CPU on Maxwell**, becau
 the Vulkan backend has no cooperative-matrix path on sm_52; keep CUDA as the
 backend unless you are on a card/driver where Vulkan wins.
 
+## Upscaling
+
+The zoom button over the canvas upscales the current image locally through
+stable-diffusion.cpp's ESRGAN/MoSR path. Every model is a native **4×** model;
+the dialog also offers a **2×** output, produced by downscaling the 4× result
+with Lanczos. Weights are small and downloaded on demand from
+**Preferences → Models → Upscaler models**.
+
+| Model | Role | License | Size | 1024²→4096² |
+|---|---|---|---|---|
+| **Balanced 4×** (default) | Clean/generated images | CC-BY-4.0 | 16 MB | **42 s** |
+| **Photo 4× (max detail)** | Maximum photographic detail | BSD-3-Clause | 64 MB | 259 s |
+| **Anime 4×** | Line art and illustration | BSD-3-Clause | 17 MB | 84 s |
+| **Compressed 4×** | JPEG, noise and blur | CC-BY-4.0 | 32 MB | ≈4 min |
+| **Faithful 4× (soft)** | No invented detail | CC-BY-4.0 | 16 MB | 42 s |
+
+Measured on a Quadro M4000 (8 GB) with tile 256. Tile 256 peaks at ~3.3 GB and
+falls back to 128 automatically if CUDA runs out of memory.
+
+sd.cpp only supports 4× ESRGAN/MoSR models: the compact `v3` models and 2×
+ESRGAN/MoSR weights are rejected. Consequently the largest accepted input is
+2048 px, because the native 4× pass must stay within the server's 8192 px
+limit. Upscaling unloads the generation model first so both fit in 8 GB.
+
+Upscaled images are saved to the output folder and appear in history with their
+source path, upscaler and output size. Deleting an upscale never deletes the
+source image.
+
 ## Usage
 
 | Action | Shortcut / control |
@@ -77,6 +107,7 @@ backend unless you are on a card/driver where Vulkan wins.
 | Cancel | **Cancel** (cancels the running server job) |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
+| Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
@@ -144,6 +175,9 @@ Data locations:
   review the [model card](https://huggingface.co/black-forest-labs/flux-3-image-klein)
   before commercial use. The weights are gated on Hugging Face.
 - **Qwen3-4B** and **Qwen3-VL-4B-Instruct** text encoders are **Apache-2.0**.
+- **Real-ESRGAN** upscaler weights are **BSD-3-Clause**.
+- The **Nomos** and **MoSR** upscalers by Philip Hofmann (Phips) are
+  **CC-BY-4.0**; their model cards are linked from Preferences → Credits.
 - GGUF quantizations inherit the license of their base model.
 - Model weights are downloaded at runtime and are **not** part of this
   repository or package. Their licenses govern the weights and generated
@@ -162,6 +196,9 @@ Data locations:
 
 # 2. model weights (5.4 GB, or pass flux3-klein / all)
 ./scripts/fetch-models.sh
+
+# 2b. optional upscaler weights (~150 MB)
+./scripts/fetch-models.sh upscalers
 
 # 3. run
 cargo run --release

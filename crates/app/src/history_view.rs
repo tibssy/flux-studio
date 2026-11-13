@@ -4,6 +4,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use flux_core::preset::preset;
 use flux_core::style::STYLES;
+use flux_core::upscaler::upscaler;
 use gtk::{gdk, glib};
 
 use crate::history::Generation;
@@ -48,7 +49,7 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     let meta_label = gtk::Label::builder()
         .label(format!(
             "{} · {}×{}",
-            model_label(&entry.model),
+            entry_model_label(entry),
             entry.width,
             entry.height
         ))
@@ -80,22 +81,39 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     row_box.append(&actions);
     row.set_child(Some(&row_box));
 
-    row.set_tooltip_text(Some(&format!(
-        "{}\n{} · {} × {} · {} steps · {:.1}s · seed {}\nstyle: {}{}",
-        entry.prompt,
-        model_label(&entry.model),
-        entry.width,
-        entry.height,
-        entry.steps,
-        entry.duration_ms as f64 / 1000.0,
-        entry.seed,
-        style_label(&entry.style),
-        entry
-            .reference_path
-            .as_deref()
-            .map(|path| format!("\nreference: {path}"))
-            .unwrap_or_default()
-    )));
+    let tooltip = if entry.kind == "upscale" {
+        format!(
+            "{}\n{} · {} × {} · {:.1}s{}",
+            entry.prompt,
+            entry_model_label(entry),
+            entry.width,
+            entry.height,
+            entry.duration_ms as f64 / 1000.0,
+            entry
+                .source_path
+                .as_deref()
+                .map(|path| format!("\nsource: {path}"))
+                .unwrap_or_default()
+        )
+    } else {
+        format!(
+            "{}\n{} · {} × {} · {} steps · {:.1}s · seed {}\nstyle: {}{}",
+            entry.prompt,
+            entry_model_label(entry),
+            entry.width,
+            entry.height,
+            entry.steps,
+            entry.duration_ms as f64 / 1000.0,
+            entry.seed,
+            style_label(&entry.style),
+            entry
+                .reference_path
+                .as_deref()
+                .map(|path| format!("\nreference: {path}"))
+                .unwrap_or_default()
+        )
+    };
+    row.set_tooltip_text(Some(&tooltip));
 
     {
         let ui = ui.clone();
@@ -117,10 +135,25 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
 
 /// Load a history entry as the active image and restore its settings.
 pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() {
+    if ui.generating.get() || ui.upscaling.get() {
         return;
     }
     cancel_zoom(ui);
+
+    if entry.kind == "upscale" {
+        ui.undo.borrow_mut().clear();
+        ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
+        update_image_view(ui);
+        refresh_model(ui);
+        show_composer(ui, true);
+        ui.status.set_text(&format!(
+            "Upscaled · {} · {} × {}",
+            entry_model_label(entry),
+            entry.width,
+            entry.height
+        ));
+        return;
+    }
 
     ui.prompt.buffer().set_text(&entry.prompt);
     ui.seed_entry.set_text(&entry.seed);
@@ -164,35 +197,53 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
     content.set_margin_start(4);
     content.set_margin_end(4);
 
-    content.append(&kv("Prompt", &entry.prompt));
-    content.append(&kv("Model", model_label(&entry.model)));
-    content.append(&kv("Style", style_label(&entry.style)));
-    content.append(&kv("Effective prompt", &effective_prompt(entry)));
-    content.append(&kv(
-        "Size",
-        &format!("{} × {} px", entry.width, entry.height),
-    ));
-    content.append(&kv(
-        "Sampling",
-        &format!(
-            "{} steps · CFG {:.1} · {}",
-            entry.steps,
-            preset(&entry.model).map(|preset| preset.cfg).unwrap_or(1.0),
-            preset(&entry.model)
-                .map(|preset| preset.sampler.as_str())
-                .unwrap_or("euler")
-        ),
-    ));
-    content.append(&kv("Seed", &entry.seed));
-    content.append(&kv(
-        "Duration",
-        &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
-    ));
-    content.append(&kv("Created", &created_label(entry.created_at)));
-    if let Some(reference) = entry.reference_path.as_deref() {
-        content.append(&kv("Reference", reference));
+    if entry.kind == "upscale" {
+        content.append(&kv("Action", &entry.prompt));
+        content.append(&kv("Upscaler", entry_model_label(entry)));
+        content.append(&kv(
+            "Size",
+            &format!("{} × {} px", entry.width, entry.height),
+        ));
+        content.append(&kv(
+            "Duration",
+            &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
+        ));
+        content.append(&kv("Created", &created_label(entry.created_at)));
+        if let Some(source) = entry.source_path.as_deref() {
+            content.append(&kv("Source", source));
+        }
+        content.append(&kv("File", &entry.image_path));
+    } else {
+        content.append(&kv("Prompt", &entry.prompt));
+        content.append(&kv("Model", model_label(&entry.model)));
+        content.append(&kv("Style", style_label(&entry.style)));
+        content.append(&kv("Effective prompt", &effective_prompt(entry)));
+        content.append(&kv(
+            "Size",
+            &format!("{} × {} px", entry.width, entry.height),
+        ));
+        content.append(&kv(
+            "Sampling",
+            &format!(
+                "{} steps · CFG {:.1} · {}",
+                entry.steps,
+                preset(&entry.model).map(|preset| preset.cfg).unwrap_or(1.0),
+                preset(&entry.model)
+                    .map(|preset| preset.sampler.as_str())
+                    .unwrap_or("euler")
+            ),
+        ));
+        content.append(&kv("Seed", &entry.seed));
+        content.append(&kv(
+            "Duration",
+            &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
+        ));
+        content.append(&kv("Created", &created_label(entry.created_at)));
+        if let Some(reference) = entry.reference_path.as_deref() {
+            content.append(&kv("Reference", reference));
+        }
+        content.append(&kv("File", &entry.image_path));
     }
-    content.append(&kv("File", &entry.image_path));
 
     let scroller = gtk::ScrolledWindow::builder()
         .child(&content)
@@ -202,12 +253,18 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         .build();
 
     let dialog = adw::AlertDialog::builder()
-        .heading("Image details")
+        .heading(if entry.kind == "upscale" {
+            "Upscale details"
+        } else {
+            "Image details"
+        })
         .content_width(880)
         .extra_child(&scroller)
         .build();
     dialog.add_response("close", "Close");
-    dialog.add_response("copy", "Copy prompt");
+    if entry.kind != "upscale" {
+        dialog.add_response("copy", "Copy prompt");
+    }
     dialog.add_response("use", "Use as reference");
     dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
     dialog.set_close_response("close");
@@ -257,7 +314,7 @@ fn confirm_delete(ui: &Rc<Ui>, entry: &Generation) {
 }
 
 fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() {
+    if ui.generating.get() || ui.upscaling.get() {
         return;
     }
     if let Err(error) = ui.history.borrow().delete(entry.id) {
@@ -347,6 +404,16 @@ fn snippet(prompt: &str) -> String {
 
 fn model_label(id: &str) -> &str {
     preset(id).map(|model| model.label).unwrap_or(id)
+}
+
+fn entry_model_label(entry: &Generation) -> &str {
+    if entry.kind == "upscale" {
+        upscaler(entry.model.as_str())
+            .map(|model| model.label)
+            .unwrap_or(entry.model.as_str())
+    } else {
+        model_label(&entry.model)
+    }
 }
 
 fn style_label(id: &str) -> &str {

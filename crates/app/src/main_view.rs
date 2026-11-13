@@ -18,6 +18,7 @@ pub(crate) struct MainView {
     pub crop_overlay: gtk::DrawingArea,
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
+    pub upscale_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
 }
@@ -64,6 +65,12 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
+    let upscale_button = gtk::Button::builder()
+        .icon_name("zoom-in-symbolic")
+        .tooltip_text("Upscale this image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
     let crop_button = gtk::ToggleButton::builder()
         .icon_name("edit-select-symbolic")
         .tooltip_text("Select an area to crop and use as reference")
@@ -81,6 +88,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
+    image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
     image_actions.append(&undo_button);
@@ -234,6 +242,7 @@ pub(crate) fn build() -> MainView {
         crop_overlay,
         zoom_overlay,
         edit_button,
+        upscale_button,
         crop_button,
         undo_button,
     }
