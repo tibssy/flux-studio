@@ -27,7 +27,8 @@ Milestone 3 (packaged desktop app):
   loads it as the reference
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
-- **prompt improvement** through a local Ollama model, with undo
+- **prompt improvement** through llama.cpp using the active text encoder,
+  with undo
 - **preferences dialog**: output folder, CPU offload, models folder
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
@@ -75,7 +76,7 @@ backend unless you are on a card/driver where Vulkan wins.
 | Edit an image | pick a reference with the image button, or click a history row |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
-| Improve the prompt | ✨ button in the prompt field (needs a running Ollama) |
+| Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
 
@@ -87,11 +88,20 @@ Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". The
 selected style is stored with each history entry.
 
-Prompt improvement uses a local [Ollama](https://ollama.com) instance at
-`http://127.0.0.1:11434`. It picks the smallest installed model between 1B and
-8B parameters by default; set `llm_model` (and optionally `llm_url`) in
-`config.toml` to choose another one. The improved text replaces the prompt and
-a toast offers an **Undo**.
+Prompt improvement reuses the active preset's own text encoder via
+[llama.cpp](https://github.com/ggml-org/llama.cpp): it runs `llama-cli` with the
+same Qwen GGUF for a few seconds (`-rea off`, 4k context), so no extra model is
+needed. The button is hidden when `llama-cli` is not installed. Override the
+binary or use a dedicated instruct GGUF in `config.toml`:
+
+```toml
+prompt_helper_cli = "/usr/bin/llama-cli"
+prompt_helper_model = "/path/to/Qwen3-4B-Instruct.gguf"
+```
+
+The improved text replaces the prompt and a toast offers **Undo**. Note that
+`stable-diffusion.cpp` has no `--upsample_prompt_mode`; this is the local
+equivalent, done outside the diffusion process.
 
 Data locations:
 
@@ -101,7 +111,7 @@ Data locations:
 | `~/.local/share/flux-studio/models/` | downloaded model files |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
-| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state |
+| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, prompt-helper paths |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
 ## Setup from source

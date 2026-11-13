@@ -1,146 +1,189 @@
-//! Prompt rewriting through a local Ollama instance.
+//! Prompt rewriting through llama.cpp using the active model's text encoder.
 //!
-//! This is optional: when Ollama is not running the button reports a clear
-//! error instead of blocking generation. The model is auto-detected from the
-//! first non-embedding model, or set explicitly with `llm_model` in the config.
+//! The stable-diffusion.cpp server keeps the encoder for conditioning only and
+//! has no text-generation API, so this spawns `llama-cli` with the same GGUF
+//! file for a few seconds. No extra model download and no external service.
 
-use std::time::Duration;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use flux_core::Config;
-use serde::Deserialize;
-use serde_json::json;
 
 const SYSTEM_PROMPT: &str = "\
-You improve prompts for a text-to-image diffusion model. \
-Rewrite the user's prompt to be more specific and visually descriptive while \
-preserving their intent. Add concrete details about lighting, composition, \
-materials and atmosphere, but do not add new subjects or change the scene. \
-Keep it under 60 words. Return only the improved prompt, without quotes, \
-labels or explanations.";
+Rewrite the user's image-generation prompt to be more specific and visually \
+descriptive while preserving their intent. Add details about lighting, \
+composition, materials and atmosphere, but do not add new subjects or change \
+the scene. Keep it under 60 words. Return only the improved prompt wrapped in \
+<prompt> and </prompt> tags.";
 
-const MAX_PREDICT: u32 = 800;
+const TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_TOKENS: u32 = 220;
 
-pub(crate) fn improve(prompt: &str, config: &Config) -> Result<String> {
-    let base = config.llm_url.trim_end_matches('/');
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()?;
-
-    let model = match &config.llm_model {
-        Some(model) if !model.trim().is_empty() => model.clone(),
-        _ => detect_model(&client, base)?,
-    };
-
-    let response = client
-        .post(format!("{base}/api/chat"))
-        .json(&json!({
-            "model": model,
-            "stream": false,
-            "messages": [
-                { "role": "system", "content": SYSTEM_PROMPT },
-                { "role": "user", "content": prompt },
-            ],
-            "options": {
-                "temperature": 0.4,
-                "num_predict": MAX_PREDICT,
-            },
-        }))
-        .send()
-        .with_context(|| format!("could not reach Ollama at {base} (is it running?)"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        let body = body.trim();
-        let detail = if body.is_empty() {
-            String::new()
-        } else {
-            format!(": {}", body.chars().take(200).collect::<String>())
-        };
-        bail!("Ollama returned HTTP {status}{detail}");
+/// Locate `llama-cli` from config, the environment, or `PATH`.
+pub(crate) fn find_cli(config: &Config) -> Option<PathBuf> {
+    if let Some(path) = &config.prompt_helper_cli
+        && is_executable(path)
+    {
+        return Some(path.clone());
     }
-
-    let body: ChatResponse = response.json().context("invalid Ollama response")?;
-    let text = body
-        .message
-        .map(|message| message.content)
-        .unwrap_or_default();
-    let cleaned = clean(&text);
-    if cleaned.is_empty() {
-        bail!("the model returned an empty prompt");
+    if let Ok(path) = std::env::var("FLUX_LLAMA_CLI") {
+        let path = PathBuf::from(path);
+        if is_executable(&path) {
+            return Some(path);
+        }
     }
-    Ok(cleaned)
-}
-
-fn detect_model(client: &reqwest::blocking::Client, base: &str) -> Result<String> {
-    let response = client
-        .get(format!("{base}/api/tags"))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .with_context(|| format!("could not reach Ollama at {base} (is it running?)"))?;
-    if !response.status().is_success() {
-        bail!("Ollama returned HTTP {}", response.status());
-    }
-    let tags: Tags = response.json().context("invalid Ollama model list")?;
-    select_model(&tags.models)
-        .ok_or_else(|| anyhow!("no Ollama model is installed (`ollama pull <model>`)"))
-}
-
-fn select_model(models: &[TagModel]) -> Option<String> {
-    // Prefer a small instruction model: a 20B model would compete with the
-    // cached diffusion weights for RAM. Favor the first model in the 2B–8B
-    // range, then the smallest 1B–8B one.
-    if let Some(name) = models.iter().find_map(|model| {
-        let size = model
-            .details
-            .as_ref()?
-            .parameter_size
-            .as_deref()
-            .and_then(parameter_billions)?;
-        (2.0..=8.0).contains(&size).then(|| model.name.clone())
-    }) {
-        return Some(name);
-    }
-
-    let mut preferred: Vec<(f64, String)> = models
-        .iter()
-        .filter_map(|model| {
-            let size = model
-                .details
-                .as_ref()?
-                .parameter_size
-                .as_deref()
-                .and_then(parameter_billions)?;
-            (1.0..=8.0)
-                .contains(&size)
-                .then(|| (size, model.name.clone()))
-        })
-        .collect();
-    preferred.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if let Some((_, name)) = preferred.into_iter().next() {
-        return Some(name);
-    }
-
-    models.iter().map(|model| model.name.clone()).find(|name| {
-        let name = name.to_ascii_lowercase();
-        !name.contains("embed") && !name.contains("minilm")
-    })
-}
-
-fn parameter_billions(size: &str) -> Option<f64> {
-    let size = size.trim();
-    if let Some(number) = size.strip_suffix('B') {
-        return number.trim().parse().ok();
-    }
-    if let Some(number) = size.strip_suffix('M') {
-        return number
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|value| value / 1000.0);
+    let path_var = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path_var) {
+        let candidate = directory.join("llama-cli");
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
     }
     None
+}
+
+fn is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Rewrite `prompt` with `encoder` using `cli`.
+pub(crate) fn improve(prompt: &str, encoder: &Path, cli: &Path) -> Result<String> {
+    if !encoder.exists() {
+        bail!("text encoder not found at {}", encoder.display());
+    }
+
+    let mut child = build_command(cli, encoder, prompt)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to start {}", cli.display()))?;
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let stdout_reader = std::thread::spawn(move || read_all(stdout));
+    let stderr_reader = std::thread::spawn(move || read_all(stderr));
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("prompt helper timed out after {}s", TIMEOUT.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+
+    if !status.success() {
+        bail!("llama-cli exited with {status}{}", stderr_tail(&stderr));
+    }
+
+    extract(&stdout).ok_or_else(|| anyhow!("the model did not return a prompt"))
+}
+
+fn build_command(cli: &Path, encoder: &Path, prompt: &str) -> Command {
+    let mut command = Command::new(cli);
+    command
+        .arg("-m")
+        .arg(encoder)
+        .arg("-sys")
+        .arg(SYSTEM_PROMPT)
+        .arg("-p")
+        .arg(prompt)
+        .arg("-st")
+        .arg("--no-display-prompt")
+        .arg("--color")
+        .arg("off")
+        // Qwen3 base spends the whole budget on chain-of-thought otherwise.
+        .arg("-rea")
+        .arg("off")
+        .arg("-c")
+        .arg("4096")
+        .arg("--no-warmup")
+        .arg("-n")
+        .arg(MAX_TOKENS.to_string())
+        .arg("--temp")
+        .arg("0.4")
+        .arg("-t")
+        .arg(threads().to_string())
+        .arg("--simple-io");
+    command
+}
+
+fn threads() -> u32 {
+    std::thread::available_parallelism()
+        .map(|count| (count.get() / 2).clamp(1, 8) as u32)
+        .unwrap_or(4)
+}
+
+fn read_all(mut reader: impl Read) -> String {
+    let mut buffer = String::new();
+    let _ = reader.read_to_string(&mut buffer);
+    buffer
+}
+
+fn stderr_tail(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = lines.len().saturating_sub(5);
+    format!(": {}", lines[start..].join(" | "))
+}
+
+/// Pull the rewritten prompt out of `llama-cli`'s chat output.
+fn extract(stdout: &str) -> Option<String> {
+    let text = strip_ansi(stdout);
+
+    if let Some(start) = text.find("<prompt>") {
+        let rest = &text[start + "<prompt>".len()..];
+        let end = rest
+            .find("</prompt>")
+            .or_else(|| rest.find("\n[ Prompt:"))
+            .unwrap_or(rest.len());
+        let candidate = clean(&rest[..end]);
+        if !candidate.is_empty() {
+            return Some(candidate);
+        }
+    }
+
+    // Fallback for models that ignore the tags: take the lines after the
+    // echoed prompt and stop at llama-cli's timing footer.
+    let (_, body) = text.rsplit_once("\n> ")?;
+    let body = body.split("\n[ Prompt:").next().unwrap_or(body);
+    let mut lines = body.lines();
+    let _ = lines.next();
+    let candidate = clean(&lines.collect::<Vec<_>>().join("\n"));
+    if candidate.is_empty() || candidate.contains("available commands:") {
+        None
+    } else {
+        Some(candidate)
+    }
 }
 
 fn clean(text: &str) -> String {
@@ -161,83 +204,101 @@ fn clean(text: &str) -> String {
         .to_string()
 }
 
-#[derive(Deserialize)]
-struct Tags {
-    models: Vec<TagModel>,
-}
-
-#[derive(Deserialize)]
-struct TagModel {
-    name: String,
-    #[serde(default)]
-    details: Option<TagDetails>,
-}
-
-#[derive(Deserialize)]
-struct TagDetails {
-    #[serde(default)]
-    parameter_size: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ChatResponse {
-    message: Option<ChatMessage>,
-}
-
-#[derive(Deserialize)]
-struct ChatMessage {
-    content: String,
+fn strip_ansi(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            if characters.peek() == Some(&'[') {
+                characters.next();
+                for character in characters.by_ref() {
+                    if character.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            output.push(character);
+        }
+    }
+    output
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TagDetails, TagModel, clean, parameter_billions, select_model};
+    use super::*;
 
-    fn model(name: &str, size: Option<&str>) -> TagModel {
-        TagModel {
-            name: name.into(),
-            details: size.map(|size| TagDetails {
-                parameter_size: Some(size.into()),
-            }),
-        }
+    fn command_args() -> Vec<String> {
+        build_command(
+            Path::new("/usr/bin/llama-cli"),
+            Path::new("/models/Qwen3-4B-Q4_K_M.gguf"),
+            "a red fox",
+        )
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
     }
 
     #[test]
-    fn strips_quotes_and_labels() {
-        assert_eq!(clean("  \"a red fox\"  "), "a red fox");
+    fn builds_the_llama_command() {
+        let args = command_args();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-m", "/models/Qwen3-4B-Q4_K_M.gguf"])
+        );
+        assert!(args.windows(2).any(|pair| pair == ["-p", "a red fox"]));
+        assert!(args.windows(2).any(|pair| pair == ["-rea", "off"]));
+        assert!(args.windows(2).any(|pair| pair == ["-c", "4096"]));
+        assert!(args.windows(2).any(|pair| pair == ["-n", "220"]));
+        assert!(args.contains(&"--no-warmup".to_string()));
+        assert!(args.contains(&"--simple-io".to_string()));
+    }
+
+    #[test]
+    fn extracts_tagged_output() {
+        let output = "\n> a red fox\n<prompt>A red fox in autumn leaves, golden hour.</prompt>\n\n[ Prompt: 70 t/s ]\nExiting...\n";
+        assert_eq!(
+            extract(output).as_deref(),
+            Some("A red fox in autumn leaves, golden hour.")
+        );
+    }
+
+    #[test]
+    fn extracts_unclosed_tagged_output() {
+        let output = "\n> a red fox\n<prompt>A red fox in autumn leaves\n[ Prompt: 70 t/s ]\n";
+        assert_eq!(
+            extract(output).as_deref(),
+            Some("A red fox in autumn leaves")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_plain_output() {
+        let output = "\n> a red fox\nA red fox in autumn leaves, golden hour.\n\n[ Prompt: 70 t/s ]\nExiting...\n";
+        assert_eq!(
+            extract(output).as_deref(),
+            Some("A red fox in autumn leaves, golden hour.")
+        );
+    }
+
+    #[test]
+    fn ignores_cli_chatter() {
+        let output = "available commands:\n  /exit\n";
+        assert_eq!(extract(output), None);
+    }
+
+    #[test]
+    fn strips_ansi_and_quotes() {
+        let output = "\u{1b}[32m<prompt>\"a red fox\"</prompt>\u{1b}[0m";
+        assert_eq!(extract(output).as_deref(), Some("a red fox"));
         assert_eq!(clean("Improved prompt: a red fox"), "a red fox");
-        assert_eq!(clean("“a red fox”"), "a red fox");
-        assert_eq!(clean(""), "");
     }
 
     #[test]
-    fn parses_parameter_counts() {
-        assert_eq!(parameter_billions("2.5B"), Some(2.5));
-        assert_eq!(parameter_billions("380M"), Some(0.38));
-        assert_eq!(parameter_billions("unknown"), None);
-    }
-
-    #[test]
-    fn selects_a_small_instruction_model() {
-        let models = vec![
-            model("gpt-oss-20b", Some("20.9B")),
-            model("MiniCPM5-2B", Some("2.52B")),
-            model("lfm3:1.7b", Some("1.7B")),
-            model("all-minilm", Some("23M")),
-        ];
-        assert_eq!(select_model(&models).as_deref(), Some("MiniCPM5-2B"));
-    }
-
-    #[test]
-    fn falls_back_past_large_and_tiny_models() {
-        let models = vec![
-            model("huge", Some("20B")),
-            model("tiny", Some("0.5B")),
-            model("small", Some("1.7B")),
-        ];
-        assert_eq!(select_model(&models).as_deref(), Some("small"));
-
-        let models = vec![model("all-minilm", None), model("custom", None)];
-        assert_eq!(select_model(&models).as_deref(), Some("custom"));
+    fn splits_paths_for_the_cli_lookup() {
+        // Sanity check that PATH splitting yields usable directories.
+        if let Some(path) = std::env::var_os("PATH") {
+            assert!(std::env::split_paths(&path).next().is_some());
+        }
     }
 }

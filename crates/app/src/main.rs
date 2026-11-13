@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use adw::prelude::*;
 use flux_backend_sdcpp::{SdServer, SdServerConfig};
-use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
+use flux_core::preset::{ModelPreset, ModelRole, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 use gtk::{gdk, glib};
@@ -55,6 +55,7 @@ pub(crate) struct Ui {
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
+    pub prompt_helper: Option<PathBuf>,
     pub backend: Arc<dyn Backend>,
     pub worker: GenerationWorker,
     pub models_dir: PathBuf,
@@ -171,7 +172,9 @@ fn build_ui(app: &adw::Application) {
         size::snap(config.default_height),
     )));
 
+    let prompt_helper = prompt_ai::find_cli(&config);
     let view = main_view::build();
+    view.improve_button.set_visible(prompt_helper.is_some());
     let side = sidebar::build(&config, size_cell.clone());
 
     let header = adw::HeaderBar::new();
@@ -230,6 +233,7 @@ fn build_ui(app: &adw::Application) {
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
+        prompt_helper,
         backend,
         worker,
         models_dir,
@@ -498,6 +502,24 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         ui.model_hint.add_css_class("error");
         ui.generate.set_sensitive(false);
     }
+
+    if ui.prompt_helper.is_some() {
+        let encoder = model.path(ModelRole::TextEncoder, &ui.models_dir);
+        let encoder_ready = encoder.as_ref().map(|path| path.exists()).unwrap_or(false);
+        if !ui.generating.get() && !ui.improving.get() {
+            ui.improve_button.set_sensitive(encoder_ready);
+        }
+        let tooltip = match encoder {
+            Some(path) if path.exists() => format!(
+                "Improve the prompt with {} (llama.cpp)",
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string())
+            ),
+            _ => "Text encoder not installed".to_string(),
+        };
+        ui.improve_button.set_tooltip_text(Some(&tooltip));
+    }
 }
 
 pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
@@ -663,7 +685,27 @@ fn improve_prompt(ui: &Rc<Ui>) {
         return;
     }
 
-    let config = ui.config.borrow().clone();
+    let Some(cli) = ui.prompt_helper.clone() else {
+        return;
+    };
+    let encoder = ui
+        .config
+        .borrow()
+        .prompt_helper_model
+        .clone()
+        .or_else(|| active_preset(ui).path(ModelRole::TextEncoder, &ui.models_dir));
+    let Some(encoder) = encoder else {
+        ui.toast
+            .add_toast(adw::Toast::new("This model has no text encoder."));
+        return;
+    };
+    if !encoder.exists() {
+        ui.toast.add_toast(adw::Toast::new(
+            "The text encoder is not installed. Download the model in Preferences.",
+        ));
+        return;
+    }
+
     let original_for_worker = original.clone();
     ui.improving.set(true);
     ui.improve_button.set_sensitive(false);
@@ -671,16 +713,14 @@ fn improve_prompt(ui: &Rc<Ui>) {
 
     let (sender, receiver) = async_channel::bounded(1);
     std::thread::spawn(move || {
-        let _ = sender.send_blocking(prompt_ai::improve(&original_for_worker, &config));
+        let _ = sender.send_blocking(prompt_ai::improve(&original_for_worker, &encoder, &cli));
     });
 
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let result = receiver.recv().await;
         ui.improving.set(false);
-        if !ui.generating.get() {
-            ui.improve_button.set_sensitive(true);
-        }
+        refresh_model(&ui);
 
         match result {
             Ok(Ok(improved)) => {

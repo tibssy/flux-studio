@@ -17,6 +17,7 @@ pkgbase = flux-studio
 	depends = hicolor-icon-theme
 	depends = openssl
 	optdepends = nvidia-utils: CUDA inference on NVIDIA GPUs
+	optdepends = llama.cpp: prompt improvement using the active text encoder
 	source = flux-studio-0.1.0.tar.gz
 	source = stable-diffusion.cpp::git+https://github.com/leejet/stable-diffusion.cpp#commit=32d516c0197ed5ca31305b8575e14eb1451fad33
 	sha256sums = SKIP

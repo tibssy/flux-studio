@@ -22,7 +22,8 @@ url='https://github.com/ltux/flux-studio'
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'hicolor-icon-theme' 'openssl')
 makedepends=('cargo' 'rust' 'cmake' 'ninja' 'git' 'cuda' 'gcc14')
-optdepends=('nvidia-utils: CUDA inference on NVIDIA GPUs')
+optdepends=('nvidia-utils: CUDA inference on NVIDIA GPUs'
+            'llama.cpp: prompt improvement using the active text encoder')
 source=("$pkgname-$pkgver.tar.gz"
         "stable-diffusion.cpp::git+https://github.com/leejet/stable-diffusion.cpp#commit=32d516c0197ed5ca31305b8575e14eb1451fad33")
 sha256sums=('SKIP' 'SKIP')

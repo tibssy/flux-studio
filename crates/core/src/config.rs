@@ -23,10 +23,11 @@ pub struct Config {
     pub sidebar_visible: bool,
     /// Optional override for the `sd-server` binary.
     pub sd_server: Option<PathBuf>,
-    /// Base URL of the local Ollama instance used to improve prompts.
-    pub llm_url: String,
-    /// Ollama model used for prompt improvement; the first available one when unset.
-    pub llm_model: Option<String>,
+    /// Optional override for the `llama-cli` binary used to improve prompts.
+    pub prompt_helper_cli: Option<PathBuf>,
+    /// Optional GGUF used for prompt improvement; defaults to the active
+    /// preset's text encoder.
+    pub prompt_helper_model: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -43,8 +44,8 @@ impl Default for Config {
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
             sd_server: None,
-            llm_url: "http://127.0.0.1:11434".into(),
-            llm_model: None,
+            prompt_helper_cli: None,
+            prompt_helper_model: None,
         }
     }
 }
@@ -87,7 +88,7 @@ mod tests {
         assert_eq!(config.style_id, "none");
         assert!(config.sidebar_visible);
         assert!(config.sd_server.is_none());
-        assert_eq!(config.llm_url, "http://127.0.0.1:11434");
-        assert!(config.llm_model.is_none());
+        assert!(config.prompt_helper_cli.is_none());
+        assert!(config.prompt_helper_model.is_none());
     }
 }
