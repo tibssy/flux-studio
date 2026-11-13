@@ -33,7 +33,8 @@ Milestone 3 (packaged desktop app):
 - the composer slides away during generation and returns via Edit/New
 - **preferences dialog**: output folder, CPU offload, models folder, auto-hide
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
-- **model downloader** with resume, progress and per-preset install status
+- **model downloader** with resume, progress and per-preset install status,
+  plus a delete action that keeps files shared with other presets
 - first run opens the Models page when the active preset is missing
 - PKGBUILD, `.desktop` entry and scalable icon
 

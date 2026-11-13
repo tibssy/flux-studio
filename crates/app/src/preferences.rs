@@ -3,10 +3,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::preset::{ModelPreset, PRESETS};
+use flux_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
 use gtk::glib;
 
-use crate::{Ui, refresh_model};
+use crate::{Ui, active_preset, refresh_model};
 
 const REPO_URL: &str = "https://github.com/tibssy/flux-studio";
 const ISSUES_URL: &str = "https://github.com/tibssy/flux-studio/issues";
@@ -24,6 +24,7 @@ struct PresetRow {
     preset: &'static ModelPreset,
     row: adw::ActionRow,
     button: gtk::Button,
+    delete_button: gtk::Button,
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -198,12 +199,20 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .css_classes(["pill"])
             .build();
         button.set_sensitive(!preset.is_installed(&ui.models_dir));
+        let delete_button = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Delete this model's files from disk")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        row.add_suffix(&delete_button);
         row.add_suffix(&button);
         presets_group.add(&row);
         rows.borrow_mut().push(PresetRow {
             preset,
             row,
             button,
+            delete_button,
         });
     }
     models_page.add(&presets_group);
@@ -228,15 +237,31 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
                     .button
                     .set_label(if installed { "Installed" } else { "Download" });
                 entry.button.set_sensitive(!installed);
+
+                let deletable = deletable_files(entry.preset, &models_dir);
+                entry.delete_button.set_visible(!deletable.is_empty());
+                entry.delete_button.set_sensitive(!deletable.is_empty());
             }
         })
     };
+    refresh();
 
     let buttons: Vec<gtk::Button> = rows
         .borrow()
         .iter()
-        .map(|entry| entry.button.clone())
+        .flat_map(|entry| [entry.button.clone(), entry.delete_button.clone()])
         .collect();
+    for entry in rows.borrow().iter() {
+        let ui = ui.clone();
+        let preset = entry.preset;
+        let refresh = refresh.clone();
+        let dialog_ref = dialog.downgrade();
+        entry.delete_button.connect_clicked(move |_| {
+            if let Some(dialog) = dialog_ref.upgrade() {
+                confirm_delete_model(&ui, preset, &dialog, refresh.clone());
+            }
+        });
+    }
     for entry in rows.borrow().iter() {
         let ui = ui.clone();
         let preset = entry.preset;
@@ -392,6 +417,141 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         dialog.set_visible_page(&models_page);
     }
     dialog.present(Some(&ui.window));
+}
+
+fn file_is_shared(rel_path: &str, preset_id: &str) -> bool {
+    PRESETS.iter().any(|other| {
+        other.id != preset_id && other.files.iter().any(|file| file.rel_path == rel_path)
+    })
+}
+
+fn part_path(path: &Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("{}.part", path.display()))
+}
+
+fn deletable_files(preset: &'static ModelPreset, models_dir: &Path) -> Vec<&'static ModelFileSpec> {
+    preset
+        .files
+        .iter()
+        .filter(|file| !file_is_shared(file.rel_path, preset.id))
+        .filter(|file| {
+            let path = models_dir.join(file.rel_path);
+            path.exists() || part_path(&path).exists()
+        })
+        .collect()
+}
+
+fn file_size(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+        + std::fs::metadata(part_path(path))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+}
+
+fn delete_preset_files(models_dir: &Path, preset: &'static ModelPreset) -> anyhow::Result<u64> {
+    let mut freed = 0;
+    let mut errors = Vec::new();
+
+    for file in deletable_files(preset, models_dir) {
+        let path = models_dir.join(file.rel_path);
+        for candidate in [path.clone(), part_path(&path)] {
+            let size = std::fs::metadata(&candidate)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            match std::fs::remove_file(&candidate) {
+                Ok(()) => freed += size,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => errors.push(format!("{}: {error}", candidate.display())),
+            }
+        }
+    }
+
+    if let Some(first) = errors.first() {
+        anyhow::bail!("{first}");
+    }
+    Ok(freed)
+}
+
+fn confirm_delete_model(
+    ui: &Rc<Ui>,
+    preset: &'static ModelPreset,
+    parent: &adw::PreferencesDialog,
+    refresh: Rc<dyn Fn()>,
+) {
+    if ui.generating.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("Cannot delete models while generating."));
+        return;
+    }
+
+    let files = deletable_files(preset, &ui.models_dir);
+    if files.is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("No deletable files for this model."));
+        return;
+    }
+
+    let bytes: u64 = files
+        .iter()
+        .map(|file| file_size(&ui.models_dir.join(file.rel_path)))
+        .sum();
+    let shared = preset
+        .files
+        .iter()
+        .filter(|file| file_is_shared(file.rel_path, preset.id))
+        .filter(|file| ui.models_dir.join(file.rel_path).exists())
+        .count();
+
+    let mut body = format!(
+        "This permanently removes {} file(s) ({}) from disk.",
+        files.len(),
+        format_bytes(bytes)
+    );
+    if shared > 0 {
+        body.push_str(&format!(
+            " {shared} shared file(s) used by other presets will be kept."
+        ));
+    }
+
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Delete {}?", preset.label))
+        .body(body)
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    {
+        let ui = ui.clone();
+        let refresh = refresh.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "delete" {
+                return;
+            }
+            let result = delete_preset_files(&ui.models_dir, preset);
+            if active_preset(&ui).id == preset.id {
+                ui.backend.unload();
+            }
+            refresh();
+            refresh_model(&ui);
+            match result {
+                Ok(freed) => ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Deleted {} file(s) · {}.",
+                    files.len(),
+                    format_bytes(freed)
+                ))),
+                Err(error) => ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Could not delete all files: {error}"
+                ))),
+            }
+        });
+    }
+
+    dialog.present(Some(parent));
 }
 
 fn page_toolbar(content: &impl IsA<gtk::Widget>) -> adw::ToolbarView {
@@ -553,5 +713,39 @@ fn start_download(
             refresh();
             refresh_model(&ui);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn shared_files_are_not_deleted() {
+        assert!(file_is_shared(
+            "vae/flux2-vae.safetensors",
+            "flux2-klein-4b"
+        ));
+        assert!(!file_is_shared(
+            "diffusion/flux-2-klein-4b-Q4_K_M.gguf",
+            "flux2-klein-4b"
+        ));
+
+        let dir = std::env::temp_dir().join(format!("flux-delete-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("vae")).unwrap();
+        fs::create_dir_all(dir.join("diffusion")).unwrap();
+        fs::write(dir.join("vae/flux2-vae.safetensors"), b"x").unwrap();
+        fs::write(dir.join("diffusion/flux-2-klein-4b-Q4_K_M.gguf"), b"x").unwrap();
+
+        let deletable = deletable_files(&flux_core::preset::FLUX2_KLEIN_4B, &dir);
+        assert_eq!(deletable.len(), 1);
+        assert_eq!(
+            deletable[0].rel_path,
+            "diffusion/flux-2-klein-4b-Q4_K_M.gguf"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
