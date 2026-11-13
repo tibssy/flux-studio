@@ -419,9 +419,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     dialog.present(Some(&ui.window));
 }
 
-fn file_is_shared(rel_path: &str, preset_id: &str) -> bool {
+fn file_is_shared(rel_path: &str, preset_id: &str, models_dir: &Path) -> bool {
     PRESETS.iter().any(|other| {
-        other.id != preset_id && other.files.iter().any(|file| file.rel_path == rel_path)
+        other.id != preset_id
+            && other.is_installed(models_dir)
+            && other.files.iter().any(|file| file.rel_path == rel_path)
     })
 }
 
@@ -433,7 +435,7 @@ fn deletable_files(preset: &'static ModelPreset, models_dir: &Path) -> Vec<&'sta
     preset
         .files
         .iter()
-        .filter(|file| !file_is_shared(file.rel_path, preset.id))
+        .filter(|file| !file_is_shared(file.rel_path, preset.id, models_dir))
         .filter(|file| {
             let path = models_dir.join(file.rel_path);
             path.exists() || part_path(&path).exists()
@@ -500,7 +502,7 @@ fn confirm_delete_model(
     let shared = preset
         .files
         .iter()
-        .filter(|file| file_is_shared(file.rel_path, preset.id))
+        .filter(|file| file_is_shared(file.rel_path, preset.id, &ui.models_dir))
         .filter(|file| ui.models_dir.join(file.rel_path).exists())
         .count();
 
@@ -721,29 +723,37 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn shared_files_are_not_deleted() {
-        assert!(file_is_shared(
-            "vae/flux2-vae.safetensors",
-            "flux2-klein-4b"
-        ));
-        assert!(!file_is_shared(
-            "diffusion/flux-2-klein-4b-Q4_K_M.gguf",
-            "flux2-klein-4b"
-        ));
+    fn install(preset: &ModelPreset, dir: &Path) {
+        for file in preset.files {
+            let path = dir.join(file.rel_path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"x").unwrap();
+        }
+    }
 
+    #[test]
+    fn shared_files_are_kept_only_for_installed_presets() {
         let dir = std::env::temp_dir().join(format!("flux-delete-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("vae")).unwrap();
-        fs::create_dir_all(dir.join("diffusion")).unwrap();
-        fs::write(dir.join("vae/flux2-vae.safetensors"), b"x").unwrap();
-        fs::write(dir.join("diffusion/flux-2-klein-4b-Q4_K_M.gguf"), b"x").unwrap();
+        fs::create_dir_all(&dir).unwrap();
 
-        let deletable = deletable_files(&flux_core::preset::FLUX2_KLEIN_4B, &dir);
-        assert_eq!(deletable.len(), 1);
-        assert_eq!(
-            deletable[0].rel_path,
-            "diffusion/flux-2-klein-4b-Q4_K_M.gguf"
+        let klein = &flux_core::preset::FLUX2_KLEIN_4B;
+        let flux3 = &flux_core::preset::FLUX3_KLEIN;
+
+        install(klein, &dir);
+        // FLUX.3 is not installed, so only FLUX.2's own files are non-shared;
+        // the VAE becomes deletable along with them.
+        assert_eq!(deletable_files(klein, &dir).len(), klein.files.len());
+
+        install(flux3, &dir);
+        // Both presets are installed: the VAE is shared and must be kept.
+        assert!(file_is_shared("vae/flux2-vae.safetensors", klein.id, &dir));
+        let deletable = deletable_files(klein, &dir);
+        assert_eq!(deletable.len(), 2);
+        assert!(
+            deletable
+                .iter()
+                .all(|file| file.rel_path != "vae/flux2-vae.safetensors")
         );
 
         let _ = fs::remove_dir_all(&dir);
