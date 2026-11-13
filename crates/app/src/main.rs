@@ -1104,7 +1104,7 @@ fn cancel_auto_hide(ui: &Rc<Ui>) {
 }
 
 fn schedule_auto_hide(ui: &Rc<Ui>) {
-    if !ui.split.shows_sidebar() || ui.generating.get() {
+    if !ui.config.borrow().sidebar_auto_hide || !ui.split.shows_sidebar() || ui.generating.get() {
         return;
     }
     cancel_auto_hide(ui);
@@ -1112,7 +1112,8 @@ fn schedule_auto_hide(ui: &Rc<Ui>) {
     let source = glib::timeout_add_seconds_local(5, move || {
         let ui = &callback_ui;
         *ui.auto_hide_source.borrow_mut() = None;
-        if !ui.split.shows_sidebar()
+        if !ui.config.borrow().sidebar_auto_hide
+            || !ui.split.shows_sidebar()
             || ui.generating.get()
             || ui.pointer_in_sidebar.get()
             || !ui.window.is_active()
@@ -1131,6 +1132,16 @@ fn schedule_auto_hide(ui: &Rc<Ui>) {
         glib::ControlFlow::Break
     });
     *ui.auto_hide_source.borrow_mut() = Some(source);
+}
+
+pub(crate) fn refresh_auto_hide(ui: &Rc<Ui>) {
+    if !ui.config.borrow().sidebar_auto_hide {
+        cancel_auto_hide(ui);
+        return;
+    }
+    if ui.sidebar_focused.get() && !ui.pointer_in_sidebar.get() {
+        schedule_auto_hide(ui);
+    }
 }
 
 fn setup_auto_hide(ui: &Rc<Ui>) {

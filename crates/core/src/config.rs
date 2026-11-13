@@ -21,6 +21,8 @@ pub struct Config {
     pub style_id: String,
     /// Whether the left sidebar is shown.
     pub sidebar_visible: bool,
+    /// Whether the sidebar hides itself after focus and pointer leave.
+    pub sidebar_auto_hide: bool,
     /// Optional override for the `sd-server` binary.
     pub sd_server: Option<PathBuf>,
     /// Optional override for the `llama-cli` binary used to improve prompts.
@@ -43,6 +45,7 @@ impl Default for Config {
             active_preset: preset.id.to_string(),
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
+            sidebar_auto_hide: true,
             sd_server: None,
             prompt_helper_cli: None,
             prompt_helper_model: None,
@@ -87,6 +90,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.style_id, "none");
         assert!(config.sidebar_visible);
+        assert!(config.sidebar_auto_hide);
         assert!(config.sd_server.is_none());
         assert!(config.prompt_helper_cli.is_none());
         assert!(config.prompt_helper_model.is_none());

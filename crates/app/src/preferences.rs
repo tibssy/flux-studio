@@ -118,6 +118,29 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     }
     performance_group.add(&offload_row);
     general.add(&performance_group);
+
+    let interface_group = adw::PreferencesGroup::builder().title("Interface").build();
+    let auto_hide_row = adw::SwitchRow::builder()
+        .title("Auto-hide sidebar")
+        .subtitle("Hide it 5 seconds after focus and the pointer leave")
+        .build();
+    auto_hide_row.set_active(ui.config.borrow().sidebar_auto_hide);
+    {
+        let ui = ui.clone();
+        auto_hide_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            {
+                let mut config = ui.config.borrow_mut();
+                if config.sidebar_auto_hide != active {
+                    config.sidebar_auto_hide = active;
+                    let _ = config.save();
+                }
+            }
+            crate::refresh_auto_hide(&ui);
+        });
+    }
+    interface_group.add(&auto_hide_row);
+    general.add(&interface_group);
     dialog.add(&general);
 
     let models_page = adw::PreferencesPage::builder()

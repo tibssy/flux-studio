@@ -95,11 +95,14 @@ current image the edit reference. The selection button crops a region of the
 image with an animated zoom, uses the crop as the new reference, and opens the
 composer; undo plays the same zoom in reverse. The sidebar
 hides itself after 5 seconds when neither the keyboard focus nor the pointer is
-inside it; `Ctrl+B` brings it back.
+inside it; `Ctrl+B` brings it back. Turn this off in **Preferences → Interface →
+Auto-hide sidebar**.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
-"cinematic film still, dramatic lighting, shallow depth of field, 35mm". The
-selected style is stored with each history entry.
+"cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in
+options include cinematic, dynamic, photographic, anime, Disney/Pixar, 2D/3D
+design, vector, sketch, watercolor, oil painting, comic book, cyberpunk, fantasy,
+minimalist and pixel art. The selected style is stored with each history entry.
 
 Prompt improvement reuses the active preset's own text encoder via
 [llama.cpp](https://github.com/ggml-org/llama.cpp): it runs `llama-cli` with the

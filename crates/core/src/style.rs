@@ -51,6 +51,58 @@ pub const STYLES: &[StylePreset] = &[
         label: "Anime",
         suffix: Some("anime key visual, cel shading, detailed line art"),
     },
+    StylePreset {
+        id: "disney-pixar",
+        label: "Disney/Pixar",
+        suffix: Some(
+            "Disney Pixar style 3D animation, expressive characters, soft global illumination, vibrant colors",
+        ),
+    },
+    StylePreset {
+        id: "sketch",
+        label: "Sketch",
+        suffix: Some("pencil sketch, hand-drawn, cross-hatching, graphite on paper, monochrome"),
+    },
+    StylePreset {
+        id: "vector",
+        label: "Vector graphic",
+        suffix: Some("flat vector graphic, clean geometric shapes, solid colors, sharp edges"),
+    },
+    StylePreset {
+        id: "watercolor",
+        label: "Watercolor",
+        suffix: Some("watercolor painting, soft washes, paper texture, loose brushstrokes"),
+    },
+    StylePreset {
+        id: "oil-painting",
+        label: "Oil painting",
+        suffix: Some("oil painting, impasto, rich brushwork, canvas texture"),
+    },
+    StylePreset {
+        id: "comic",
+        label: "Comic book",
+        suffix: Some("comic book art, bold ink lines, halftone shading, dynamic composition"),
+    },
+    StylePreset {
+        id: "cyberpunk",
+        label: "Cyberpunk",
+        suffix: Some("cyberpunk, neon lights, futuristic city, high contrast, cinematic"),
+    },
+    StylePreset {
+        id: "fantasy",
+        label: "Fantasy art",
+        suffix: Some("fantasy concept art, epic scale, detailed environment, dramatic lighting"),
+    },
+    StylePreset {
+        id: "minimalist",
+        label: "Minimalist",
+        suffix: Some("minimalist, clean composition, negative space, simple shapes"),
+    },
+    StylePreset {
+        id: "pixel-art",
+        label: "Pixel art",
+        suffix: Some("pixel art, 16-bit, limited palette, crisp pixels"),
+    },
 ];
 
 pub fn style(id: &str) -> Option<&'static StylePreset> {
