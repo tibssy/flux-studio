@@ -8,6 +8,18 @@ use gtk::glib;
 
 use crate::{Ui, refresh_model};
 
+const REPO_URL: &str = "https://github.com/tibssy/flux-studio";
+const ISSUES_URL: &str = "https://github.com/tibssy/flux-studio/issues";
+const LICENSE_URL: &str = "https://github.com/tibssy/flux-studio/blob/main/LICENSE";
+const FLUX2_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B";
+const FLUX3_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/flux-3-image-klein";
+const QWEN3_URL: &str = "https://huggingface.co/Qwen/Qwen3-4B";
+const QWEN3_VL_URL: &str = "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct";
+const SDCPP_URL: &str = "https://github.com/leejet/stable-diffusion.cpp";
+const LLAMA_CPP_URL: &str = "https://github.com/ggml-org/llama.cpp";
+const FLUX2_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF";
+const FLUX3_GGUF_URL: &str = "https://huggingface.co/leejet/flux-3-image-klein-GGUF";
+
 struct PresetRow {
     preset: &'static ModelPreset,
     row: adw::ActionRow,
@@ -263,19 +275,124 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .subtitle("stable-diffusion.cpp · CUDA")
             .build(),
     );
-    about_group.add(
-        &adw::ActionRow::builder()
-            .title("License")
-            .subtitle("GPL-3.0-or-later")
-            .build(),
-    );
     about.add(&about_group);
+
+    let project_group = adw::PreferencesGroup::builder().title("Project").build();
+    project_group.add(&link_row(
+        "Website",
+        "github.com/tibssy/flux-studio",
+        REPO_URL,
+    ));
+    project_group.add(&link_row(
+        "Report an Issue",
+        "github.com/tibssy/flux-studio/issues",
+        ISSUES_URL,
+    ));
+    about.add(&project_group);
+
+    let credits_group = adw::PreferencesGroup::builder()
+        .title("Credits")
+        .description("Models and tools that make this app possible.")
+        .build();
+    credits_group.add(&link_row(
+        "FLUX.2 klein 4B",
+        "Black Forest Labs · Apache-2.0",
+        FLUX2_KLEIN_URL,
+    ));
+    credits_group.add(&link_row(
+        "FLUX.3 Image klein",
+        "Black Forest Labs",
+        FLUX3_KLEIN_URL,
+    ));
+    credits_group.add(&link_row(
+        "Qwen3-4B text encoder",
+        "Alibaba Qwen · Apache-2.0",
+        QWEN3_URL,
+    ));
+    credits_group.add(&link_row(
+        "Qwen3-VL-4B-Instruct text encoder",
+        "Alibaba Qwen · Apache-2.0",
+        QWEN3_VL_URL,
+    ));
+    credits_group.add(&link_row(
+        "stable-diffusion.cpp",
+        "leejet and contributors · MIT",
+        SDCPP_URL,
+    ));
+    credits_group.add(&link_row(
+        "llama.cpp prompt helper",
+        "ggml-org and contributors · MIT",
+        LLAMA_CPP_URL,
+    ));
+    credits_group.add(&link_row(
+        "FLUX.2 GGUF quantization",
+        "unsloth · Apache-2.0",
+        FLUX2_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
+        "FLUX.3 GGUF quantization",
+        "leejet · follows the FLUX.3 license",
+        FLUX3_GGUF_URL,
+    ));
+    about.add(&credits_group);
+
+    let legal_group = adw::PreferencesGroup::builder()
+        .title("Legal")
+        .description(
+            "Model weights are downloaded separately and remain under their authors' licenses.",
+        )
+        .build();
+    legal_group.add(&link_row("Flux Studio", "GPL-3.0-or-later", LICENSE_URL));
+    legal_group.add(&link_row(
+        "FLUX.2 klein 4B weights",
+        "Apache-2.0",
+        FLUX2_KLEIN_URL,
+    ));
+    legal_group.add(&link_row(
+        "FLUX.3 Image klein weights",
+        "Black Forest Labs license — see model card",
+        FLUX3_KLEIN_URL,
+    ));
+    legal_group.add(&link_row(
+        "Qwen3 and Qwen3-VL weights",
+        "Apache-2.0",
+        QWEN3_URL,
+    ));
+    legal_group.add(&link_row("stable-diffusion.cpp", "MIT", SDCPP_URL));
+    legal_group.add(&link_row("llama.cpp", "MIT", LLAMA_CPP_URL));
+    about.add(&legal_group);
     dialog.add(&about);
 
     if focus_models {
         dialog.set_visible_page(&models_page);
     }
     dialog.present(Some(&ui.window));
+}
+
+fn link_row(title: &str, subtitle: &str, uri: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .build();
+    row.set_activatable(true);
+    row.add_suffix(&gtk::Image::from_icon_name("adw-external-link-symbolic"));
+    let target = uri.to_string();
+    row.connect_activated(move |_| open_uri(&target));
+    row
+}
+
+fn open_uri(uri: &str) {
+    let launcher = gtk::UriLauncher::new(uri);
+    let target = uri.to_string();
+    launcher.launch(
+        gtk::Window::NONE,
+        gtk::gio::Cancellable::NONE,
+        move |result| {
+            if let Err(error) = result {
+                tracing::warn!(%error, %target, "failed to open link");
+            }
+        },
+    );
 }
 
 fn start_download(

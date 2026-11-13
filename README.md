@@ -31,7 +31,8 @@ Milestone 3 (packaged desktop app):
   with undo
 - **image actions** over the canvas: edit, crop-to-reference, and undo
 - the composer slides away during generation and returns via Edit/New
-- **preferences dialog**: output folder, CPU offload, models folder
+- **preferences dialog**: output folder, CPU offload, models folder, auto-hide
+- **About page** with repository/issue links, model credits and license details
 - **model downloader** with resume, progress and per-preset install status
 - first run opens the Models page when the active preset is missing
 - PKGBUILD, `.desktop` entry and scalable icon
