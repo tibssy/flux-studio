@@ -117,7 +117,7 @@ without leaving the app.
 | Edit the image | pencil button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Upscale from the keyboard | `Ctrl+U` |
-| Older/newer image | scroll over the canvas, use the up/down arrows, or `Ctrl+Up` / `Ctrl+Down` |
+| Older/newer image | scroll/arrow up for newer, down for older, or `Ctrl+Up` / `Ctrl+Down` |
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |

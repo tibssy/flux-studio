@@ -84,13 +84,13 @@ pub(crate) fn build() -> MainView {
         .build();
     let nav_up_button = gtk::Button::builder()
         .icon_name("go-up-symbolic")
-        .tooltip_text("Older image (scroll up)")
+        .tooltip_text("Newer image (scroll up)")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
     let nav_down_button = gtk::Button::builder()
         .icon_name("go-down-symbolic")
-        .tooltip_text("Newer image (scroll down)")
+        .tooltip_text("Older image (scroll down)")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();

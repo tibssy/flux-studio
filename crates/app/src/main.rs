@@ -529,12 +529,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     {
         let ui = ui.clone();
         let button = ui.nav_up_button.clone();
-        button.connect_clicked(move |_| navigate_history(&ui, 1));
+        button.connect_clicked(move |_| navigate_history(&ui, -1));
     }
     {
         let ui = ui.clone();
         let button = ui.nav_down_button.clone();
-        button.connect_clicked(move |_| navigate_history(&ui, -1));
+        button.connect_clicked(move |_| navigate_history(&ui, 1));
     }
     {
         let ui = ui.clone();
@@ -553,9 +553,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             }
             ui.last_scroll.set(Some(Instant::now()));
             if dy < 0.0 {
-                navigate_history(&ui, 1);
-            } else {
                 navigate_history(&ui, -1);
+            } else {
+                navigate_history(&ui, 1);
             }
             glib::Propagation::Stop
         });
@@ -614,11 +614,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                     glib::Propagation::Stop
                 }
                 gdk::Key::Up => {
-                    navigate_history(&ui, 1);
+                    navigate_history(&ui, -1);
                     glib::Propagation::Stop
                 }
                 gdk::Key::Down => {
-                    navigate_history(&ui, -1);
+                    navigate_history(&ui, 1);
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
