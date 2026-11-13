@@ -92,7 +92,8 @@ leave edit mode and generate from text alone; the prompt is kept.
 After a generation the prompt field slides away. Use the pencil button on the
 image (or `New`, or a history entry) to bring it back; the pencil makes the
 current image the edit reference. The selection button crops a region of the
-image, uses the crop as the new reference, and opens the composer. The sidebar
+image with an animated zoom, uses the crop as the new reference, and opens the
+composer; undo plays the same zoom in reverse. The sidebar
 hides itself after 5 seconds when neither the keyboard focus nor the pointer is
 inside it; `Ctrl+B` brings it back.
 

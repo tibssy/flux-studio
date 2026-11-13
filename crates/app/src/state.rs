@@ -31,32 +31,43 @@ impl AppState {
     }
 }
 
+/// A state snapshot plus the region that was cropped out of it.
+#[derive(Debug, Clone)]
+pub(crate) struct UndoEntry {
+    pub state: AppState,
+    /// Selection in the previous image's pixel coordinates.
+    pub selection: (f64, f64, f64, f64),
+}
+
 /// A small LIFO history for crop/zoom steps.
 #[derive(Debug, Default)]
 pub(crate) struct UndoStack {
-    states: Vec<AppState>,
+    entries: Vec<UndoEntry>,
 }
 
 impl UndoStack {
     const LIMIT: usize = 20;
 
-    pub fn push(&mut self, state: &AppState) {
-        self.states.push(state.clone());
-        if self.states.len() > Self::LIMIT {
-            self.states.remove(0);
+    pub fn push(&mut self, state: &AppState, selection: (f64, f64, f64, f64)) {
+        self.entries.push(UndoEntry {
+            state: state.clone(),
+            selection,
+        });
+        if self.entries.len() > Self::LIMIT {
+            self.entries.remove(0);
         }
     }
 
-    pub fn undo(&mut self) -> Option<AppState> {
-        self.states.pop()
+    pub fn undo(&mut self) -> Option<UndoEntry> {
+        self.entries.pop()
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.states.is_empty()
+        !self.entries.is_empty()
     }
 
     pub fn clear(&mut self) {
-        self.states.clear();
+        self.entries.clear();
     }
 }
 
@@ -100,19 +111,24 @@ mod tests {
             display: Some(PathBuf::from("/tmp/b.png")),
             reference: Some(PathBuf::from("/tmp/b.png")),
         };
-        stack.push(&first);
-        stack.push(&second);
+        stack.push(&first, (1.0, 2.0, 3.0, 4.0));
+        stack.push(&second, (5.0, 6.0, 7.0, 8.0));
         assert!(stack.can_undo());
-        assert_eq!(stack.undo(), Some(second));
-        assert_eq!(stack.undo(), Some(first));
+
+        let entry = stack.undo().unwrap();
+        assert_eq!(entry.state, second);
+        assert_eq!(entry.selection, (5.0, 6.0, 7.0, 8.0));
+        let entry = stack.undo().unwrap();
+        assert_eq!(entry.state, first);
+        assert_eq!(entry.selection, (1.0, 2.0, 3.0, 4.0));
         assert!(!stack.can_undo());
-        assert_eq!(stack.undo(), None);
+        assert!(stack.undo().is_none());
     }
 
     #[test]
     fn undo_stack_clears() {
         let mut stack = UndoStack::default();
-        stack.push(&AppState::default());
+        stack.push(&AppState::default(), (0.0, 0.0, 1.0, 1.0));
         stack.clear();
         assert!(!stack.can_undo());
     }

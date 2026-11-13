@@ -28,8 +28,8 @@ type CropRect = (f64, f64, f64, f64);
 
 struct ZoomState {
     surface: gtk::cairo::ImageSurface,
-    image_size: (u32, u32),
-    selection: (u32, u32, u32, u32),
+    start: CropRect,
+    end: CropRect,
     progress: f64,
 }
 
@@ -756,12 +756,42 @@ fn undo_crop(ui: &Rc<Ui>) {
     }
     cancel_zoom(ui);
     // End the mutable borrow before update_image_view() re-borrows the stack.
-    let previous = ui.undo.borrow_mut().undo();
-    if let Some(previous) = previous {
+    let entry = ui.undo.borrow_mut().undo();
+    let Some(entry) = entry else {
+        return;
+    };
+
+    let previous = entry.state;
+    let Some(path) = previous.display.clone() else {
         *ui.state.borrow_mut() = previous;
         update_image_view(ui);
-        ui.status.set_text("Crop undone");
+        return;
+    };
+
+    *ui.state.borrow_mut() = previous;
+    update_image_view(ui);
+    ui.status.set_text("Crop undone");
+
+    match load_zoom_surface(&path) {
+        Ok((surface, size)) => start_zoom(
+            ui,
+            surface,
+            entry.selection,
+            (0.0, 0.0, size.0 as f64, size.1 as f64),
+            false,
+        ),
+        Err(error) => {
+            // The restored image is already visible; only the effect is lost.
+            tracing::warn!(%error, "failed to load the undo zoom image");
+        }
     }
+}
+
+fn load_zoom_surface(path: &Path) -> anyhow::Result<(gtk::cairo::ImageSurface, (u32, u32))> {
+    let image = image::open(path)?;
+    let size = (image.width(), image.height());
+    let surface = image_surface(&image)?;
+    Ok((surface, size))
 }
 
 fn setup_crop_overlay(ui: &Rc<Ui>) {
@@ -853,10 +883,18 @@ fn apply_crop(ui: &Rc<Ui>, selection: CropRect) {
     match result {
         Ok((destination, surface)) => {
             let previous = ui.state.borrow().clone();
-            ui.undo.borrow_mut().push(&previous);
+            ui.undo
+                .borrow_mut()
+                .push(&previous, (x as f64, y as f64, width as f64, height as f64));
             ui.state.borrow_mut().load(destination);
             update_image_view(ui);
-            start_zoom(ui, surface, (image_w, image_h), (x, y, width, height));
+            start_zoom(
+                ui,
+                surface,
+                (0.0, 0.0, image_w as f64, image_h as f64),
+                (x as f64, y as f64, width as f64, height as f64),
+                true,
+            );
             ui.status
                 .set_text(&format!("Cropped to {width} × {height}"));
             ui.toast
@@ -946,19 +984,13 @@ fn setup_zoom_overlay(ui: &Rc<Ui>) {
                 return;
             };
             let area = (width as f64, height as f64);
-            let image = (state.image_size.0 as f64, state.image_size.1 as f64);
-            let selection = (
-                state.selection.0 as f64,
-                state.selection.1 as f64,
-                state.selection.2 as f64,
-                state.selection.3 as f64,
-            );
-            let source_start = (0.0, 0.0, image.0, image.1);
-            let full = contain_rect(area, image);
-            let target = contain_rect(area, (selection.2, selection.3));
             let progress = ease(state.progress);
-            let source = lerp_rect(source_start, selection, progress);
-            let destination = lerp_rect(full, target, progress);
+            let source = lerp_rect(state.start, state.end, progress);
+            let destination = lerp_rect(
+                contain_rect(area, (state.start.2, state.start.3)),
+                contain_rect(area, (state.end.2, state.end.3)),
+                progress,
+            );
             if source.2 <= 0.0 || source.3 <= 0.0 || destination.2 <= 0.0 || destination.3 <= 0.0 {
                 return;
             }
@@ -1007,16 +1039,17 @@ fn ease(progress: f64) -> f64 {
 fn start_zoom(
     ui: &Rc<Ui>,
     surface: gtk::cairo::ImageSurface,
-    image_size: (u32, u32),
-    selection: (u32, u32, u32, u32),
+    start: CropRect,
+    end: CropRect,
+    reveal_composer: bool,
 ) {
     cancel_zoom(ui);
     ui.zooming.set(true);
     ui.stack.set_opacity(0.0);
     *ui.zoom_state.borrow_mut() = Some(ZoomState {
         surface,
-        image_size,
-        selection,
+        start,
+        end,
         progress: 0.0,
     });
     ui.zoom_overlay.set_visible(true);
@@ -1040,7 +1073,9 @@ fn start_zoom(
             ui_callback.zooming.set(false);
             *ui_callback.zoom_source.borrow_mut() = None;
             update_image_actions(&ui_callback);
-            show_composer(&ui_callback, true);
+            if reveal_composer {
+                show_composer(&ui_callback, true);
+            }
             glib::ControlFlow::Break
         } else {
             glib::ControlFlow::Continue
