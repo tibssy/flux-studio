@@ -23,6 +23,7 @@ use history::{Generation, History, NewGeneration};
 use state::{AppState, UndoStack};
 
 const HISTORY_LIMIT: usize = 100;
+pub(crate) const AUTO_HIDE_SECONDS: u32 = 3;
 
 type CropRect = (f64, f64, f64, f64);
 
@@ -1109,7 +1110,7 @@ fn schedule_auto_hide(ui: &Rc<Ui>) {
     }
     cancel_auto_hide(ui);
     let callback_ui = ui.clone();
-    let source = glib::timeout_add_seconds_local(5, move || {
+    let source = glib::timeout_add_seconds_local(AUTO_HIDE_SECONDS, move || {
         let ui = &callback_ui;
         *ui.auto_hide_source.borrow_mut() = None;
         if !ui.config.borrow().sidebar_auto_hide

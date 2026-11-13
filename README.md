@@ -94,7 +94,7 @@ image (or `New`, or a history entry) to bring it back; the pencil makes the
 current image the edit reference. The selection button crops a region of the
 image with an animated zoom, uses the crop as the new reference, and opens the
 composer; undo plays the same zoom in reverse. The sidebar
-hides itself after 5 seconds when neither the keyboard focus nor the pointer is
+hides itself after 3 seconds when neither the keyboard focus nor the pointer is
 inside it; `Ctrl+B` brings it back. Turn this off in **Preferences → Interface →
 Auto-hide sidebar**.
 
