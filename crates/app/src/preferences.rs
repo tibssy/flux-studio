@@ -290,6 +290,10 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     ));
     about.add(&project_group);
 
+    let credits_page = adw::PreferencesPage::builder()
+        .title("Credits")
+        .icon_name("avatar-default-symbolic")
+        .build();
     let credits_group = adw::PreferencesGroup::builder()
         .title("Credits")
         .description("Models and tools that make this app possible.")
@@ -334,8 +338,13 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "leejet · follows the FLUX.3 license",
         FLUX3_GGUF_URL,
     ));
-    about.add(&credits_group);
+    credits_page.add(&credits_group);
+    let credits_navigation = adw::NavigationPage::new(&credits_page, "Credits");
 
+    let legal_page = adw::PreferencesPage::builder()
+        .title("Legal")
+        .icon_name("help-about-symbolic")
+        .build();
     let legal_group = adw::PreferencesGroup::builder()
         .title("Legal")
         .description(
@@ -360,13 +369,53 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     ));
     legal_group.add(&link_row("stable-diffusion.cpp", "MIT", SDCPP_URL));
     legal_group.add(&link_row("llama.cpp", "MIT", LLAMA_CPP_URL));
-    about.add(&legal_group);
+    legal_page.add(&legal_group);
+    let legal_navigation = adw::NavigationPage::new(&legal_page, "Legal");
+
+    let more_group = adw::PreferencesGroup::builder().title("Details").build();
+    more_group.add(&navigation_row(
+        "Credits",
+        "Model and tool authors",
+        &dialog,
+        &credits_navigation,
+    ));
+    more_group.add(&navigation_row(
+        "Legal",
+        "Licenses and attribution",
+        &dialog,
+        &legal_navigation,
+    ));
+    about.add(&more_group);
     dialog.add(&about);
 
     if focus_models {
         dialog.set_visible_page(&models_page);
     }
     dialog.present(Some(&ui.window));
+}
+
+fn navigation_row(
+    title: &str,
+    subtitle: &str,
+    dialog: &adw::PreferencesDialog,
+    target: &adw::NavigationPage,
+) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .build();
+    row.set_activatable(true);
+    row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    // Weak reference: the row is a descendant of the dialog, so a strong
+    // reference here would form a cycle and leak the dialog after closing.
+    let dialog = dialog.downgrade();
+    let target = target.clone();
+    row.connect_activated(move |_| {
+        if let Some(dialog) = dialog.upgrade() {
+            dialog.push_subpage(&target);
+        }
+    });
+    row
 }
 
 fn link_row(title: &str, subtitle: &str, uri: &str) -> adw::ActionRow {
