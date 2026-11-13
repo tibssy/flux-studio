@@ -75,7 +75,7 @@ backend unless you are on a card/driver where Vulkan wins.
 | Cancel | **Cancel** (cancels the running server job) |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
-| Crop to a reference | selection button, drag a rectangle, release |
+| Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
 | Edit an image | pick a reference with the image button, or click a history row |

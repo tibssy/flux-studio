@@ -16,6 +16,7 @@ pub(crate) struct MainView {
     pub cancel: gtk::Button,
     pub status: gtk::Label,
     pub crop_overlay: gtk::DrawingArea,
+    pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
@@ -49,6 +50,12 @@ pub(crate) fn build() -> MainView {
         .vexpand(true)
         .focusable(true)
         .visible(false)
+        .build();
+    let zoom_overlay = gtk::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .can_target(false)
         .build();
 
     let edit_button = gtk::Button::builder()
@@ -88,6 +95,7 @@ pub(crate) fn build() -> MainView {
         .margin_end(12)
         .build();
     image_overlay.add_overlay(&crop_overlay);
+    image_overlay.add_overlay(&zoom_overlay);
     image_overlay.add_overlay(&image_actions);
 
     let reference_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -224,6 +232,7 @@ pub(crate) fn build() -> MainView {
         cancel,
         status,
         crop_overlay,
+        zoom_overlay,
         edit_button,
         crop_button,
         undo_button,

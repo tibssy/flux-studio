@@ -7,7 +7,9 @@ use flux_core::style::STYLES;
 use gtk::{gdk, glib};
 
 use crate::history::Generation;
-use crate::{Ui, refresh_model, set_size, show_composer, thumb_path, update_image_view};
+use crate::{
+    Ui, cancel_zoom, refresh_model, set_size, show_composer, thumb_path, update_image_view,
+};
 
 pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     let row = gtk::ListBoxRow::new();
@@ -118,6 +120,7 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     if ui.generating.get() {
         return;
     }
+    cancel_zoom(ui);
 
     ui.prompt.buffer().set_text(&entry.prompt);
     ui.seed_entry.set_text(&entry.seed);

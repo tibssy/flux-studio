@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use flux_backend_sdcpp::{SdServer, SdServerConfig};
@@ -25,6 +25,13 @@ use state::{AppState, UndoStack};
 const HISTORY_LIMIT: usize = 100;
 
 type CropRect = (f64, f64, f64, f64);
+
+struct ZoomState {
+    surface: gtk::cairo::ImageSurface,
+    image_size: (u32, u32),
+    selection: (u32, u32, u32, u32),
+    progress: f64,
+}
 
 fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
@@ -57,6 +64,10 @@ pub(crate) struct Ui {
     pub status: gtk::Label,
     pub composer: gtk::Revealer,
     pub crop_overlay: gtk::DrawingArea,
+    pub zoom_overlay: gtk::DrawingArea,
+    pub zoom_state: Rc<RefCell<Option<ZoomState>>>,
+    pub zoom_source: RefCell<Option<glib::SourceId>>,
+    pub zooming: Cell<bool>,
     pub edit_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
@@ -234,6 +245,7 @@ fn build_ui(app: &adw::Application) {
 
     let worker = GenerationWorker::new(backend.clone());
     let crop_rect = Rc::new(RefCell::new(None));
+    let zoom_state = Rc::new(RefCell::new(None));
 
     let ui = Rc::new(Ui {
         window,
@@ -251,6 +263,10 @@ fn build_ui(app: &adw::Application) {
         status: view.status,
         composer: view.composer,
         crop_overlay: view.crop_overlay,
+        zoom_overlay: view.zoom_overlay,
+        zoom_state,
+        zoom_source: RefCell::new(None),
+        zooming: Cell::new(false),
         edit_button: view.edit_button,
         crop_button: view.crop_button,
         undo_button: view.undo_button,
@@ -303,6 +319,7 @@ fn build_ui(app: &adw::Application) {
 
     wire_events(&ui, &preferences_button);
     setup_crop_overlay(&ui);
+    setup_zoom_overlay(&ui);
     setup_auto_hide(&ui);
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
@@ -692,14 +709,16 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let has_image = ui.state.borrow().display.is_some();
     let composing = ui.composer.reveals_child();
     let generating = ui.generating.get();
+    let zooming = ui.zooming.get();
 
     ui.edit_button
-        .set_visible(has_image && !composing && !generating);
-    ui.crop_button.set_visible(has_image && !generating);
+        .set_visible(has_image && !composing && !generating && !zooming);
+    ui.crop_button
+        .set_visible(has_image && !generating && !zooming);
     ui.undo_button
-        .set_visible(has_image && !generating && ui.undo.borrow().can_undo());
+        .set_visible(has_image && !generating && !zooming && ui.undo.borrow().can_undo());
 
-    if !has_image || generating {
+    if !has_image || generating || zooming {
         ui.crop_button.set_active(false);
     }
 }
@@ -735,7 +754,10 @@ fn undo_crop(ui: &Rc<Ui>) {
     if ui.generating.get() {
         return;
     }
-    if let Some(previous) = ui.undo.borrow_mut().undo() {
+    cancel_zoom(ui);
+    // End the mutable borrow before update_image_view() re-borrows the stack.
+    let previous = ui.undo.borrow_mut().undo();
+    if let Some(previous) = previous {
         *ui.state.borrow_mut() = previous;
         update_image_view(ui);
         ui.status.set_text("Crop undone");
@@ -817,23 +839,24 @@ fn apply_crop(ui: &Rc<Ui>, selection: CropRect) {
         return;
     };
 
-    let result = (|| -> anyhow::Result<PathBuf> {
+    let result = (|| -> anyhow::Result<(PathBuf, gtk::cairo::ImageSurface)> {
         let image = image::open(&source)?;
+        let surface = image_surface(&image)?;
         let cropped = image.crop_imm(x, y, width, height);
         let directory = paths::cache_dir().join("crops");
         std::fs::create_dir_all(&directory)?;
         let destination = directory.join(format!("crop-{}.png", now_millis()));
         cropped.save(&destination)?;
-        Ok(destination)
+        Ok((destination, surface))
     })();
 
     match result {
-        Ok(destination) => {
+        Ok((destination, surface)) => {
             let previous = ui.state.borrow().clone();
             ui.undo.borrow_mut().push(&previous);
             ui.state.borrow_mut().load(destination);
             update_image_view(ui);
-            show_composer(ui, true);
+            start_zoom(ui, surface, (image_w, image_h), (x, y, width, height));
             ui.status
                 .set_text(&format!("Cropped to {width} × {height}"));
             ui.toast
@@ -889,6 +912,154 @@ pub(crate) fn crop_rect_from_drag(
         return None;
     }
     Some((px, py, width, height))
+}
+
+fn image_surface(image: &image::DynamicImage) -> anyhow::Result<gtk::cairo::ImageSurface> {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut surface =
+        gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, width as i32, height as i32)?;
+    let stride = surface.stride() as usize;
+    {
+        let mut data = surface.data().map_err(|error| anyhow::anyhow!("{error}"))?;
+        for (index, pixel) in rgba.pixels().enumerate() {
+            let x = index % width as usize;
+            let y = index / width as usize;
+            let offset = y * stride + x * 4;
+            let alpha = pixel.0[3] as u16;
+            data[offset] = (pixel.0[2] as u16 * alpha / 255) as u8;
+            data[offset + 1] = (pixel.0[1] as u16 * alpha / 255) as u8;
+            data[offset + 2] = (pixel.0[0] as u16 * alpha / 255) as u8;
+            data[offset + 3] = pixel.0[3];
+        }
+    }
+    surface.mark_dirty();
+    Ok(surface)
+}
+
+fn setup_zoom_overlay(ui: &Rc<Ui>) {
+    let state = ui.zoom_state.clone();
+    ui.zoom_overlay
+        .set_draw_func(move |_area, cr, width, height| {
+            let state = state.borrow();
+            let Some(state) = state.as_ref() else {
+                return;
+            };
+            let area = (width as f64, height as f64);
+            let image = (state.image_size.0 as f64, state.image_size.1 as f64);
+            let selection = (
+                state.selection.0 as f64,
+                state.selection.1 as f64,
+                state.selection.2 as f64,
+                state.selection.3 as f64,
+            );
+            let source_start = (0.0, 0.0, image.0, image.1);
+            let full = contain_rect(area, image);
+            let target = contain_rect(area, (selection.2, selection.3));
+            let progress = ease(state.progress);
+            let source = lerp_rect(source_start, selection, progress);
+            let destination = lerp_rect(full, target, progress);
+            if source.2 <= 0.0 || source.3 <= 0.0 || destination.2 <= 0.0 || destination.3 <= 0.0 {
+                return;
+            }
+
+            let _ = cr.save();
+            cr.rectangle(destination.0, destination.1, destination.2, destination.3);
+            cr.clip();
+            cr.translate(destination.0, destination.1);
+            cr.scale(destination.2 / source.2, destination.3 / source.3);
+            cr.translate(-source.0, -source.1);
+            let _ = cr.set_source_surface(&state.surface, 0.0, 0.0);
+            let _ = cr.paint();
+            let _ = cr.restore();
+        });
+}
+
+fn contain_rect(area: (f64, f64), image: (f64, f64)) -> CropRect {
+    if area.0 <= 0.0 || area.1 <= 0.0 || image.0 <= 0.0 || image.1 <= 0.0 {
+        return (0.0, 0.0, area.0.max(0.0), area.1.max(0.0));
+    }
+    let scale = (area.0 / image.0).min(area.1 / image.1);
+    let width = image.0 * scale;
+    let height = image.1 * scale;
+    (
+        (area.0 - width) / 2.0,
+        (area.1 - height) / 2.0,
+        width,
+        height,
+    )
+}
+
+fn lerp_rect(start: CropRect, end: CropRect, progress: f64) -> CropRect {
+    (
+        start.0 + (end.0 - start.0) * progress,
+        start.1 + (end.1 - start.1) * progress,
+        start.2 + (end.2 - start.2) * progress,
+        start.3 + (end.3 - start.3) * progress,
+    )
+}
+
+fn ease(progress: f64) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    1.0 - (1.0 - progress).powi(3)
+}
+
+fn start_zoom(
+    ui: &Rc<Ui>,
+    surface: gtk::cairo::ImageSurface,
+    image_size: (u32, u32),
+    selection: (u32, u32, u32, u32),
+) {
+    cancel_zoom(ui);
+    ui.zooming.set(true);
+    ui.stack.set_opacity(0.0);
+    *ui.zoom_state.borrow_mut() = Some(ZoomState {
+        surface,
+        image_size,
+        selection,
+        progress: 0.0,
+    });
+    ui.zoom_overlay.set_visible(true);
+    ui.zoom_overlay.queue_draw();
+    update_image_actions(ui);
+
+    let started = Instant::now();
+    let duration = 0.30;
+    let ui_callback = ui.clone();
+    let source = glib::timeout_add_local(Duration::from_millis(16), move || {
+        let progress = (started.elapsed().as_secs_f64() / duration).min(1.0);
+        if let Some(state) = ui_callback.zoom_state.borrow_mut().as_mut() {
+            state.progress = progress;
+        }
+        ui_callback.zoom_overlay.queue_draw();
+
+        if progress >= 1.0 {
+            *ui_callback.zoom_state.borrow_mut() = None;
+            ui_callback.zoom_overlay.set_visible(false);
+            ui_callback.stack.set_opacity(1.0);
+            ui_callback.zooming.set(false);
+            *ui_callback.zoom_source.borrow_mut() = None;
+            update_image_actions(&ui_callback);
+            show_composer(&ui_callback, true);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+    *ui.zoom_source.borrow_mut() = Some(source);
+}
+
+pub(crate) fn cancel_zoom(ui: &Rc<Ui>) {
+    if let Some(source) = ui.zoom_source.borrow_mut().take() {
+        source.remove();
+    }
+    let had_state = ui.zoom_state.borrow_mut().take().is_some();
+    if had_state || ui.zooming.get() {
+        ui.zoom_overlay.set_visible(false);
+        ui.stack.set_opacity(1.0);
+        ui.zooming.set(false);
+        update_image_actions(ui);
+    }
 }
 
 fn cancel_auto_hide(ui: &Rc<Ui>) {
@@ -968,6 +1139,7 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
     if ui.generating.get() {
         return;
     }
+    cancel_zoom(ui);
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
     update_image_view(ui);
@@ -1134,7 +1306,11 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 }
 
 fn start_generation(ui: &Rc<Ui>) {
-    if ui.generating.get() || !ui.generate.is_sensitive() || !ui.composer.reveals_child() {
+    if ui.generating.get()
+        || ui.zooming.get()
+        || !ui.generate.is_sensitive()
+        || !ui.composer.reveals_child()
+    {
         return;
     }
 
@@ -1476,7 +1652,7 @@ fn slugify(prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_rect_from_drag, slugify};
+    use super::{contain_rect, crop_rect_from_drag, lerp_rect, slugify};
 
     #[test]
     fn slugifies_prompts() {
@@ -1524,6 +1700,27 @@ mod tests {
             crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (0.0, 0.0, 500.0, 250.0)),
             Some((0, 0, 500, 500))
         );
+    }
+
+    #[test]
+    fn contains_images_with_letterboxing() {
+        assert_eq!(
+            contain_rect((1000.0, 500.0), (1000.0, 1000.0)),
+            (250.0, 0.0, 500.0, 500.0)
+        );
+        assert_eq!(
+            contain_rect((500.0, 1000.0), (1000.0, 1000.0)),
+            (0.0, 250.0, 500.0, 500.0)
+        );
+    }
+
+    #[test]
+    fn interpolates_between_rects() {
+        let start = (0.0, 0.0, 100.0, 100.0);
+        let end = (50.0, 50.0, 100.0, 100.0);
+        assert_eq!(lerp_rect(start, end, 0.0), start);
+        assert_eq!(lerp_rect(start, end, 1.0), end);
+        assert_eq!(lerp_rect(start, end, 0.5), (25.0, 25.0, 100.0, 100.0));
     }
 
     #[test]
