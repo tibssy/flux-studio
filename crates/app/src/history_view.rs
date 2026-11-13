@@ -9,7 +9,8 @@ use gtk::{gdk, glib};
 
 use crate::history::Generation;
 use crate::{
-    Ui, cancel_zoom, refresh_model, set_size, show_composer, thumb_path, update_image_view,
+    Comparison, Ui, cancel_zoom, refresh_model, set_size, show_composer, thumb_path,
+    update_image_view,
 };
 
 pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
@@ -141,8 +142,25 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     cancel_zoom(ui);
 
     if entry.kind == "upscale" {
+        let after = PathBuf::from(&entry.image_path);
+        if let Some(before) = entry
+            .source_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+        {
+            *ui.comparison.borrow_mut() = Some(Comparison {
+                before,
+                after: after.clone(),
+            });
+            ui.compare_guard.set(true);
+            ui.compare_button.set_active(false);
+            ui.compare_guard.set(false);
+            ui.compare_button
+                .set_tooltip_text(Some("Show the original image"));
+        }
         ui.undo.borrow_mut().clear();
-        ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
+        ui.state.borrow_mut().load(after);
         update_image_view(ui);
         refresh_model(ui);
         show_composer(ui, true);

@@ -263,7 +263,8 @@ pub(crate) fn show(ui: &Rc<Ui>) {
         let ui = ui.clone();
         let selected_model = selected_model.clone();
         let selected_factor = selected_factor.clone();
-        upscale.connect_clicked(move |_| {
+        let trigger = upscale.clone();
+        trigger.connect_clicked(move |_| {
             let preset = &UPSCALERS[*selected_model.borrow()];
             let factor = *selected_factor.borrow();
             dialog.close();
@@ -272,6 +273,10 @@ pub(crate) fn show(ui: &Rc<Ui>) {
     }
 
     dialog.present(Some(&ui.window));
+    upscale.set_receives_default(true);
+    glib::timeout_add_local_once(std::time::Duration::from_millis(60), move || {
+        upscale.grab_focus();
+    });
 }
 
 fn format_duration(seconds: u32) -> String {

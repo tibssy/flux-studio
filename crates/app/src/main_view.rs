@@ -4,6 +4,7 @@ pub(crate) struct MainView {
     pub root: gtk::Box,
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
+    pub picture_before: gtk::Picture,
     pub reference_bar: gtk::Box,
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
@@ -19,6 +20,7 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub compare_button: gtk::ToggleButton,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
 }
@@ -36,13 +38,21 @@ pub(crate) fn build() -> MainView {
         .hexpand(true)
         .vexpand(true)
         .build();
+    let picture_before = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Contain)
+        .can_shrink(true)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
 
     let stack = gtk::Stack::builder()
         .hexpand(true)
         .vexpand(true)
         .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(350)
         .build();
     stack.add_named(&empty, Some("empty"));
+    stack.add_named(&picture_before, Some("before"));
     stack.add_named(&picture, Some("image"));
     stack.set_visible_child_name("empty");
 
@@ -71,6 +81,12 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
+    let compare_button = gtk::ToggleButton::builder()
+        .icon_name("view-reveal-symbolic")
+        .tooltip_text("Show the original image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
     let crop_button = gtk::ToggleButton::builder()
         .icon_name("edit-select-symbolic")
         .tooltip_text("Select an area to crop and use as reference")
@@ -88,6 +104,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
+    image_actions.append(&compare_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
@@ -228,6 +245,7 @@ pub(crate) fn build() -> MainView {
         root,
         stack,
         picture,
+        picture_before,
         reference_bar,
         reference_name,
         prompt,
@@ -243,6 +261,7 @@ pub(crate) fn build() -> MainView {
         zoom_overlay,
         edit_button,
         upscale_button,
+        compare_button,
         crop_button,
         undo_button,
     }

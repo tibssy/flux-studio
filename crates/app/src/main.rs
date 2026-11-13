@@ -36,6 +36,13 @@ struct ZoomState {
     progress: f64,
 }
 
+/// Original and upscaled images kept together for a before/after fade.
+#[derive(Debug, Clone)]
+pub(crate) struct Comparison {
+    pub before: PathBuf,
+    pub after: PathBuf,
+}
+
 fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -57,6 +64,7 @@ pub(crate) struct Ui {
     pub toast: adw::ToastOverlay,
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
+    pub picture_before: gtk::Picture,
     pub reference_bar: gtk::Box,
     pub reference_name: gtk::Label,
     pub prompt: gtk::TextView,
@@ -73,6 +81,7 @@ pub(crate) struct Ui {
     pub zooming: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub compare_button: gtk::ToggleButton,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
     pub reference_button: gtk::Button,
@@ -110,11 +119,12 @@ pub(crate) struct Ui {
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
     pub image_size: Cell<(u32, u32)>,
+    pub comparison: RefCell<Option<Comparison>>,
+    pub compare_guard: Cell<bool>,
     pub crop_mode: Cell<bool>,
     pub crop_rect: Rc<RefCell<Option<CropRect>>>,
     pub undo: RefCell<UndoStack>,
     pub sidebar_root: gtk::Box,
-    pub sidebar_focused: Cell<bool>,
     pub pointer_in_sidebar: Cell<bool>,
     pub auto_hiding: Cell<bool>,
     pub auto_hide_source: RefCell<Option<glib::SourceId>>,
@@ -260,6 +270,7 @@ fn build_ui(app: &adw::Application) {
         toast,
         stack: view.stack,
         picture: view.picture,
+        picture_before: view.picture_before,
         reference_bar: view.reference_bar,
         reference_name: view.reference_name,
         prompt: view.prompt,
@@ -276,6 +287,7 @@ fn build_ui(app: &adw::Application) {
         zooming: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
+        compare_button: view.compare_button,
         crop_button: view.crop_button,
         undo_button: view.undo_button,
         reference_button: view.reference_button,
@@ -313,11 +325,12 @@ fn build_ui(app: &adw::Application) {
         size_guard: Cell::new(false),
         size_cell,
         image_size: Cell::new((0, 0)),
+        comparison: RefCell::new(None),
+        compare_guard: Cell::new(false),
         crop_mode: Cell::new(false),
         crop_rect,
         undo: RefCell::new(UndoStack::default()),
         sidebar_root: side.root.clone(),
-        sidebar_focused: Cell::new(false),
         pointer_in_sidebar: Cell::new(false),
         auto_hiding: Cell::new(false),
         auto_hide_source: RefCell::new(None),
@@ -354,6 +367,8 @@ fn build_ui(app: &adw::Application) {
     if ui.models.borrow().is_empty() {
         preferences::show_preferences(&ui, true);
     }
+
+    refresh_auto_hide(&ui);
 }
 
 fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
@@ -494,8 +509,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         split.connect_show_sidebar_notify(move |split| {
             let visible = split.shows_sidebar();
             if !visible {
-                ui.sidebar_focused.set(false);
                 cancel_auto_hide(&ui);
+            } else {
+                refresh_auto_hide(&ui);
             }
             if ui.auto_hiding.get() {
                 return;
@@ -516,6 +532,23 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.upscale_button.clone();
         button.connect_clicked(move |_| upscale_dialog::show(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.compare_button.clone();
+        button.connect_toggled(move |button| {
+            if ui.compare_guard.get() || ui.comparison.borrow().is_none() {
+                return;
+            }
+            let show_before = button.is_active();
+            ui.stack
+                .set_visible_child_name(if show_before { "before" } else { "image" });
+            button.set_tooltip_text(Some(if show_before {
+                "Show the upscaled image"
+            } else {
+                "Show the original image"
+            }));
+        });
     }
     {
         let ui = ui.clone();
@@ -563,6 +596,16 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::n | gdk::Key::N => {
                     new_image(&ui);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::u | gdk::Key::U => {
+                    upscale_dialog::show(&ui);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::c | gdk::Key::C if state.contains(gdk::ModifierType::SHIFT_MASK) => {
+                    if ui.comparison.borrow().is_some() {
+                        ui.compare_button.set_active(!ui.compare_button.is_active());
+                    }
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -740,13 +783,30 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         (state.display.clone(), state.reference.clone())
     };
 
+    let comparison = ui.comparison.borrow().clone();
+    let keep_comparison = match (&comparison, &display) {
+        (Some(comparison), Some(path)) => comparison.after == *path,
+        _ => false,
+    };
+    if !keep_comparison {
+        ui.comparison.borrow_mut().take();
+        ui.compare_guard.set(true);
+        ui.compare_button.set_active(false);
+        ui.compare_guard.set(false);
+        ui.compare_button
+            .set_tooltip_text(Some("Show the original image"));
+        ui.picture_before.set_paintable(gdk::Paintable::NONE);
+    }
+
     match display {
         Some(path) => match gdk::Texture::from_filename(&path) {
             Ok(texture) => {
                 ui.image_size
                     .set((texture.width() as u32, texture.height() as u32));
                 ui.picture.set_paintable(Some(&texture));
-                ui.stack.set_visible_child_name("image");
+                if !keep_comparison || ui.stack.visible_child_name().as_deref() != Some("before") {
+                    ui.stack.set_visible_child_name("image");
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "failed to load image");
@@ -758,7 +818,22 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         None => {
             ui.image_size.set((0, 0));
             ui.picture.set_paintable(gdk::Paintable::NONE);
+            ui.picture_before.set_paintable(gdk::Paintable::NONE);
             ui.stack.set_visible_child_name("empty");
+        }
+    }
+
+    if keep_comparison && let Some(comparison) = comparison {
+        match gdk::Texture::from_filename(&comparison.before) {
+            Ok(texture) => ui.picture_before.set_paintable(Some(&texture)),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %comparison.before.display(),
+                    "failed to load the original for comparison"
+                );
+                ui.picture_before.set_paintable(gdk::Paintable::NONE);
+            }
         }
     }
 
@@ -786,6 +861,7 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
 pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
     ui.composer.set_reveal_child(show);
     update_image_actions(ui);
+    refresh_auto_hide(ui);
     if show {
         ui.prompt.grab_focus();
     }
@@ -797,7 +873,10 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let generating = ui.generating.get();
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
+    let comparing = ui.comparison.borrow().is_some();
 
+    ui.compare_button
+        .set_visible(has_image && comparing && !generating && !upscaling && !zooming);
     ui.upscale_button
         .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
     ui.edit_button
@@ -1193,27 +1272,75 @@ fn cancel_auto_hide(ui: &Rc<Ui>) {
     }
 }
 
+/// Whether the pointer is physically over the sidebar.
+///
+/// The enter/leave flag can go stale when a dialog or another surface covers
+/// the sidebar, so ask the seat for the real position when possible.
+fn pointer_over_sidebar(ui: &Rc<Ui>) -> bool {
+    let fallback = ui.pointer_in_sidebar.get();
+    let Some(surface) = ui.window.surface() else {
+        return fallback;
+    };
+    let display = gtk::prelude::WidgetExt::display(&ui.window);
+    let Some(seat) = display.default_seat() else {
+        return fallback;
+    };
+    let Some(pointer) = seat.pointer() else {
+        return fallback;
+    };
+    let Some((x, y, _)) = surface.device_position(&pointer) else {
+        return fallback;
+    };
+    let Some(bounds) = ui.sidebar_root.compute_bounds(&ui.window) else {
+        return fallback;
+    };
+    let inside = bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32));
+    tracing::debug!(
+        x,
+        y,
+        left = bounds.x(),
+        top = bounds.y(),
+        width = bounds.width(),
+        height = bounds.height(),
+        inside,
+        "sidebar pointer position"
+    );
+    inside
+}
+
 fn schedule_auto_hide(ui: &Rc<Ui>) {
-    if !ui.config.borrow().sidebar_auto_hide || !ui.split.shows_sidebar() || ui.generating.get() {
+    if !ui.config.borrow().sidebar_auto_hide
+        || !ui.split.shows_sidebar()
+        || ui.generating.get()
+        || ui.upscaling.get()
+        || pointer_over_sidebar(ui)
+    {
         return;
     }
     cancel_auto_hide(ui);
+    tracing::debug!("scheduling sidebar auto-hide");
     let callback_ui = ui.clone();
     let source = glib::timeout_add_seconds_local(AUTO_HIDE_SECONDS, move || {
         let ui = &callback_ui;
         *ui.auto_hide_source.borrow_mut() = None;
+        let focus = gtk::prelude::GtkWindowExt::focus(&ui.window);
+        let pointer = pointer_over_sidebar(ui);
+        tracing::debug!(
+            active = ui.window.is_active(),
+            pointer,
+            focus = focus
+                .as_ref()
+                .map(|focus| focus.widget_name().to_string())
+                .unwrap_or_default(),
+            "sidebar auto-hide check"
+        );
         if !ui.config.borrow().sidebar_auto_hide
             || !ui.split.shows_sidebar()
             || ui.generating.get()
-            || ui.pointer_in_sidebar.get()
+            || ui.upscaling.get()
+            || pointer
             || !ui.window.is_active()
         {
-            return glib::ControlFlow::Break;
-        }
-        let focus_inside = gtk::prelude::GtkWindowExt::focus(&ui.window)
-            .map(|focus| focus.is_ancestor(&ui.sidebar_root))
-            .unwrap_or(false);
-        if focus_inside {
             return glib::ControlFlow::Break;
         }
         ui.auto_hiding.set(true);
@@ -1225,13 +1352,16 @@ fn schedule_auto_hide(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn refresh_auto_hide(ui: &Rc<Ui>) {
-    if !ui.config.borrow().sidebar_auto_hide {
+    if !ui.config.borrow().sidebar_auto_hide
+        || !ui.split.shows_sidebar()
+        || ui.generating.get()
+        || ui.upscaling.get()
+        || pointer_over_sidebar(ui)
+    {
         cancel_auto_hide(ui);
         return;
     }
-    if ui.sidebar_focused.get() && !ui.pointer_in_sidebar.get() {
-        schedule_auto_hide(ui);
-    }
+    schedule_auto_hide(ui);
 }
 
 fn setup_auto_hide(ui: &Rc<Ui>) {
@@ -1247,9 +1377,7 @@ fn setup_auto_hide(ui: &Rc<Ui>) {
         let ui = ui.clone();
         motion.connect_leave(move |_| {
             ui.pointer_in_sidebar.set(false);
-            if ui.sidebar_focused.get() {
-                schedule_auto_hide(&ui);
-            }
+            schedule_auto_hide(&ui);
         });
     }
     ui.sidebar_root.add_controller(motion);
@@ -1257,15 +1385,11 @@ fn setup_auto_hide(ui: &Rc<Ui>) {
     {
         let ui = ui.clone();
         let window = ui.window.clone();
-        window.connect_focus_widget_notify(move |window| {
-            let inside = gtk::prelude::GtkWindowExt::focus(window)
-                .map(|focus| focus.is_ancestor(&ui.sidebar_root))
-                .unwrap_or(false);
-            if inside {
-                ui.sidebar_focused.set(true);
+        window.connect_notify_local(Some("is-active"), move |window, _| {
+            if window.is_active() {
+                refresh_auto_hide(&ui);
+            } else {
                 cancel_auto_hide(&ui);
-            } else if ui.sidebar_focused.get() && !ui.pointer_in_sidebar.get() {
-                schedule_auto_hide(&ui);
             }
         });
     }
@@ -1653,6 +1777,20 @@ fn start_generation(ui: &Rc<Ui>) {
     });
 }
 
+/// Fade the upscaled image in over the original right after a run.
+fn reveal_comparison(ui: &Rc<Ui>) {
+    ui.stack.set_transition_type(gtk::StackTransitionType::None);
+    ui.stack.set_visible_child_name("before");
+    ui.stack
+        .set_transition_type(gtk::StackTransitionType::Crossfade);
+    let ui = ui.clone();
+    glib::timeout_add_local_once(Duration::from_millis(60), move || {
+        if ui.comparison.borrow().is_some() && !ui.compare_button.is_active() {
+            ui.stack.set_visible_child_name("image");
+        }
+    });
+}
+
 /// Run one upscale on a worker thread and show the result like a generation.
 pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor: u32) {
     if ui.generating.get() || ui.upscaling.get() {
@@ -1729,6 +1867,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
     let started = Instant::now();
     let model_id = preset.id.to_string();
     let source_path = input.to_string_lossy().into_owned();
+    let before_path = input;
     glib::spawn_future_local(async move {
         let ticker = glib::timeout_add_local(Duration::from_millis(500), {
             let ui = ui.clone();
@@ -1758,8 +1897,18 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                 let prompt = format!("Upscaled {factor}×");
 
                 ui.undo.borrow_mut().clear();
+                *ui.comparison.borrow_mut() = Some(Comparison {
+                    before: before_path,
+                    after: image.path.clone(),
+                });
+                ui.compare_guard.set(true);
+                ui.compare_button.set_active(false);
+                ui.compare_guard.set(false);
+                ui.compare_button
+                    .set_tooltip_text(Some("Show the original image"));
                 ui.state.borrow_mut().on_result(image.path.clone(), false);
                 update_image_view(&ui);
+                reveal_comparison(&ui);
 
                 let inserted = ui.history.borrow().insert(&NewGeneration {
                     prompt: &prompt,
@@ -1814,7 +1963,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                 finish(
                     &ui,
                     &format!(
-                        "{} · {} × {} · {:.1}s",
+                        "{} · {} × {} · {:.1}s · toggle to compare",
                         upscaler_label(&model_id),
                         image.width,
                         image.height,
@@ -1849,6 +1998,7 @@ fn finish(ui: &Rc<Ui>, message: &str) {
     set_controls_enabled(ui, true);
     refresh_model(ui);
     update_image_actions(ui);
+    refresh_auto_hide(ui);
     ui.status.set_text(message);
 }
 

@@ -163,7 +163,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let auto_hide_row = adw::SwitchRow::builder()
         .title("Auto-hide sidebar")
         .subtitle(format!(
-            "Hide it {} seconds after focus and the pointer leave",
+            "Hide it {} seconds after the pointer leaves",
             crate::AUTO_HIDE_SECONDS
         ))
         .build();
