@@ -82,8 +82,8 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
         ModelFileSpec {
             role: ModelRole::Vae,
             rel_path: "vae/flux2-vae.safetensors",
-            url: "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
-            approx_bytes: 336_213_556,
+            url: "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
+            approx_bytes: 336_211_292,
         },
         ModelFileSpec {
             role: ModelRole::TextEncoder,
@@ -115,8 +115,8 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
         ModelFileSpec {
             role: ModelRole::Vae,
             rel_path: "vae/flux2-vae.safetensors",
-            url: "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
-            approx_bytes: 336_213_556,
+            url: "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
+            approx_bytes: 336_211_292,
         },
         ModelFileSpec {
             role: ModelRole::TextEncoder,
@@ -166,7 +166,11 @@ mod tests {
         for preset in PRESETS {
             assert!(preset.file(ModelRole::Diffusion).is_some(), "{}", preset.id);
             assert!(preset.file(ModelRole::Vae).is_some(), "{}", preset.id);
-            assert!(preset.file(ModelRole::TextEncoder).is_some(), "{}", preset.id);
+            assert!(
+                preset.file(ModelRole::TextEncoder).is_some(),
+                "{}",
+                preset.id
+            );
             assert!(preset.total_bytes() > 0);
         }
     }
@@ -174,7 +178,9 @@ mod tests {
     #[test]
     fn resolves_paths_under_models_dir() {
         let preset = &FLUX2_KLEIN_4B;
-        let path = preset.path(ModelRole::Diffusion, Path::new("/models")).unwrap();
+        let path = preset
+            .path(ModelRole::Diffusion, Path::new("/models"))
+            .unwrap();
         assert_eq!(
             path,
             PathBuf::from("/models/diffusion/flux-2-klein-4b-Q4_K_M.gguf")

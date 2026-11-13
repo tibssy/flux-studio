@@ -25,7 +25,7 @@ fetch_flux2_klein() {
     models/diffusion/flux-2-klein-4b-Q4_K_M.gguf
   get "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf" \
     models/text_encoders/Qwen3-4B-Q4_K_M.gguf
-  get "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors" \
+  get "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors" \
     models/vae/flux2-vae.safetensors
 }
 
@@ -34,7 +34,7 @@ fetch_flux3_klein() {
     models/diffusion/flux3-image-klein-Q4_K.gguf
   get "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf" \
     models/text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf
-  get "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors" \
+  get "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors" \
     models/vae/flux2-vae.safetensors
 }
 

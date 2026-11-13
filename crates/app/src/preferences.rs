@@ -372,7 +372,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let legal_group = adw::PreferencesGroup::builder()
         .title("Licenses")
         .description(
-            "Model weights are downloaded separately and remain under their authors' licenses.",
+            "Model weights are downloaded separately and remain under their authors' licenses. Flux Studio is not affiliated with Black Forest Labs.",
         )
         .build();
     legal_group.add(&link_row("Flux Studio", "GPL-3.0-or-later", LICENSE_URL));
@@ -380,6 +380,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "FLUX.2 klein 4B weights",
         "Apache-2.0",
         FLUX2_KLEIN_URL,
+    ));
+    legal_group.add(&link_row(
+        "FLUX.2 VAE",
+        "Apache-2.0",
+        "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B",
     ));
     legal_group.add(&link_row(
         "FLUX.3 Image klein weights",

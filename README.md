@@ -133,6 +133,27 @@ Data locations:
 | `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, prompt-helper paths |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
+## Licensing and legal
+
+- **Flux Studio** is licensed under **GPL-3.0-or-later** (see `LICENSE`).
+- **FLUX.2 klein 4B** and the FLUX.2 VAE from the Apache-2.0
+  [Comfy-Org Klein repository](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B)
+  are **Apache-2.0**; commercial use is allowed.
+- **FLUX.3 Image klein** weights use the **FLUX Community License**, which
+  allows commercial use below the revenue threshold defined in that license;
+  review the [model card](https://huggingface.co/black-forest-labs/flux-3-image-klein)
+  before commercial use. The weights are gated on Hugging Face.
+- **Qwen3-4B** and **Qwen3-VL-4B-Instruct** text encoders are **Apache-2.0**.
+- GGUF quantizations inherit the license of their base model.
+- Model weights are downloaded at runtime and are **not** part of this
+  repository or package. Their licenses govern the weights and generated
+  outputs; check them before commercial use.
+- `stable-diffusion.cpp` and `llama.cpp` are MIT-licensed; their bundled
+  third-party libraries use BSD/MIT licenses.
+- Flux Studio is an independent project and is **not affiliated with Black
+  Forest Labs**. FLUX is a trademark of Black Forest Labs; the model licenses
+  do not grant trademark rights.
+
 ## Setup from source
 
 ```bash
