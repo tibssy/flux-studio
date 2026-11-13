@@ -295,8 +295,8 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         .icon_name("avatar-default-symbolic")
         .build();
     let credits_group = adw::PreferencesGroup::builder()
-        .title("Credits")
-        .description("Models and tools that make this app possible.")
+        .title("Models and tools")
+        .description("Credits for the models and projects that make this app possible.")
         .build();
     credits_group.add(&link_row(
         "FLUX.2 klein 4B",
@@ -339,14 +339,14 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX3_GGUF_URL,
     ));
     credits_page.add(&credits_group);
-    let credits_navigation = adw::NavigationPage::new(&credits_page, "Credits");
+    let credits_navigation = adw::NavigationPage::new(&page_toolbar(&credits_page), "Credits");
 
     let legal_page = adw::PreferencesPage::builder()
         .title("Legal")
         .icon_name("help-about-symbolic")
         .build();
     let legal_group = adw::PreferencesGroup::builder()
-        .title("Legal")
+        .title("Licenses")
         .description(
             "Model weights are downloaded separately and remain under their authors' licenses.",
         )
@@ -370,7 +370,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     legal_group.add(&link_row("stable-diffusion.cpp", "MIT", SDCPP_URL));
     legal_group.add(&link_row("llama.cpp", "MIT", LLAMA_CPP_URL));
     legal_page.add(&legal_group);
-    let legal_navigation = adw::NavigationPage::new(&legal_page, "Legal");
+    let legal_navigation = adw::NavigationPage::new(&page_toolbar(&legal_page), "Legal");
 
     let more_group = adw::PreferencesGroup::builder().title("Details").build();
     more_group.add(&navigation_row(
@@ -392,6 +392,15 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         dialog.set_visible_page(&models_page);
     }
     dialog.present(Some(&ui.window));
+}
+
+fn page_toolbar(content: &impl IsA<gtk::Widget>) -> adw::ToolbarView {
+    // AdwNavigationView inserts the back button and page title into this
+    // header bar when the page is pushed.
+    let header = adw::HeaderBar::new();
+    let toolbar = adw::ToolbarView::builder().content(content).build();
+    toolbar.add_top_bar(&header);
+    toolbar
 }
 
 fn navigation_row(

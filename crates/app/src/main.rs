@@ -215,7 +215,7 @@ fn build_ui(app: &adw::Application) {
     header.pack_start(&sidebar_toggle);
 
     let preferences_button = gtk::Button::builder()
-        .icon_name("emblem-system-symbolic")
+        .icon_name("view-more-symbolic")
         .tooltip_text("Preferences")
         .build();
     header.pack_end(&preferences_button);
