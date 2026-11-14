@@ -305,9 +305,15 @@ fn rebuild(
             .map(|marker| marker.size)
             .filter(|size| *size > 0)
             .unwrap_or(entry.size);
-        let update_available = installed && installed_version != entry.version && available;
         let previous = previous_info(&entry);
         let previous_available = previous_dir(&entry).join("sd-server").is_file();
+        let update_available = update_available(
+            installed,
+            &installed_version,
+            &entry.version,
+            available,
+            previous.as_ref().map(|previous| previous.version.as_str()),
+        );
 
         let mut subtitle = if installed {
             if update_available {
@@ -787,6 +793,19 @@ fn choose_server(ui: &Rc<Ui>, on_done: impl Fn() + 'static) {
     });
 }
 
+fn update_available(
+    installed: bool,
+    installed_version: &str,
+    entry_version: &str,
+    available: bool,
+    previous_version: Option<&str>,
+) -> bool {
+    installed
+        && installed_version != entry_version
+        && available
+        && previous_version != Some(entry_version)
+}
+
 fn check_slot(content: Option<gtk::Widget>) -> gtk::Box {
     let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     slot.set_size_request(36, 36);
@@ -874,4 +893,29 @@ fn format_size(bytes: u64) -> String {
 
 fn short_version(version: &str) -> &str {
     version.rsplit('-').next().unwrap_or(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_available;
+
+    #[test]
+    fn hides_update_when_manifest_points_at_rollback_copy() {
+        assert!(!update_available(true, "new", "old", true, Some("old")));
+    }
+
+    #[test]
+    fn shows_update_when_a_newer_manifest_arrives_after_an_update() {
+        assert!(update_available(true, "new", "newer", true, Some("old")));
+    }
+
+    #[test]
+    fn hides_update_when_installed_version_is_current() {
+        assert!(!update_available(true, "same", "same", true, Some("old")));
+    }
+
+    #[test]
+    fn shows_update_without_a_rollback_copy() {
+        assert!(update_available(true, "old", "new", true, None));
+    }
 }
