@@ -7,6 +7,10 @@ on:
         description: "Release tag to upload to (leave empty to keep artifacts only)"
         required: false
         default: ""
+      cuda_major:
+        description: "Build only one CUDA major (12 or 13; leave empty for both)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -18,18 +22,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - cuda_major: 12
+          - cuda_major: "12"
             cuda_version: "12.8.1"
             runner: ubuntu-22.04
-            archs: "52;61;70;75;80;86;89;90"
+            archs: "52;61;70"
             min_glibc: "2.35"
-          - cuda_major: 13
+          - cuda_major: "13"
             cuda_version: "13.0.0"
             runner: ubuntu-24.04
             archs: "75;80;86;89;90;100;120"
             min_glibc: "2.39"
+    if: ${{ inputs.cuda_major == '' || inputs.cuda_major == matrix.cuda_major }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - name: Checkout Flux Studio
         uses: actions/checkout@v4
