@@ -849,7 +849,7 @@ fn check_button(active: bool, tooltip: &str) -> gtk::Button {
         .icon_name("object-select-symbolic")
         .tooltip_text(tooltip)
         .valign(gtk::Align::Center)
-        .css_classes(["flat"])
+        .css_classes(["flat", "backend-check"])
         .build();
     if active {
         button.add_css_class("active-backend-icon");
