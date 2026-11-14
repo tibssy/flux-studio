@@ -31,6 +31,8 @@ const JOB_TIMEOUT: Duration = Duration::from_secs(3600);
 pub struct SdServerConfig {
     pub cli: PathBuf,
     pub models_dir: PathBuf,
+    /// Optional explicit `--backend` value (cpu, vulkan0, cuda0, ...).
+    pub backend: Option<String>,
 }
 
 pub struct SdServer {
@@ -155,6 +157,18 @@ impl Backend for SdServer {
         }
         drop(inner);
         self.upscaler.unload();
+    }
+
+    fn set_server(&self, cli: PathBuf, backend: Option<String>) {
+        {
+            let mut inner = self.inner.lock().expect("server mutex");
+            if !inner.busy {
+                inner.stop();
+            }
+            inner.config.cli = cli.clone();
+            inner.config.backend = backend.clone();
+        }
+        self.upscaler.set_server(cli, backend);
     }
 }
 
@@ -372,6 +386,9 @@ impl Inner {
                 bail!("model file not found at {}", vision.display());
             }
             command.arg("--llm_vision").arg(vision);
+        }
+        if let Some(backend) = &self.config.backend {
+            command.arg("--backend").arg(backend);
         }
         if offload {
             command.arg("--offload-to-cpu");

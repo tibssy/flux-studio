@@ -1,0 +1,107 @@
+name: Build backend bundles
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to upload to (leave empty to keep artifacts only)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  cuda:
+    name: CUDA ${{ matrix.cuda_major }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda_major: 12
+            cuda_version: "12.8.1"
+            runner: ubuntu-22.04
+            archs: "52;61;70;75;80;86;89;90"
+            min_glibc: "2.35"
+          - cuda_major: 13
+            cuda_version: "13.0.0"
+            runner: ubuntu-24.04
+            archs: "75;80;86;89;90;100;120"
+            min_glibc: "2.39"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout Flux Studio
+        uses: actions/checkout@v4
+
+      - name: Checkout stable-diffusion.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: leejet/stable-diffusion.cpp
+          ref: 3bad892
+          path: sd
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git zip
+
+      - name: Install CUDA ${{ matrix.cuda_version }}
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: ${{ matrix.cuda_version }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust"]'
+
+      - name: Configure
+        working-directory: sd
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSD_CUDA=ON \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DSD_BUILD_SHARED_GGML_LIB=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_CUDA_ARCHITECTURES='${{ matrix.archs }}'
+
+      - name: Build
+        working-directory: sd
+        run: cmake --build build --config Release -j"$(nproc)"
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="sd-cuda${{ matrix.cuda_major }}-linux-x86_64"
+          mkdir -p dist
+          (cd sd/build/bin && zip -j "../../dist/${name}.zip" ./*)
+          (cd sd && zip -j "../dist/${name}.zip" start-server.sh stable-diffusion.cpp.txt 2>/dev/null || true)
+          sha=$(sha256sum "dist/${name}.zip" | cut -d' ' -f1)
+          size=$(stat -c%s "dist/${name}.zip")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "size=${size}" >> "$GITHUB_OUTPUT"
+          cat > "dist/${name}.json" <<EOF
+          {"id":"cuda${{ matrix.cuda_major }}","version":"3bad892","file":"${name}.zip","sha256":"${sha}","size":${size},"min_glibc":"${{ matrix.min_glibc }}"}
+          EOF
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/*
+
+      - name: Upload release assets
+        if: ${{ inputs.release_tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: Backend builds ${{ inputs.release_tag }}
+          files: |
+            dist/*.zip
+            dist/*.json
+          generate_release_notes: false

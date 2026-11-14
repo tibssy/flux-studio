@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-14",
+  "backends": [
+    {
+      "id": "upstream-cpu",
+      "label": "CPU (upstream)",
+      "kind": "cpu",
+      "version": "master-1094-3bad892",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1094-3bad892/sd-master-3bad892-bin-Linux-Ubuntu-26.04-x86_64.zip",
+      "sha256": "dcb7edbf8bbcda64a9397f0dd98bb503409f4e795534aac1c20b28bac9e79181",
+      "size": 29068066,
+      "backend": "cpu",
+      "min_glibc": "2.38",
+      "notes": "Universal fallback. Slow, but works without a GPU backend."
+    },
+    {
+      "id": "upstream-vulkan",
+      "label": "Vulkan (upstream)",
+      "kind": "vulkan",
+      "version": "master-1094-3bad892",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1094-3bad892/sd-master-3bad892-bin-Linux-Ubuntu-26.04-x86_64-vulkan.zip",
+      "sha256": "00ca534b13cf0c11984678d9a448b18159fdfae9261b08134e98a8f601975672",
+      "size": 41947421,
+      "backend": "vulkan0",
+      "requires": ["libvulkan.so.1"],
+      "min_glibc": "2.38",
+      "notes": "Cross-vendor GPU backend. Tested on NVIDIA Maxwell; may be slower than CPU there."
+    },
+    {
+      "id": "upstream-rocm",
+      "label": "ROCm 10.1 (upstream)",
+      "kind": "rocm",
+      "version": "master-1094-3bad892",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1094-3bad892/sd-master-3bad892-bin-Linux-Ubuntu-24.04-x86_64-rocm-10.1.0.zip",
+      "sha256": "24472a35ad6f0378525a7a2e8c7d4d143b329d408d87fea11bf490bfa20d468a",
+      "size": 298837620,
+      "rocm_major": 10,
+      "strip_prefix": "build/bin",
+      "min_glibc": "2.39",
+      "notes": "AMD GPUs only. Large download; requires a compatible ROCm driver."
+    },
+    {
+      "id": "cuda12",
+      "label": "CUDA 12 (custom build)",
+      "kind": "cuda",
+      "version": "unpublished",
+      "url": "",
+      "sha256": "",
+      "size": 0,
+      "backend": "cuda0",
+      "cuda_major": 12,
+      "archs": [50, 52, 60, 61, 70, 75, 80, 86, 89, 90],
+      "requires": ["libcudart.so.12"],
+      "min_glibc": "2.35",
+      "notes": "Not published yet. Build it with the backend workflow, then pin it in this manifest."
+    },
+    {
+      "id": "cuda13",
+      "label": "CUDA 13 (custom build)",
+      "kind": "cuda",
+      "version": "unpublished",
+      "url": "",
+      "sha256": "",
+      "size": 0,
+      "backend": "cuda0",
+      "cuda_major": 13,
+      "archs": [75, 80, 86, 89, 90, 100, 120],
+      "requires": ["libcudart.so.13"],
+      "min_glibc": "2.39",
+      "notes": "Not published yet. Build it with the backend workflow, then pin it in this manifest."
+    }
+  ]
+}

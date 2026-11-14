@@ -113,6 +113,7 @@ without leaving the app.
 |---|---|
 | Generate | `Ctrl+Enter` or **Generate** |
 | Cancel | **Cancel** (cancels the running server job) |
+| Preferences | `Ctrl+,` or the header menu |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
@@ -168,10 +169,11 @@ Data locations:
 |---|---|
 | `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
 | `~/.local/share/flux-studio/models/` | downloaded model files |
+| `~/.local/share/flux-studio/backends/` | downloaded `sd-server` backends |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
 | `~/.cache/flux-studio/crops/` | cropped reference images |
-| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, prompt-helper paths |
+| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
 ## Licensing and legal
@@ -233,6 +235,37 @@ Environment overrides:
 | `FLUX_DEVICE` | label shown by the backend info |
 | `CUDA_ARCH` | SM architectures for `build-sdcpp.sh` (default `52`) |
 
+## Backends
+
+The app no longer assumes CUDA. On first run, if no usable `sd-server` is
+found, it downloads the pinned **CPU backend (29 MB)** and makes it active.
+The **Preferences → Backends** page detects NVIDIA, AMD, Vulkan and CPU,
+shows which downloadable builds are compatible, and lets you download, update,
+remove or activate one. It also accepts a custom `sd-server` path.
+
+| Backend | Source | Notes |
+|---|---|---|
+| CPU | upstream `leejet/stable-diffusion.cpp` | Universal fallback; slow |
+| Vulkan | upstream | Cross-vendor; may be slow or buggy on old Intel GPUs |
+| ROCm 10.1 | upstream | AMD only; ~299 MB |
+| CUDA 12 | this repo's workflow | Maxwell and newer; needs `libcudart.so.12` |
+| CUDA 13 | this repo's workflow | Turing and newer; needs `libcudart.so.13` |
+
+Upstream does not publish Linux CUDA builds, so the CUDA entries are built by
+`.github/workflows/build-backends.yml` (manual dispatch) and pinned in
+`backends/manifest.json`. Builds are published as release assets; the app only
+uses entries whose URL and SHA-256 are present in the manifest. The manifest is
+deliberately pinned to tested commits; the refresh button checks it manually.
+
+CUDA major versions are not interchangeable. A CUDA 12 build will not start on
+a CUDA 13-only system, and CUDA 13 may not support Maxwell (`sm_52`). The app
+checks the installed runtime and compute capability before offering a build.
+
+The backend is launched with an explicit `--backend` value (`cpu`, `vulkan0`,
+`cuda0`). Changing it in Preferences restarts the server on the next request.
+The self-contained upstream zips use `RUNPATH=$ORIGIN`, so no
+`LD_LIBRARY_PATH` is needed.
+
 ## Packaging
 
 `packaging/` contains the PKGBUILD, desktop entry and icon. The package builds
@@ -250,7 +283,10 @@ cd packaging
 FLUX_CUDA_ARCH=52 makepkg -si
 ```
 
-The installed binary looks for the backend at `/usr/lib/flux-studio/sd-server`.
+The installed binary discovers a backend in this order: `FLUX_SD_SERVER`,
+`sd_server` in the config, a sibling of `sd_cli`, a server next to the app
+binary, `/usr/lib/flux-studio`, `/usr/local`, `~/.local`, then `PATH`. If none
+is found it downloads the CPU backend automatically.
 
 ## Layout
 

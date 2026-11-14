@@ -29,6 +29,12 @@ pub struct Config {
     pub sidebar_auto_hide: bool,
     /// Optional override for the `sd-server` binary.
     pub sd_server: Option<PathBuf>,
+    /// Id of the installed backend selected in Preferences.
+    pub backend_id: Option<String>,
+    /// Explicit `--backend` argument for `sd-server` (cpu, vulkan0, cuda0, ...).
+    pub backend: Option<String>,
+    /// Optional override for the backend manifest URL.
+    pub backend_manifest_url: Option<String>,
     /// Optional override for the `llama-cli` binary used to improve prompts.
     pub prompt_helper_cli: Option<PathBuf>,
     /// Optional GGUF used for prompt improvement; defaults to the active
@@ -53,6 +59,9 @@ impl Default for Config {
             sidebar_visible: true,
             sidebar_auto_hide: true,
             sd_server: None,
+            backend_id: None,
+            backend: None,
+            backend_manifest_url: None,
             prompt_helper_cli: None,
             prompt_helper_model: None,
         }
@@ -98,6 +107,9 @@ mod tests {
         assert!(config.sidebar_visible);
         assert!(config.sidebar_auto_hide);
         assert!(config.sd_server.is_none());
+        assert!(config.backend_id.is_none());
+        assert!(config.backend.is_none());
+        assert!(config.backend_manifest_url.is_none());
         assert!(config.prompt_helper_cli.is_none());
         assert!(config.prompt_helper_model.is_none());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);

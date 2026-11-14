@@ -1,3 +1,4 @@
+mod backends;
 mod history;
 mod history_view;
 mod main_view;
@@ -110,6 +111,7 @@ pub(crate) struct Ui {
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
     pub upscaling: Cell<bool>,
+    pub backend_installing: Cell<bool>,
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
     pub image_size: Cell<(u32, u32)>,
@@ -191,10 +193,15 @@ fn build_ui(app: &adw::Application) {
     let config = Config::load();
     let models_dir = resolve_models_dir(&config);
     let sd_server = resolve_sd_server(&config);
+    let needs_backend = config.sd_server.is_none()
+        && config.backend_id.is_none()
+        && std::env::var_os("FLUX_SD_SERVER").is_none()
+        && !server_starts(&sd_server);
 
     let backend: Arc<dyn Backend> = Arc::new(SdServer::new(SdServerConfig {
         cli: sd_server,
         models_dir: models_dir.clone(),
+        backend: config.backend.clone(),
     }));
 
     let history = match History::open(&paths::history_db()) {
@@ -316,6 +323,7 @@ fn build_ui(app: &adw::Application) {
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
         upscaling: Cell::new(false),
+        backend_installing: Cell::new(false),
         size_guard: Cell::new(false),
         size_cell,
         image_size: Cell::new((0, 0)),
@@ -359,6 +367,9 @@ fn build_ui(app: &adw::Application) {
 
     if ui.models.borrow().is_empty() {
         preferences::show_preferences(&ui, true);
+    }
+    if needs_backend {
+        backends::auto_install_cpu(&ui);
     }
 
     refresh_auto_hide(&ui);
@@ -611,6 +622,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::u | gdk::Key::U => {
                     upscale_dialog::show(&ui);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::comma => {
+                    preferences::show_preferences(&ui, false);
                     glib::Propagation::Stop
                 }
                 gdk::Key::Up => {
@@ -1551,6 +1566,11 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 }
 
 fn start_generation(ui: &Rc<Ui>) {
+    if ui.backend_installing.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("The backend is still installing."));
+        return;
+    }
     if ui.generating.get()
         || ui.upscaling.get()
         || ui.zooming.get()
@@ -1833,6 +1853,11 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
 
 /// Run one upscale on a worker thread and show the result like a generation.
 pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor: u32) {
+    if ui.backend_installing.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("The backend is still installing."));
+        return;
+    }
     if ui.generating.get() || ui.upscaling.get() {
         return;
     }
@@ -2085,16 +2110,34 @@ fn resolve_sd_server(config: &Config) -> PathBuf {
     {
         return server;
     }
-    let installed = PathBuf::from("/usr/lib/flux-studio/sd-server");
-    if installed.exists() {
-        return installed;
+    if let Some(server) = flux_core::runtime::find_system_server() {
+        return server;
     }
+    // Development checkouts keep the built server under vendor/.
     let vendored = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../vendor/stable-diffusion.cpp/build/bin/sd-server");
     if vendored.exists() {
         return vendored;
     }
     PathBuf::from("sd-server")
+}
+
+fn server_starts(path: &Path) -> bool {
+    let path = if path == Path::new("sd-server") {
+        match flux_core::runtime::find_in_path("sd-server") {
+            Some(path) => path,
+            None => return false,
+        }
+    } else if !path.is_file() {
+        return false;
+    } else {
+        path.to_path_buf()
+    };
+    std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn sibling_server(cli: &Path) -> Option<PathBuf> {

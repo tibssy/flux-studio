@@ -398,6 +398,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     }
 
     dialog.add(&models_page);
+    dialog.add(&crate::backends::build_page(ui));
 
     let about = adw::PreferencesPage::builder()
         .title("About")
@@ -410,10 +411,27 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .subtitle(concat!("Version ", env!("CARGO_PKG_VERSION")))
             .build(),
     );
+    let (backend_label, server_path) = {
+        let config = ui.config.borrow();
+        (
+            config.backend.clone().unwrap_or_else(|| "auto".into()),
+            config
+                .sd_server
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "auto-detected".into()),
+        )
+    };
     about_group.add(
         &adw::ActionRow::builder()
             .title("Backend")
-            .subtitle("stable-diffusion.cpp · CUDA")
+            .subtitle(format!("stable-diffusion.cpp · {backend_label}"))
+            .build(),
+    );
+    about_group.add(
+        &adw::ActionRow::builder()
+            .title("Server")
+            .subtitle(server_path)
             .build(),
     );
     about.add(&about_group);

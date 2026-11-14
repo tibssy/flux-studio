@@ -36,6 +36,10 @@ pub fn default_models_dir() -> PathBuf {
     data_dir().join("models")
 }
 
+pub fn backends_dir() -> PathBuf {
+    data_dir().join("backends")
+}
+
 pub fn default_output_dir() -> PathBuf {
     dirs::picture_dir()
         .unwrap_or_else(|| PathBuf::from("."))

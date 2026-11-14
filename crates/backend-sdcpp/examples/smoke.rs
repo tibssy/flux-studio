@@ -63,6 +63,7 @@ fn main() -> anyhow::Result<()> {
     let backend = SdServer::new(SdServerConfig {
         cli: PathBuf::from(cli),
         models_dir: PathBuf::from(models_dir),
+        backend: None,
     });
 
     println!("first generation (loads the model)");

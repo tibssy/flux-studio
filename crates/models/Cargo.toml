@@ -10,4 +10,10 @@ async-channel.workspace = true
 flux-core = { path = "../core" }
 futures-util.workspace = true
 reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tracing.workspace = true
+zip = "2.4"
+
+[dev-dependencies]
+tokio.workspace = true

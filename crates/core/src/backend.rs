@@ -42,4 +42,9 @@ pub trait Backend: Send + Sync + 'static {
     ///
     /// The default is a no-op for backends that load models per request.
     fn unload(&self) {}
+
+    /// Point the backend at another server binary and/or `--backend` device.
+    ///
+    /// The next generation restarts the server with the new settings.
+    fn set_server(&self, _cli: PathBuf, _backend: Option<String>) {}
 }

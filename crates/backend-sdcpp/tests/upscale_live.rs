@@ -21,7 +21,11 @@ fn upscales_at_4x_and_2x() {
     let output = std::env::temp_dir().join("flux-live-upscale-4x.png");
     let output_2x = std::env::temp_dir().join("flux-live-upscale-2x.png");
 
-    let server = SdUpscaleServer::new(SdServerConfig { cli, models_dir });
+    let server = SdUpscaleServer::new(SdServerConfig {
+        cli,
+        models_dir,
+        backend: None,
+    });
 
     let four = server
         .upscale(&UpscaleRequest {

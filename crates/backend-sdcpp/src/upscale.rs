@@ -84,6 +84,14 @@ impl SdUpscaleServer {
         }
     }
 
+    /// Point the upscale server at another binary and backend.
+    pub fn set_server(&self, cli: PathBuf, backend: Option<String>) {
+        let mut inner = self.inner.lock().expect("upscale server mutex");
+        inner.stop();
+        inner.config.cli = cli;
+        inner.config.backend = backend;
+    }
+
     /// Release the upscale server process and its CUDA context.
     pub fn unload(&self) {
         if self.busy.load(Ordering::SeqCst) {
@@ -291,6 +299,9 @@ impl Inner {
         let upscalers_dir = self.config.models_dir.join("upscalers");
 
         let mut command = Command::new(&self.config.cli);
+        if let Some(backend) = &self.config.backend {
+            command.arg("--backend").arg(backend);
+        }
         command
             .arg("--listen-ip")
             .arg("127.0.0.1")
@@ -444,6 +455,7 @@ mod tests {
         let server = SdUpscaleServer::new(SdServerConfig {
             cli: PathBuf::from("/bin/false"),
             models_dir: dir,
+            backend: None,
         });
         let error = server
             .upscale(&UpscaleRequest {
