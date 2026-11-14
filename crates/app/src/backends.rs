@@ -84,16 +84,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
 
     let hardware = Rc::new(HardwareProfile::detect());
     let manifest = Rc::new(RefCell::new(runtime::bundled_manifest()));
-    let progress = gtk::ProgressBar::builder()
-        .show_text(true)
-        .visible(false)
-        .build();
-    let status = gtk::Label::builder()
-        .xalign(0.0)
-        .wrap(true)
-        .css_classes(["caption", "dim-label"])
-        .build();
-
     let hardware_group = adw::PreferencesGroup::builder()
         .title("Detected hardware")
         .description("Used to decide which downloadable backends are compatible.")
@@ -140,13 +130,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     backends_group.add(&list);
     page.add(&backends_group);
 
-    let download_group = adw::PreferencesGroup::builder().title("Downloads").build();
-    let download_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    download_box.append(&progress);
-    download_box.append(&status);
-    download_group.add(&download_box);
-    page.add(&download_group);
-
     let refresh_slot: RefreshSlot = Rc::new(RefCell::new(None));
     let refresh: Refresh = {
         let slot = refresh_slot.clone();
@@ -162,19 +145,9 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         let manifest = manifest.clone();
         let hardware = hardware.clone();
         let list = list.clone();
-        let progress = progress.clone();
-        let status = status.clone();
         let refresh = refresh.clone();
         Rc::new(move || {
-            rebuild(
-                &ui,
-                &list,
-                &manifest,
-                &hardware,
-                &progress,
-                &status,
-                refresh.clone(),
-            );
+            rebuild(&ui, &list, &manifest, &hardware, refresh.clone());
         })
     };
     *refresh_slot.borrow_mut() = Some(populate.clone());
@@ -182,12 +155,10 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
 
     {
         let ui = ui.clone();
-        let status = status.clone();
         let manifest = manifest.clone();
         let refresh = refresh.clone();
         refresh_button.connect_clicked(move |button| {
             button.set_sensitive(false);
-            status.set_text("Checking the backend manifest…");
             let url = ui
                 .config
                 .borrow()
@@ -207,7 +178,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
             });
             let button = button.clone();
             let ui = ui.clone();
-            let status = status.clone();
             let refresh = refresh.clone();
             let manifest = manifest.clone();
             glib::spawn_future_local(async move {
@@ -231,23 +201,19 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                                 if outcome.errors.len() == 1 { "y" } else { "ies" }
                             ));
                         }
-                        status.set_text(&message);
                         ui.toast.add_toast(adw::Toast::new(&message));
                         refresh();
                     }
                     Ok(Err(error)) => {
-                        status.set_text(
-                            "Remote manifest unavailable; keeping the current backend list.",
-                        );
                         ui.toast.add_toast(adw::Toast::new(&format!(
                             "Could not fetch the backend manifest; keeping the pinned list ({error})"
                         )));
                         refresh();
                     }
                     Err(_) => {
-                        status.set_text(
+                        ui.toast.add_toast(adw::Toast::new(
                             "Manifest request stopped; keeping the current backend list.",
-                        );
+                        ));
                         refresh();
                     }
                 }
@@ -263,8 +229,6 @@ fn rebuild(
     list: &gtk::ListBox,
     manifest: &Rc<RefCell<BackendManifest>>,
     hardware: &HardwareProfile,
-    progress: &gtk::ProgressBar,
-    status: &gtk::Label,
     refresh: Rc<dyn Fn()>,
 ) {
     while let Some(child) = list.first_child() {
@@ -311,11 +275,10 @@ fn rebuild(
         let check = check_button(active, "Use the system backend");
         if !active {
             let ui = ui.clone();
-            let status = status.clone();
             let refresh = refresh.clone();
             let path = path.clone();
             check.connect_clicked(move |_| {
-                set_custom_server(&ui, path.clone(), None, None, &status);
+                set_custom_server(&ui, path.clone(), None, None);
                 refresh();
             });
         }
@@ -454,10 +417,9 @@ fn rebuild(
         if !active && compatibility.is_none() {
             let ui = ui.clone();
             let entry = entry.clone();
-            let status = status.clone();
             let refresh = refresh.clone();
             check.connect_clicked(move |_| {
-                activate_entry(&ui, &entry, &status);
+                activate_entry(&ui, &entry);
                 refresh();
             });
         }
@@ -472,18 +434,16 @@ fn rebuild(
         {
             let ui = ui.clone();
             let entry = entry.clone();
-            let status = status.clone();
             let refresh = refresh.clone();
             rollback.connect_clicked(move |_| {
-                rollback_entry(&ui, &entry, &status);
+                rollback_entry(&ui, &entry);
                 refresh();
             });
         }
         for button in [&download, &update] {
             let ui = ui.clone();
             let entry = entry.clone();
-            let progress = progress.clone();
-            let status = status.clone();
+            let row = row.clone();
             let refresh = refresh.clone();
             let buttons = buttons.clone();
             let auto_activate = false;
@@ -491,8 +451,7 @@ fn rebuild(
                 start_install(
                     &ui,
                     &entry,
-                    &progress,
-                    &status,
+                    &row,
                     refresh.clone(),
                     buttons.clone(),
                     auto_activate,
@@ -522,11 +481,10 @@ fn rebuild(
         .build();
     {
         let ui = ui.clone();
-        let status = status.clone();
         let refresh = refresh.clone();
         choose.connect_clicked(move |_| {
             let refresh = refresh.clone();
-            choose_server(&ui, &status, move || refresh());
+            choose_server(&ui, move || refresh());
         });
     }
     custom_row.add_suffix(&choose);
@@ -535,7 +493,6 @@ fn rebuild(
         Some(path) if path.is_file() => {
             let button = check_button(false, "Use this custom backend");
             let ui = ui.clone();
-            let status = status.clone();
             let refresh = refresh.clone();
             button.connect_clicked(move |_| {
                 {
@@ -543,7 +500,7 @@ fn rebuild(
                     config.custom_server = Some(path.clone());
                     let _ = config.save();
                 }
-                set_custom_server(&ui, path.clone(), None, None, &status);
+                set_custom_server(&ui, path.clone(), None, None);
                 refresh();
             });
             Some(button)
@@ -564,8 +521,7 @@ fn rebuild(
 fn start_install(
     ui: &Rc<Ui>,
     entry: &BackendEntry,
-    progress: &gtk::ProgressBar,
-    status: &gtk::Label,
+    row: &adw::ActionRow,
     refresh: Rc<dyn Fn()>,
     buttons: Vec<gtk::Button>,
     auto_activate: bool,
@@ -609,45 +565,35 @@ fn start_install(
     if ui.config.borrow().backend_id.as_deref() == Some(entry.id.as_str()) {
         ui.backend.unload();
     }
-    progress.set_visible(true);
-    progress.set_fraction(0.0);
-    progress.set_text(Some("Starting…"));
-    status.set_text(&format!("Downloading {}…", entry.label));
+    row.set_subtitle("Downloading…");
 
-    let progress_widget = progress.clone();
-    let status_widget = status.clone();
-    let label = entry.label.clone();
+    let row_progress = row.clone();
     let on_progress: Rc<dyn Fn(u64, u64)> = Rc::new(move |downloaded, total| {
-        let fraction = if total > 0 {
-            downloaded as f64 / total as f64
+        let percent = if total > 0 {
+            downloaded as f64 / total as f64 * 100.0
         } else {
             0.0
         };
-        progress_widget.set_fraction(fraction.min(1.0));
-        progress_widget.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
-        status_widget.set_text(&format!(
-            "{label} · {} / {}",
+        row_progress.set_subtitle(&format!(
+            "Downloading · {percent:.0}% · {} / {}",
             format_size(downloaded),
             format_size(total)
         ));
     });
     let ui_done = ui.clone();
     let entry_done = entry.clone();
-    let progress_done = progress.clone();
-    let status_done = status.clone();
+    let row_done = row.clone();
     let refresh_done = refresh.clone();
     let install_dir_done = install_dir.clone();
     let backup_done = backup.clone();
     let on_done: Rc<dyn Fn(Result<PathBuf, String>)> = Rc::new(move |result| {
-        progress_done.set_visible(false);
         match result {
             Ok(_) => {
-                status_done.set_text(&format!("{} installed.", entry_done.label));
                 ui_done
                     .toast
                     .add_toast(adw::Toast::new(&format!("{} installed.", entry_done.label)));
                 if auto_activate {
-                    activate_entry(&ui_done, &entry_done, &status_done);
+                    activate_entry(&ui_done, &entry_done);
                 }
             }
             Err(error) => {
@@ -657,7 +603,7 @@ fn start_install(
                         let _ = std::fs::rename(&backup_done, &install_dir_done);
                     }
                 }
-                status_done.set_text(&format!("Install failed: {error}"));
+                row_done.set_subtitle("Install failed");
                 ui_done
                     .toast
                     .add_toast(adw::Toast::new(&format!("Install failed: {error}")));
@@ -714,7 +660,7 @@ fn install_entry(
     });
 }
 
-fn activate_entry(ui: &Rc<Ui>, entry: &BackendEntry, status: &gtk::Label) {
+fn activate_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
     if ui.generating.get() || ui.upscaling.get() {
         ui.toast
             .add_toast(adw::Toast::new("Wait for the current image to finish."));
@@ -728,15 +674,7 @@ fn activate_entry(ui: &Rc<Ui>, entry: &BackendEntry, status: &gtk::Label) {
         )));
         return;
     }
-    set_custom_server(
-        ui,
-        path,
-        entry.backend.clone(),
-        Some(entry.id.clone()),
-        status,
-    );
-    ui.toast
-        .add_toast(adw::Toast::new(&format!("{} is now active.", entry.label)));
+    set_custom_server(ui, path, entry.backend.clone(), Some(entry.id.clone()));
 }
 
 fn set_custom_server(
@@ -744,7 +682,6 @@ fn set_custom_server(
     path: PathBuf,
     backend: Option<String>,
     backend_id: Option<String>,
-    status: &gtk::Label,
 ) {
     if !path.is_file() {
         ui.toast.add_toast(adw::Toast::new(&format!(
@@ -767,7 +704,10 @@ fn set_custom_server(
     }
     ui.backend.set_server(path.clone(), backend);
     ui.backend.unload();
-    status.set_text(&format!("Active backend: {}", path.display()));
+    ui.toast.add_toast(adw::Toast::new(&format!(
+        "Active backend: {}",
+        path.display()
+    )));
 }
 
 fn confirm_remove(ui: &Rc<Ui>, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
@@ -813,13 +753,12 @@ fn confirm_remove(ui: &Rc<Ui>, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
     dialog.present(Some(&ui.window));
 }
 
-fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static) {
+fn choose_server(ui: &Rc<Ui>, on_done: impl Fn() + 'static) {
     let dialog = gtk::FileDialog::builder()
         .title("Choose sd-server")
         .modal(true)
         .build();
     let ui = ui.clone();
-    let status = status.clone();
     let window = ui.window.clone();
     dialog.open(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
         let Ok(file) = result else {
@@ -828,7 +767,22 @@ fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static)
         let Some(path) = file.path() else {
             return;
         };
-        set_custom_server(&ui, path, None, None, &status);
+        if !path.is_file() {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "{} does not exist.",
+                path.display()
+            )));
+            return;
+        }
+        {
+            let mut config = ui.config.borrow_mut();
+            config.custom_server = Some(path.clone());
+            let _ = config.save();
+        }
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Custom backend selected: {} · use the check button to activate it.",
+            path.display()
+        )));
         on_done();
     });
 }
@@ -866,7 +820,7 @@ fn previous_info(entry: &BackendEntry) -> Option<flux_core::runtime::InstalledBa
     runtime::read_installed(&previous_dir(entry).join("installed.json"))
 }
 
-fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry, status: &gtk::Label) {
+fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
     if ui.generating.get() || ui.upscaling.get() {
         ui.toast
             .add_toast(adw::Toast::new("Wait for the current image to finish."));
@@ -902,7 +856,6 @@ fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry, status: &gtk::Label) {
         )));
         return;
     }
-    status.set_text(&format!("{} rolled back to {version}.", entry.label));
     ui.toast.add_toast(adw::Toast::new(&format!(
         "{} rolled back to {version}.",
         entry.label
