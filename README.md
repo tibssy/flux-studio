@@ -318,6 +318,23 @@ history and backend pick it up automatically. Styles live in
 it to `STYLES`. Arbitrary user-supplied models from Hugging Face are planned
 next.
 
+## Portability
+
+The GitHub binary is built on Arch Linux and expects that distribution's GTK,
+libadwaita and gdk-pixbuf sonames. The backend archives are self-contained, but
+the app binary is not. If a distro reports a missing library, check:
+
+```bash
+ldd ./flux-studio | grep "not found"
+```
+
+On Fedora/Bazzite, `libbz2.so.1.0` comes from `bzip2-libs` (pulled in by
+gdk-pixbuf), not from Flux Studio. Install it with
+`rpm-ostree install bzip2-libs` and reboot, then check for further missing
+sonames such as `liblzma`, `libzstd` or `libxml2`. For a distro-independent
+install, a Flatpak/AppImage build is the correct long-term solution; a raw
+Arch-built binary will always depend on the host GTK stack.
+
 ## Notes for Maxwell / 8 GB cards
 
 - Build CUDA with `-DCMAKE_CUDA_ARCHITECTURES=52`. No tensor cores, so time
