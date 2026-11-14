@@ -104,25 +104,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
             .subtitle(hardware.summary())
             .build(),
     );
-    if let Some(server) = runtime::find_system_server() {
-        let row = adw::ActionRow::builder()
-            .title("System backend")
-            .subtitle(server.display().to_string())
-            .build();
-        let button = gtk::Button::builder()
-            .label("Use")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .build();
-        let ui = ui.clone();
-        let path = server.clone();
-        let status = status.clone();
-        button.connect_clicked(move |_| {
-            set_custom_server(&ui, path.clone(), None, None, &status);
-        });
-        row.add_suffix(&button);
-        hardware_group.add(&row);
-    }
     page.add(&hardware_group);
 
     let active_group = adw::PreferencesGroup::builder()
@@ -135,9 +116,18 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
     list.add_css_class("boxed-list");
+    let refresh_button = gtk::Button::builder()
+        .icon_name("view-refresh-symbolic")
+        .tooltip_text("Check the backend manifest")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
     let backends_group = adw::PreferencesGroup::builder()
         .title("Available backends")
-        .description("Pinned builds. Use the refresh button to check the manifest for updates.")
+        .description(
+            "Compatible builds for this system. The refresh button checks the pinned manifest.",
+        )
+        .header_suffix(&refresh_button)
         .build();
     backends_group.add(&list);
     page.add(&backends_group);
@@ -208,21 +198,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         });
     }
 
-    let refresh_group = adw::PreferencesGroup::builder().title("Manifest").build();
-    let refresh_row = adw::ActionRow::builder()
-        .title("Check for updates")
-        .subtitle("Fetch the pinned backend manifest")
-        .build();
-    let refresh_button = gtk::Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Check the backend manifest")
-        .valign(gtk::Align::Center)
-        .css_classes(["flat"])
-        .build();
-    refresh_row.add_suffix(&refresh_button);
-    refresh_group.add(&refresh_row);
-    page.add(&refresh_group);
-
     {
         let ui = ui.clone();
         let status = status.clone();
@@ -264,13 +239,19 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                         refresh();
                     }
                     Ok(Err(error)) => {
-                        status.set_text(&error);
+                        status.set_text(
+                            "Remote manifest unavailable; keeping the current backend list.",
+                        );
                         ui.toast.add_toast(adw::Toast::new(&format!(
-                            "Could not fetch the backend manifest: {error}"
+                            "Could not fetch the backend manifest; keeping the pinned list ({error})"
                         )));
+                        refresh();
                     }
                     Err(_) => {
-                        status.set_text("Manifest request stopped.");
+                        status.set_text(
+                            "Manifest request stopped; keeping the current backend list.",
+                        );
+                        refresh();
                     }
                 }
             });
@@ -300,11 +281,46 @@ fn rebuild(
     let server = config.sd_server.clone();
     let backend = config.backend.clone();
     drop(config);
-    active_row.set_subtitle(&match (server, backend) {
+    active_row.set_subtitle(&match (server.clone(), backend.clone()) {
         (Some(path), Some(backend)) => format!("{} · {backend}", path.display()),
         (Some(path), None) => path.display().to_string(),
         (None, _) => "Auto-detected".into(),
     });
+
+    if let Some(path) = runtime::find_system_server()
+        && runtime::server_works(&path)
+    {
+        let active =
+            server.as_deref() == Some(path.as_path()) || (server.is_none() && active_id.is_none());
+        let subtitle = if active {
+            format!("{} · active", path.display())
+        } else {
+            path.display().to_string()
+        };
+        let row = adw::ActionRow::builder()
+            .title("System backend")
+            .subtitle(subtitle)
+            .tooltip_text("sd-server installed by the system")
+            .build();
+        if !active {
+            let button = gtk::Button::builder()
+                .icon_name("object-select-symbolic")
+                .tooltip_text("Use the system backend")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            let ui = ui.clone();
+            let status = status.clone();
+            let refresh = refresh.clone();
+            let path = path.clone();
+            button.connect_clicked(move |_| {
+                set_custom_server(&ui, path.clone(), None, None, &status);
+                refresh();
+            });
+            row.add_suffix(&button);
+        }
+        list.append(&row);
+    }
 
     let entries = manifest.borrow().backends.clone();
     for entry in entries {
@@ -315,6 +331,9 @@ fn rebuild(
         let active = active_id.as_deref() == Some(entry.id.as_str());
         let compatibility = hardware.compatibility(&entry);
         let available = entry.is_available();
+        if !installed && (!available || compatibility.is_some()) {
+            continue;
+        }
 
         let mut parts = vec![format_size(entry.size), entry.kind.label().to_string()];
         if !available {
@@ -326,6 +345,9 @@ fn rebuild(
             }
             if installed_version != entry.version && available {
                 parts.push("update available".into());
+            }
+            if let Some(reason) = &compatibility {
+                parts.push(reason.clone());
             }
         } else if let Some(reason) = &compatibility {
             parts.push(reason.clone());

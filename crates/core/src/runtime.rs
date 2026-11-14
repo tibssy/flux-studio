@@ -265,6 +265,9 @@ pub fn system_server_candidates() -> Vec<PathBuf> {
         candidates.push(dir.join("../libexec/flux-studio/sd-server"));
     }
     candidates.push(PathBuf::from("/usr/lib/flux-studio/sd-server"));
+    candidates.push(PathBuf::from("/usr/lib/sd-server"));
+    candidates.push(PathBuf::from("/usr/lib64/sd-server"));
+    candidates.push(PathBuf::from("/usr/libexec/sd-server"));
     candidates.push(PathBuf::from("/usr/local/lib/flux-studio/sd-server"));
     candidates.push(PathBuf::from("/usr/local/bin/sd-server"));
     candidates.push(PathBuf::from("/usr/bin/sd-server"));
@@ -280,6 +283,16 @@ pub fn find_system_server() -> Option<PathBuf> {
         .into_iter()
         .find(|path| path.is_file())
         .or_else(|| find_in_path("sd-server"))
+}
+
+/// Check that a server binary can at least load its shared libraries.
+pub fn server_works(path: &Path) -> bool {
+    path.is_file()
+        && std::process::Command::new(path)
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
 }
 
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
