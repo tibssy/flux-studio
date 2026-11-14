@@ -223,6 +223,7 @@ pub async fn download_backend(
         id: entry.id.clone(),
         version: entry.version.clone(),
         kind: entry.kind,
+        size: entry.size,
         installed_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)

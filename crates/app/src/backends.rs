@@ -353,29 +353,61 @@ fn rebuild(
             continue;
         }
 
-        let mut parts = vec![format_size(entry.size), entry.kind.label().to_string()];
-        if !available {
-            parts.push("not published yet".into());
-        } else if installed {
-            parts.push(format!("installed {}", short_version(&installed_version)));
-            if active {
-                parts.push("active".into());
+        let installed_info = entry.installed_info(&runtime::backends_dir());
+        let installed_size = installed_info
+            .as_ref()
+            .map(|marker| marker.size)
+            .filter(|size| *size > 0)
+            .unwrap_or(entry.size);
+        let update_available = installed && installed_version != entry.version && available;
+        let previous = previous_info(&entry);
+        let previous_available = previous_dir(&entry).join("sd-server").is_file();
+
+        let mut subtitle = if installed {
+            if update_available {
+                format!(
+                    "Installed {} · {} | Available {} · {}",
+                    short_version(&installed_version),
+                    format_size(installed_size),
+                    short_version(&entry.version),
+                    format_size(entry.size)
+                )
+            } else {
+                format!(
+                    "Installed {} · {} · {}",
+                    short_version(&installed_version),
+                    format_size(installed_size),
+                    entry.kind.label()
+                )
             }
-            if installed_version != entry.version && available {
-                parts.push("update available".into());
-            }
-            if let Some(reason) = &compatibility {
-                parts.push(reason.clone());
-            }
-        } else if let Some(reason) = &compatibility {
-            parts.push(reason.clone());
+        } else if available {
+            format!(
+                "{} · {} · {}",
+                format_size(entry.size),
+                entry.kind.label(),
+                compatibility
+                    .clone()
+                    .unwrap_or_else(|| "ready to download".into())
+            )
         } else {
-            parts.push("ready to download".into());
+            format!("{} · not published yet", entry.kind.label())
+        };
+        if active {
+            subtitle.push_str(" · active");
+        }
+        if let Some(previous) = &previous {
+            subtitle.push_str(&format!(
+                " · rollback: {}",
+                short_version(&previous.version)
+            ));
+        }
+        if installed && let Some(reason) = &compatibility {
+            subtitle.push_str(&format!(" · {reason}"));
         }
 
         let row = adw::ActionRow::builder()
             .title(&entry.label)
-            .subtitle(parts.join(" · "))
+            .subtitle(subtitle)
             .build();
         if let Some(notes) = &entry.notes {
             row.set_tooltip_text(Some(notes));
@@ -389,6 +421,23 @@ fn rebuild(
             .css_classes(["flat"])
             .visible(installed && !active)
             .build();
+        let rollback = gtk::Button::builder()
+            .label("Rollback")
+            .tooltip_text(
+                previous
+                    .as_ref()
+                    .map(|previous| {
+                        format!(
+                            "Restore the previous version {}",
+                            short_version(&previous.version)
+                        )
+                    })
+                    .unwrap_or_else(|| "Restore the previous backend".into()),
+            )
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .visible(previous_available)
+            .build();
         let set_active = gtk::Button::builder()
             .icon_name("object-select-symbolic")
             .tooltip_text("Use this backend")
@@ -397,16 +446,11 @@ fn rebuild(
             .visible(installed && !active && compatibility.is_none())
             .build();
         let update = gtk::Button::builder()
-            .icon_name("software-update-available-symbolic")
-            .tooltip_text("Update this backend")
+            .label("Update")
+            .tooltip_text("Download the available version")
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
-            .visible(
-                installed
-                    && installed_version != entry.version
-                    && available
-                    && compatibility.is_none(),
-            )
+            .visible(update_available && compatibility.is_none())
             .build();
         let download = gtk::Button::builder()
             .icon_name("document-save-symbolic")
@@ -417,12 +461,14 @@ fn rebuild(
             .build();
         buttons.push(download.clone());
         buttons.push(update.clone());
+        buttons.push(rollback.clone());
         buttons.push(set_active.clone());
         buttons.push(delete.clone());
         row.add_suffix(&delete);
         row.add_suffix(&set_active);
-        row.add_suffix(&update);
         row.add_suffix(&download);
+        row.add_suffix(&rollback);
+        row.add_suffix(&update);
         list.append(&row);
 
         {
@@ -441,6 +487,16 @@ fn rebuild(
             let refresh = refresh.clone();
             delete.connect_clicked(move |_| {
                 confirm_remove(&ui, &entry, refresh.clone());
+            });
+        }
+        {
+            let ui = ui.clone();
+            let entry = entry.clone();
+            let status = status.clone();
+            let refresh = refresh.clone();
+            rollback.connect_clicked(move |_| {
+                rollback_entry(&ui, &entry, &status);
+                refresh();
             });
         }
         for button in [&download, &update] {
@@ -475,6 +531,39 @@ fn start_install(
     buttons: Vec<gtk::Button>,
     auto_activate: bool,
 ) {
+    if ui.backend_installing.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("A backend download is already running."));
+        return;
+    }
+    let backends_dir = runtime::backends_dir();
+    let install_dir = entry.install_dir(&backends_dir);
+    let backup = previous_dir(entry);
+    let is_update = entry.is_installed(&backends_dir)
+        && entry.installed_version(&backends_dir).as_deref() != Some(entry.version.as_str());
+    if is_update {
+        if ui.generating.get() || ui.upscaling.get() {
+            ui.toast
+                .add_toast(adw::Toast::new("Wait for the current image to finish."));
+            return;
+        }
+        ui.backend.unload();
+        if backup.exists()
+            && let Err(error) = std::fs::remove_dir_all(&backup)
+        {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Could not replace the previous backend: {error}"
+            )));
+            return;
+        }
+        if let Err(error) = std::fs::rename(&install_dir, &backup) {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Could not keep the previous backend: {error}"
+            )));
+            return;
+        }
+    }
+
     for button in &buttons {
         button.set_sensitive(false);
     }
@@ -508,6 +597,8 @@ fn start_install(
     let progress_done = progress.clone();
     let status_done = status.clone();
     let refresh_done = refresh.clone();
+    let install_dir_done = install_dir.clone();
+    let backup_done = backup.clone();
     let on_done: Rc<dyn Fn(Result<PathBuf, String>)> = Rc::new(move |result| {
         progress_done.set_visible(false);
         match result {
@@ -521,6 +612,12 @@ fn start_install(
                 }
             }
             Err(error) => {
+                if is_update {
+                    let _ = std::fs::remove_dir_all(&install_dir_done);
+                    if backup_done.is_dir() {
+                        let _ = std::fs::rename(&backup_done, &install_dir_done);
+                    }
+                }
                 status_done.set_text(&format!("Install failed: {error}"));
                 ui_done
                     .toast
@@ -695,6 +792,57 @@ fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static)
         set_custom_server(&ui, path, None, None, &status);
         on_done();
     });
+}
+
+fn previous_dir(entry: &BackendEntry) -> PathBuf {
+    runtime::backends_dir().join(format!("{}.previous", entry.id))
+}
+
+fn previous_info(entry: &BackendEntry) -> Option<flux_core::runtime::InstalledBackend> {
+    runtime::read_installed(&previous_dir(entry).join("installed.json"))
+}
+
+fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry, status: &gtk::Label) {
+    if ui.generating.get() || ui.upscaling.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("Wait for the current image to finish."));
+        return;
+    }
+    if ui.backend_installing.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("A backend download is already running."));
+        return;
+    }
+    let install_dir = entry.install_dir(&runtime::backends_dir());
+    let backup = previous_dir(entry);
+    if !backup.join("sd-server").is_file() {
+        ui.toast
+            .add_toast(adw::Toast::new("No previous backend is available."));
+        return;
+    }
+    let version = previous_info(entry)
+        .map(|marker| short_version(&marker.version).to_string())
+        .unwrap_or_else(|| "previous version".into());
+    ui.backend.unload();
+    if install_dir.exists()
+        && let Err(error) = std::fs::remove_dir_all(&install_dir)
+    {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Could not replace the current backend: {error}"
+        )));
+        return;
+    }
+    if let Err(error) = std::fs::rename(&backup, &install_dir) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Could not restore the previous backend: {error}"
+        )));
+        return;
+    }
+    status.set_text(&format!("{} rolled back to {version}.", entry.label));
+    ui.toast.add_toast(adw::Toast::new(&format!(
+        "{} rolled back to {version}.",
+        entry.label
+    )));
 }
 
 fn format_size(bytes: u64) -> String {

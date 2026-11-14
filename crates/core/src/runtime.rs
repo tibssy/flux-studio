@@ -74,10 +74,12 @@ impl BackendEntry {
         self.server_path(root).is_file()
     }
 
+    pub fn installed_info(&self, root: &Path) -> Option<InstalledBackend> {
+        read_installed(&self.marker_path(root))
+    }
+
     pub fn installed_version(&self, root: &Path) -> Option<String> {
-        let text = std::fs::read_to_string(self.marker_path(root)).ok()?;
-        let marker: InstalledBackend = serde_json::from_str(&text).ok()?;
-        Some(marker.version)
+        self.installed_info(root).map(|marker| marker.version)
     }
 
     pub fn is_available(&self) -> bool {
@@ -99,6 +101,14 @@ pub struct InstalledBackend {
     pub version: String,
     pub kind: BackendKind,
     pub installed_at: i64,
+    /// Archive size, used for the installed/available display.
+    #[serde(default)]
+    pub size: u64,
+}
+
+pub fn read_installed(path: &Path) -> Option<InstalledBackend> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
