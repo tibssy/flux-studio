@@ -309,7 +309,7 @@ fn rebuild(
             .tooltip_text("sd-server installed by the system")
             .build();
         if active {
-            row.add_suffix(&active_label());
+            row.add_suffix(&active_icon());
         } else {
             let button = gtk::Button::builder()
                 .icon_name("object-select-symbolic")
@@ -457,7 +457,7 @@ fn rebuild(
         row.add_suffix(&rollback);
         row.add_suffix(&update);
         if active {
-            row.add_suffix(&active_label());
+            row.add_suffix(&active_icon());
         }
         list.append(&row);
 
@@ -542,7 +542,7 @@ fn rebuild(
     custom_row.add_suffix(&choose);
     if let Some(path) = custom {
         if custom_active {
-            custom_row.add_suffix(&active_label());
+            custom_row.add_suffix(&active_icon());
         } else if path.is_file() {
             let button = gtk::Button::builder()
                 .icon_name("object-select-symbolic")
@@ -840,11 +840,10 @@ fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static)
     });
 }
 
-fn active_label() -> gtk::Label {
-    gtk::Label::builder()
-        .label("active")
-        .css_classes(["active-backend-label"])
-        .build()
+fn active_icon() -> gtk::Image {
+    let icon = gtk::Image::from_icon_name("object-select-symbolic");
+    icon.add_css_class("active-backend-icon");
+    icon
 }
 
 fn previous_dir(entry: &BackendEntry) -> PathBuf {
