@@ -50,9 +50,11 @@ The resulting archives contain `sd-server`, `sd-cli` and their libraries. They
 link against the host's matching `libcudart.so.N`; the CUDA runtime is not
 bundled.
 
-After publishing a release, update the `cuda12` and `cuda13` entries with the
-archive URL, SHA-256 and size. Keep `version` in sync with the pinned upstream
-commit so update detection works.
+The workflow publishes `sd-cuda12-linux-x86_64.zip` and
+`sd-cuda13-linux-x86_64.zip` (plus a small JSON file with the SHA-256 and size)
+to the release tag passed as `release_tag`. After publishing a release, update
+the `cuda12` and `cuda13` entries with the archive URL, SHA-256 and size. Keep
+`version` in sync with the pinned upstream commit so update detection works.
 
 CUDA 13 may not support Maxwell (`sm_52`). The app checks `compute_cap` against
 the entry's `archs` before offering the build.
