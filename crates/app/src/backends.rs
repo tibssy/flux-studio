@@ -272,37 +272,45 @@ fn rebuild(
     }
 
     let system_path = runtime::find_system_server();
-    let config = ui.config.borrow();
-    let active_id = config.backend_id.clone();
-    let server = config.sd_server.clone();
-    let custom = config.custom_server.clone().or_else(|| {
-        if config.backend_id.is_none() && config.sd_server.as_deref() != system_path.as_deref() {
-            config.sd_server.clone()
-        } else {
-            None
+    let (active_id, server, custom, custom_active) = {
+        let config = ui.config.borrow();
+        let mut custom = config.custom_server.clone();
+        if custom.is_none()
+            && config.backend_id.is_none()
+            && config.sd_server.as_deref() != system_path.as_deref()
+        {
+            custom = config.sd_server.clone();
         }
-    });
-    let custom_active = custom.as_deref().is_some_and(|path| {
-        config.backend_id.is_none() && config.sd_server.as_deref() == Some(path)
-    });
-    drop(config);
+        let custom_active = custom.as_deref().is_some_and(|path| {
+            config.backend_id.is_none() && config.sd_server.as_deref() == Some(path)
+        });
+        (
+            config.backend_id.clone(),
+            config.sd_server.clone(),
+            custom,
+            custom_active,
+        )
+    };
+    if custom.is_some() && ui.config.borrow().custom_server.is_none() {
+        let mut config = ui.config.borrow_mut();
+        config.custom_server = custom.clone();
+        let _ = config.save();
+    }
 
     if let Some(path) = &system_path
         && runtime::server_works(path)
     {
         let active =
             server.as_deref() == Some(path.as_path()) || (server.is_none() && active_id.is_none());
-        let subtitle = if active {
-            format!("{} · active", path.display())
-        } else {
-            path.display().to_string()
-        };
+        let subtitle = path.display().to_string();
         let row = adw::ActionRow::builder()
             .title("System backend")
             .subtitle(subtitle)
             .tooltip_text("sd-server installed by the system")
             .build();
-        if !active {
+        if active {
+            row.add_suffix(&active_label());
+        } else {
             let button = gtk::Button::builder()
                 .icon_name("object-select-symbolic")
                 .tooltip_text("Use the system backend")
@@ -320,7 +328,6 @@ fn rebuild(
             row.add_suffix(&button);
         }
         list.append(&row);
-        mark_active(&row, active);
     }
 
     let entries = manifest.borrow().backends.clone();
@@ -375,9 +382,6 @@ fn rebuild(
         } else {
             format!("{} · not published yet", entry.kind.label())
         };
-        if active {
-            subtitle.push_str(" · active");
-        }
         if let Some(previous) = &previous {
             subtitle.push_str(&format!(
                 " · rollback: {}",
@@ -452,8 +456,10 @@ fn rebuild(
         row.add_suffix(&download);
         row.add_suffix(&rollback);
         row.add_suffix(&update);
+        if active {
+            row.add_suffix(&active_label());
+        }
         list.append(&row);
-        mark_active(&row, active);
 
         {
             let ui = ui.clone();
@@ -510,9 +516,6 @@ fn rebuild(
         .subtitle(match &custom {
             Some(path) => {
                 let mut subtitle = path.display().to_string();
-                if custom_active {
-                    subtitle.push_str(" · active");
-                }
                 if !path.is_file() {
                     subtitle.push_str(" · missing");
                 }
@@ -554,23 +557,21 @@ fn rebuild(
             let status = status.clone();
             let refresh = refresh.clone();
             button.connect_clicked(move |_| {
+                {
+                    let mut config = ui.config.borrow_mut();
+                    config.custom_server = Some(path.clone());
+                    let _ = config.save();
+                }
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
         }
         custom_row.add_suffix(&button);
+        if custom_active {
+            custom_row.add_suffix(&active_label());
+        }
     }
     list.append(&custom_row);
-    mark_active(&custom_row, custom_active);
-}
-
-fn mark_active(row: &adw::ActionRow, active: bool) {
-    if active
-        && let Some(parent) = row.parent()
-        && let Some(list_row) = parent.downcast_ref::<gtk::ListBoxRow>()
-    {
-        list_row.add_css_class("active-backend");
-    }
 }
 
 fn start_install(
@@ -843,6 +844,13 @@ fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static)
         set_custom_server(&ui, path, None, None, &status);
         on_done();
     });
+}
+
+fn active_label() -> gtk::Label {
+    gtk::Label::builder()
+        .label("active")
+        .css_classes(["active-backend-label"])
+        .build()
 }
 
 fn previous_dir(entry: &BackendEntry) -> PathBuf {

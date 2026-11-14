@@ -179,8 +179,9 @@ fn install_styles() {
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
          }
-         .active-backend {
-             box-shadow: inset 3px 0 0 @accent_bg_color;
+         .active-backend-label {
+             color: @accent_bg_color;
+             font-weight: 600;
          }",
     );
     gtk::style_context_add_provider_for_display(
