@@ -308,26 +308,18 @@ fn rebuild(
             .subtitle(subtitle)
             .tooltip_text("sd-server installed by the system")
             .build();
-        let check = if active {
-            active_icon().upcast::<gtk::Widget>()
-        } else {
-            let button = gtk::Button::builder()
-                .icon_name("object-select-symbolic")
-                .tooltip_text("Use the system backend")
-                .valign(gtk::Align::Center)
-                .css_classes(["flat"])
-                .build();
+        let check = check_button(active, "Use the system backend");
+        if !active {
             let ui = ui.clone();
             let status = status.clone();
             let refresh = refresh.clone();
             let path = path.clone();
-            button.connect_clicked(move |_| {
+            check.connect_clicked(move |_| {
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
-            button.upcast::<gtk::Widget>()
-        };
-        row.add_suffix(&check_slot(Some(check)));
+        }
+        row.add_suffix(&check_slot(Some(check.upcast::<gtk::Widget>())));
         list.append(&row);
     }
 
@@ -426,13 +418,7 @@ fn rebuild(
             .css_classes(["flat"])
             .visible(previous_available)
             .build();
-        let set_active = gtk::Button::builder()
-            .icon_name("object-select-symbolic")
-            .tooltip_text("Use this backend")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .visible(installed && !active && compatibility.is_none())
-            .build();
+        let check = check_button(active, "Use this backend");
         let update = gtk::Button::builder()
             .icon_name("software-update-available-symbolic")
             .tooltip_text(format!("Update to {}", short_version(&entry.version)))
@@ -450,30 +436,27 @@ fn rebuild(
         buttons.push(download.clone());
         buttons.push(update.clone());
         buttons.push(rollback.clone());
-        buttons.push(set_active.clone());
+        buttons.push(check.clone());
         buttons.push(delete.clone());
         row.add_suffix(&delete);
         row.add_suffix(&download);
         row.add_suffix(&rollback);
         row.add_suffix(&update);
         if installed {
-            let check = if active {
-                Some(active_icon().upcast::<gtk::Widget>())
-            } else if compatibility.is_none() {
-                Some(set_active.clone().upcast::<gtk::Widget>())
+            if active || compatibility.is_none() {
+                row.add_suffix(&check_slot(Some(check.clone().upcast::<gtk::Widget>())));
             } else {
-                None
-            };
-            row.add_suffix(&check_slot(check));
+                row.add_suffix(&check_slot(None));
+            }
         }
         list.append(&row);
 
-        {
+        if !active && compatibility.is_none() {
             let ui = ui.clone();
             let entry = entry.clone();
             let status = status.clone();
             let refresh = refresh.clone();
-            set_active.connect_clicked(move |_| {
+            check.connect_clicked(move |_| {
                 activate_entry(&ui, &entry, &status);
                 refresh();
             });
@@ -548,14 +531,9 @@ fn rebuild(
     }
     custom_row.add_suffix(&choose);
     let check = match custom {
-        Some(_) if custom_active => Some(active_icon().upcast::<gtk::Widget>()),
+        Some(_) if custom_active => Some(check_button(true, "Active custom backend")),
         Some(path) if path.is_file() => {
-            let button = gtk::Button::builder()
-                .icon_name("object-select-symbolic")
-                .tooltip_text("Use this custom backend")
-                .valign(gtk::Align::Center)
-                .css_classes(["flat"])
-                .build();
+            let button = check_button(false, "Use this custom backend");
             let ui = ui.clone();
             let status = status.clone();
             let refresh = refresh.clone();
@@ -568,11 +546,18 @@ fn rebuild(
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
-            Some(button.upcast::<gtk::Widget>())
+            Some(button)
         }
-        _ => None,
+        Some(_) => {
+            let button = check_button(false, "Custom backend is missing");
+            button.set_sensitive(false);
+            Some(button)
+        }
+        None => None,
     };
-    custom_row.add_suffix(&check_slot(check));
+    custom_row.add_suffix(&check_slot(
+        check.map(|button| button.upcast::<gtk::Widget>()),
+    ));
     list.append(&custom_row);
 }
 
@@ -859,10 +844,18 @@ fn check_slot(content: Option<gtk::Widget>) -> gtk::Box {
     slot
 }
 
-fn active_icon() -> gtk::Image {
-    let icon = gtk::Image::from_icon_name("object-select-symbolic");
-    icon.add_css_class("active-backend-icon");
-    icon
+fn check_button(active: bool, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name("object-select-symbolic")
+        .tooltip_text(tooltip)
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    if active {
+        button.add_css_class("active-backend-icon");
+        button.set_sensitive(false);
+    }
+    button
 }
 
 fn previous_dir(entry: &BackendEntry) -> PathBuf {

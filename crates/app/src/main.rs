@@ -179,8 +179,10 @@ fn install_styles() {
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
          }
-         .active-backend-icon {
+         button.active-backend-icon,
+         button.active-backend-icon:disabled {
              color: @accent_bg_color;
+             opacity: 1;
          }",
     );
     gtk::style_context_add_provider_for_display(
