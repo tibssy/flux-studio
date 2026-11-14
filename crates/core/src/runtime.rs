@@ -800,6 +800,18 @@ mod tests {
     }
 
     #[test]
+    fn published_cuda_entries_are_available() {
+        let manifest = bundled_manifest();
+        let cuda12 = manifest.entry("cuda12").expect("cuda12 entry");
+        assert!(cuda12.is_available());
+        assert_eq!(cuda12.version, "master-1094-3bad892");
+        assert_eq!(cuda12.archs, vec![52, 61, 70]);
+        let cuda13 = manifest.entry("cuda13").expect("cuda13 entry");
+        assert!(cuda13.is_available());
+        assert_eq!(cuda13.version, "master-1094-3bad892");
+    }
+
+    #[test]
     fn archive_format_is_inferred_from_the_url() {
         let mut entry = bundled_manifest().backends[0].clone();
         entry.archive = None;
