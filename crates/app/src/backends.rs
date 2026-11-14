@@ -106,13 +106,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     );
     page.add(&hardware_group);
 
-    let active_group = adw::PreferencesGroup::builder()
-        .title("Active backend")
-        .build();
-    let active_row = adw::ActionRow::builder().title("Server").build();
-    active_group.add(&active_row);
-    page.add(&active_group);
-
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
     list.add_css_class("boxed-list");
@@ -172,7 +165,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         let progress = progress.clone();
         let status = status.clone();
         let refresh = refresh.clone();
-        let active_row = active_row.clone();
         Rc::new(move || {
             rebuild(
                 &ui,
@@ -181,7 +173,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 &hardware,
                 &progress,
                 &status,
-                &active_row,
                 refresh.clone(),
             );
         })
@@ -267,7 +258,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     page
 }
 
-#[allow(clippy::too_many_arguments)]
 fn rebuild(
     ui: &Rc<Ui>,
     list: &gtk::ListBox,
@@ -275,7 +265,6 @@ fn rebuild(
     hardware: &HardwareProfile,
     progress: &gtk::ProgressBar,
     status: &gtk::Label,
-    active_row: &adw::ActionRow,
     refresh: Rc<dyn Fn()>,
 ) {
     while let Some(child) = list.first_child() {
@@ -286,7 +275,6 @@ fn rebuild(
     let config = ui.config.borrow();
     let active_id = config.backend_id.clone();
     let server = config.sd_server.clone();
-    let backend = config.backend.clone();
     let custom = config.custom_server.clone().or_else(|| {
         if config.backend_id.is_none() && config.sd_server.as_deref() != system_path.as_deref() {
             config.sd_server.clone()
@@ -298,11 +286,6 @@ fn rebuild(
         config.backend_id.is_none() && config.sd_server.as_deref() == Some(path)
     });
     drop(config);
-    active_row.set_subtitle(&match (server.clone(), backend.clone()) {
-        (Some(path), Some(backend)) => format!("{} · {backend}", path.display()),
-        (Some(path), None) => path.display().to_string(),
-        (None, _) => "Auto-detected".into(),
-    });
 
     if let Some(path) = &system_path
         && runtime::server_works(path)
@@ -337,6 +320,7 @@ fn rebuild(
             row.add_suffix(&button);
         }
         list.append(&row);
+        mark_active(&row, active);
     }
 
     let entries = manifest.borrow().backends.clone();
@@ -469,6 +453,7 @@ fn rebuild(
         row.add_suffix(&rollback);
         row.add_suffix(&update);
         list.append(&row);
+        mark_active(&row, active);
 
         {
             let ui = ui.clone();
@@ -552,26 +537,40 @@ fn rebuild(
         });
     }
     custom_row.add_suffix(&choose);
-    if let Some(path) = custom
-        && !custom_active
-        && path.is_file()
-    {
+    if let Some(path) = custom {
         let button = gtk::Button::builder()
             .icon_name("object-select-symbolic")
-            .tooltip_text("Use this custom backend")
+            .tooltip_text(if custom_active {
+                "Active custom backend"
+            } else {
+                "Use this custom backend"
+            })
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
+            .sensitive(!custom_active && path.is_file())
             .build();
-        let ui = ui.clone();
-        let status = status.clone();
-        let refresh = refresh.clone();
-        button.connect_clicked(move |_| {
-            set_custom_server(&ui, path.clone(), None, None, &status);
-            refresh();
-        });
+        if !custom_active && path.is_file() {
+            let ui = ui.clone();
+            let status = status.clone();
+            let refresh = refresh.clone();
+            button.connect_clicked(move |_| {
+                set_custom_server(&ui, path.clone(), None, None, &status);
+                refresh();
+            });
+        }
         custom_row.add_suffix(&button);
     }
     list.append(&custom_row);
+    mark_active(&custom_row, custom_active);
+}
+
+fn mark_active(row: &adw::ActionRow, active: bool) {
+    if active
+        && let Some(parent) = row.parent()
+        && let Some(list_row) = parent.downcast_ref::<gtk::ListBoxRow>()
+    {
+        list_row.add_css_class("active-backend");
+    }
 }
 
 fn start_install(
