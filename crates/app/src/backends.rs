@@ -308,8 +308,8 @@ fn rebuild(
             .subtitle(subtitle)
             .tooltip_text("sd-server installed by the system")
             .build();
-        if active {
-            row.add_suffix(&active_icon());
+        let check = if active {
+            active_icon().upcast::<gtk::Widget>()
         } else {
             let button = gtk::Button::builder()
                 .icon_name("object-select-symbolic")
@@ -325,8 +325,9 @@ fn rebuild(
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
-            row.add_suffix(&button);
-        }
+            button.upcast::<gtk::Widget>()
+        };
+        row.add_suffix(&check_slot(Some(check)));
         list.append(&row);
     }
 
@@ -452,12 +453,18 @@ fn rebuild(
         buttons.push(set_active.clone());
         buttons.push(delete.clone());
         row.add_suffix(&delete);
-        row.add_suffix(&set_active);
         row.add_suffix(&download);
         row.add_suffix(&rollback);
         row.add_suffix(&update);
-        if active {
-            row.add_suffix(&active_icon());
+        if installed {
+            let check = if active {
+                Some(active_icon().upcast::<gtk::Widget>())
+            } else if compatibility.is_none() {
+                Some(set_active.clone().upcast::<gtk::Widget>())
+            } else {
+                None
+            };
+            row.add_suffix(&check_slot(check));
         }
         list.append(&row);
 
@@ -540,10 +547,9 @@ fn rebuild(
         });
     }
     custom_row.add_suffix(&choose);
-    if let Some(path) = custom {
-        if custom_active {
-            custom_row.add_suffix(&active_icon());
-        } else if path.is_file() {
+    let check = match custom {
+        Some(_) if custom_active => Some(active_icon().upcast::<gtk::Widget>()),
+        Some(path) if path.is_file() => {
             let button = gtk::Button::builder()
                 .icon_name("object-select-symbolic")
                 .tooltip_text("Use this custom backend")
@@ -562,9 +568,11 @@ fn rebuild(
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
-            custom_row.add_suffix(&button);
+            Some(button.upcast::<gtk::Widget>())
         }
-    }
+        _ => None,
+    };
+    custom_row.add_suffix(&check_slot(check));
     list.append(&custom_row);
 }
 
@@ -838,6 +846,17 @@ fn choose_server(ui: &Rc<Ui>, status: &gtk::Label, on_done: impl Fn() + 'static)
         set_custom_server(&ui, path, None, None, &status);
         on_done();
     });
+}
+
+fn check_slot(content: Option<gtk::Widget>) -> gtk::Box {
+    let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    slot.set_size_request(36, 36);
+    slot.set_halign(gtk::Align::Center);
+    slot.set_valign(gtk::Align::Center);
+    if let Some(widget) = content {
+        slot.append(&widget);
+    }
+    slot
 }
 
 fn active_icon() -> gtk::Image {
