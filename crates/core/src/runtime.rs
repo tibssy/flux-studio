@@ -119,6 +119,74 @@ impl BackendManifest {
         Ok(manifest)
     }
 
+    /// Parse a remote manifest entry-by-entry so one corrupt backend does not
+    /// discard the valid ones.
+    pub fn parse_lenient(text: &str) -> anyhow::Result<(Self, Vec<String>)> {
+        let value: serde_json::Value = serde_json::from_str(text)?;
+        let schema_version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        anyhow::ensure!(
+            schema_version == 1,
+            "unsupported backend manifest schema {schema_version}"
+        );
+        let generated_at = value
+            .get("generated_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let Some(items) = value.get("backends").and_then(serde_json::Value::as_array) else {
+            anyhow::bail!("manifest has no backends array");
+        };
+
+        let mut backends = Vec::new();
+        let mut errors = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let mut entry: BackendEntry = match serde_json::from_value(item.clone()) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    errors.push(format!("entry {index}: {error}"));
+                    continue;
+                }
+            };
+            entry.url = entry.url.trim().to_string();
+            entry.sha256 = entry.sha256.trim().to_ascii_lowercase();
+            if let Err(error) = validate_entry(&entry) {
+                errors.push(format!("entry {index} ({}): {error}", entry.id));
+                continue;
+            }
+            backends.push(entry);
+        }
+
+        Ok((
+            Self {
+                schema_version: 1,
+                generated_at,
+                backends,
+            },
+            errors,
+        ))
+    }
+
+    /// Overlay valid remote entries on the pinned list. Entries that were
+    /// skipped during parsing keep their pinned version.
+    pub fn merge(base: &Self, overlay: &Self) -> Self {
+        let mut backends = base.backends.clone();
+        for entry in &overlay.backends {
+            if let Some(existing) = backends.iter_mut().find(|existing| existing.id == entry.id) {
+                *existing = entry.clone();
+            } else {
+                backends.push(entry.clone());
+            }
+        }
+        Self {
+            schema_version: 1,
+            generated_at: overlay.generated_at.clone(),
+            backends,
+        }
+    }
+
     pub fn entry(&self, id: &str) -> Option<&BackendEntry> {
         self.backends.iter().find(|entry| entry.id == id)
     }
@@ -128,6 +196,28 @@ impl BackendManifest {
             .iter()
             .find(|entry| entry.kind == BackendKind::Cpu && entry.is_available())
     }
+}
+
+fn validate_entry(entry: &BackendEntry) -> anyhow::Result<()> {
+    anyhow::ensure!(!entry.id.trim().is_empty(), "empty id");
+    anyhow::ensure!(!entry.label.trim().is_empty(), "empty label");
+    anyhow::ensure!(!entry.version.trim().is_empty(), "empty version");
+
+    let has_url = !entry.url.is_empty();
+    let has_checksum = !entry.sha256.is_empty();
+    let has_size = entry.size > 0;
+    if has_url || has_checksum || has_size {
+        anyhow::ensure!(
+            entry.url.starts_with("https://") || entry.url.starts_with("http://"),
+            "invalid download URL"
+        );
+        anyhow::ensure!(
+            entry.sha256.len() == 64 && entry.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid SHA-256"
+        );
+        anyhow::ensure!(entry.size > 0, "missing archive size");
+    }
+    Ok(())
 }
 
 pub fn bundled_manifest() -> BackendManifest {
@@ -513,6 +603,83 @@ mod tests {
         assert!(entry.supports_archs(Some(52)));
         assert!(!entry.supports_archs(Some(89)));
         assert!(!entry.supports_archs(None));
+    }
+
+    #[test]
+    fn lenient_parse_skips_only_bad_entries() {
+        let manifest = r#"{
+            "schema_version": 1,
+            "generated_at": "test",
+            "backends": [
+                {"id":"cpu","label":"CPU","kind":"cpu","version":"v1","url":"https://example.com/cpu.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":10},
+                {"id":"bad","label":"Bad","kind":"vulkan","version":"v1","url":"not-a-url","sha256":"zz","size":10},
+                {"id":"cuda","label":"CUDA","kind":"cuda","version":"unpublished","url":"","sha256":"","size":0}
+            ]
+        }"#;
+        let (manifest, errors) = BackendManifest::parse_lenient(manifest).unwrap();
+        assert_eq!(manifest.backends.len(), 2);
+        assert_eq!(errors.len(), 1);
+        assert!(manifest.entry("cpu").is_some());
+        assert!(manifest.entry("bad").is_none());
+        assert!(manifest.entry("cuda").is_some());
+    }
+
+    #[test]
+    fn merge_keeps_pinned_entries_and_adds_new_ones() {
+        let base = BackendManifest {
+            schema_version: 1,
+            generated_at: "base".into(),
+            backends: vec![BackendEntry {
+                id: "cpu".into(),
+                label: "CPU".into(),
+                kind: BackendKind::Cpu,
+                version: "old".into(),
+                url: "https://example.com/old.zip".into(),
+                sha256: "a".repeat(64),
+                size: 1,
+                backend: Some("cpu".into()),
+                cuda_major: None,
+                rocm_major: None,
+                archs: vec![],
+                requires: vec![],
+                min_glibc: None,
+                strip_prefix: None,
+                notes: None,
+            }],
+        };
+        let overlay = BackendManifest {
+            schema_version: 1,
+            generated_at: "remote".into(),
+            backends: vec![
+                BackendEntry {
+                    version: "new".into(),
+                    url: "https://example.com/new.zip".into(),
+                    sha256: "b".repeat(64),
+                    ..base.backends[0].clone()
+                },
+                BackendEntry {
+                    id: "vulkan".into(),
+                    label: "Vulkan".into(),
+                    kind: BackendKind::Vulkan,
+                    version: "new".into(),
+                    url: "https://example.com/vk.zip".into(),
+                    sha256: "c".repeat(64),
+                    size: 1,
+                    backend: Some("vulkan0".into()),
+                    cuda_major: None,
+                    rocm_major: None,
+                    archs: vec![],
+                    requires: vec![],
+                    min_glibc: None,
+                    strip_prefix: None,
+                    notes: None,
+                },
+            ],
+        };
+        let merged = BackendManifest::merge(&base, &overlay);
+        assert_eq!(merged.backends.len(), 2);
+        assert_eq!(merged.entry("cpu").unwrap().version, "new");
+        assert!(merged.entry("vulkan").is_some());
     }
 
     #[test]

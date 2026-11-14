@@ -212,9 +212,10 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 .backend_manifest_url
                 .clone()
                 .unwrap_or_else(|| runtime::DEFAULT_MANIFEST_URL.to_string());
-            let (tx, rx) = async_channel::bounded::<Result<BackendManifest, String>>(1);
+            let (tx, rx) =
+                async_channel::bounded::<Result<(BackendManifest, Vec<String>), String>>(1);
             std::thread::spawn(move || {
-                let result = (|| -> anyhow::Result<BackendManifest> {
+                let result = (|| -> anyhow::Result<(BackendManifest, Vec<String>)> {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
@@ -231,11 +232,28 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 let result = rx.recv().await;
                 button.set_sensitive(true);
                 match result {
-                    Ok(Ok(new_manifest)) => {
-                        *manifest.borrow_mut() = new_manifest;
-                        status.set_text("Backend manifest updated.");
-                        ui.toast
-                            .add_toast(adw::Toast::new("Backend manifest updated."));
+                    Ok(Ok((remote, errors))) => {
+                        let merged = {
+                            let base = manifest.borrow();
+                            BackendManifest::merge(&base, &remote)
+                        };
+                        *manifest.borrow_mut() = merged;
+                        if errors.is_empty() {
+                            status.set_text("Backend manifest updated.");
+                            ui.toast
+                                .add_toast(adw::Toast::new("Backend manifest updated."));
+                        } else {
+                            status.set_text(&format!(
+                                "Manifest updated; skipped {} invalid backend entr{}.",
+                                errors.len(),
+                                if errors.len() == 1 { "y" } else { "ies" }
+                            ));
+                            ui.toast.add_toast(adw::Toast::new(&format!(
+                                "Manifest updated; skipped {} invalid entr{}.",
+                                errors.len(),
+                                if errors.len() == 1 { "y" } else { "ies" }
+                            )));
+                        }
                         refresh();
                     }
                     Ok(Err(error)) => {

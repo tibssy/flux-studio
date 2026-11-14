@@ -377,8 +377,10 @@ fn sha256_file(path: &Path) -> Result<String> {
         .collect())
 }
 
-/// Fetch and parse the backend manifest.
-pub async fn fetch_manifest(url: &str) -> Result<flux_core::runtime::BackendManifest> {
+/// Fetch and parse the backend manifest, skipping individual corrupt entries.
+pub async fn fetch_manifest(
+    url: &str,
+) -> Result<(flux_core::runtime::BackendManifest, Vec<String>)> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
         .build()?;
@@ -395,7 +397,7 @@ pub async fn fetch_manifest(url: &str) -> Result<flux_core::runtime::BackendMani
         );
     }
     let text = response.text().await?;
-    flux_core::runtime::BackendManifest::parse(&text)
+    flux_core::runtime::BackendManifest::parse_lenient(&text)
 }
 
 #[cfg(test)]
