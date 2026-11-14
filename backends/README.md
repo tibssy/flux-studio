@@ -43,8 +43,8 @@ The archives include `sd-server`, `sd-cli`, their shared libraries and use
 Upstream does not publish Linux CUDA archives. Run the manual
 `.github/workflows/build-backends.yml` workflow. It builds:
 
-- CUDA 12.8.1 on Ubuntu 22.04, architectures `52;61;70;75;80;86;89;90`
-- CUDA 13.0 on Ubuntu 24.04, architectures `75;80;86;89;90;100;120`
+- CUDA 12.8.1 on Ubuntu 22.04, architectures `52;61;70` (Maxwell, Pascal, Volta)
+- CUDA 13.0 on Ubuntu 24.04, architectures `75;80;86;89;90;100;120` (Turing and newer)
 
 The resulting archives contain `sd-server`, `sd-cli` and their libraries. They
 link against the host's matching `libcudart.so.N`; the CUDA runtime is not
