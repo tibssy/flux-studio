@@ -40,6 +40,7 @@ jobs:
           repository: leejet/stable-diffusion.cpp
           ref: 3bad89267b780b320a40f34d3a0b2d70e3005bba
           path: sd
+          submodules: recursive
 
       - name: Install build tools
         run: |
