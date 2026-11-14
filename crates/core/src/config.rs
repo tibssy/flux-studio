@@ -35,6 +35,8 @@ pub struct Config {
     pub backend: Option<String>,
     /// Optional override for the backend manifest URL.
     pub backend_manifest_url: Option<String>,
+    /// Custom `sd-server` selected in Preferences but not necessarily active.
+    pub custom_server: Option<PathBuf>,
     /// Optional override for the `llama-cli` binary used to improve prompts.
     pub prompt_helper_cli: Option<PathBuf>,
     /// Optional GGUF used for prompt improvement; defaults to the active
@@ -62,6 +64,7 @@ impl Default for Config {
             backend_id: None,
             backend: None,
             backend_manifest_url: None,
+            custom_server: None,
             prompt_helper_cli: None,
             prompt_helper_model: None,
         }
@@ -110,6 +113,7 @@ mod tests {
         assert!(config.backend_id.is_none());
         assert!(config.backend.is_none());
         assert!(config.backend_manifest_url.is_none());
+        assert!(config.custom_server.is_none());
         assert!(config.prompt_helper_cli.is_none());
         assert!(config.prompt_helper_model.is_none());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);

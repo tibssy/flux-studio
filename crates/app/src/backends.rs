@@ -154,20 +154,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     download_group.add(&download_box);
     page.add(&download_group);
 
-    let custom_group = adw::PreferencesGroup::builder().title("Custom").build();
-    let custom_row = adw::ActionRow::builder()
-        .title("Custom server binary")
-        .subtitle("Use an sd-server you installed yourself")
-        .build();
-    let choose = gtk::Button::builder()
-        .label("Choose…")
-        .valign(gtk::Align::Center)
-        .css_classes(["flat"])
-        .build();
-    custom_row.add_suffix(&choose);
-    custom_group.add(&custom_row);
-    page.add(&custom_group);
-
     let refresh_slot: RefreshSlot = Rc::new(RefCell::new(None));
     let refresh: Refresh = {
         let slot = refresh_slot.clone();
@@ -202,16 +188,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     };
     *refresh_slot.borrow_mut() = Some(populate.clone());
     populate();
-
-    {
-        let ui = ui.clone();
-        let status = status.clone();
-        let refresh = refresh.clone();
-        choose.connect_clicked(move |_| {
-            let refresh = refresh.clone();
-            choose_server(&ui, &status, move || refresh());
-        });
-    }
 
     {
         let ui = ui.clone();
@@ -306,10 +282,21 @@ fn rebuild(
         list.remove(&child);
     }
 
+    let system_path = runtime::find_system_server();
     let config = ui.config.borrow();
     let active_id = config.backend_id.clone();
     let server = config.sd_server.clone();
     let backend = config.backend.clone();
+    let custom = config.custom_server.clone().or_else(|| {
+        if config.backend_id.is_none() && config.sd_server.as_deref() != system_path.as_deref() {
+            config.sd_server.clone()
+        } else {
+            None
+        }
+    });
+    let custom_active = custom.as_deref().is_some_and(|path| {
+        config.backend_id.is_none() && config.sd_server.as_deref() == Some(path)
+    });
     drop(config);
     active_row.set_subtitle(&match (server.clone(), backend.clone()) {
         (Some(path), Some(backend)) => format!("{} · {backend}", path.display()),
@@ -317,8 +304,8 @@ fn rebuild(
         (None, _) => "Auto-detected".into(),
     });
 
-    if let Some(path) = runtime::find_system_server()
-        && runtime::server_works(&path)
+    if let Some(path) = &system_path
+        && runtime::server_works(path)
     {
         let active =
             server.as_deref() == Some(path.as_path()) || (server.is_none() && active_id.is_none());
@@ -434,7 +421,7 @@ fn rebuild(
             .visible(installed && !active)
             .build();
         let rollback = gtk::Button::builder()
-            .label("Rollback")
+            .icon_name("edit-undo-symbolic")
             .tooltip_text(
                 previous
                     .as_ref()
@@ -458,8 +445,8 @@ fn rebuild(
             .visible(installed && !active && compatibility.is_none())
             .build();
         let update = gtk::Button::builder()
-            .label("Update")
-            .tooltip_text("Download the available version")
+            .icon_name("software-update-available-symbolic")
+            .tooltip_text(format!("Update to {}", short_version(&entry.version)))
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .visible(update_available && compatibility.is_none())
@@ -532,6 +519,59 @@ fn rebuild(
             });
         }
     }
+
+    let custom_row = adw::ActionRow::builder()
+        .title("Custom backend")
+        .subtitle(match &custom {
+            Some(path) => {
+                let mut subtitle = path.display().to_string();
+                if custom_active {
+                    subtitle.push_str(" · active");
+                }
+                if !path.is_file() {
+                    subtitle.push_str(" · missing");
+                }
+                subtitle
+            }
+            None => "Choose an sd-server binary".into(),
+        })
+        .build();
+    let choose = gtk::Button::builder()
+        .icon_name("document-open-symbolic")
+        .tooltip_text("Choose a custom sd-server binary")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    {
+        let ui = ui.clone();
+        let status = status.clone();
+        let refresh = refresh.clone();
+        choose.connect_clicked(move |_| {
+            let refresh = refresh.clone();
+            choose_server(&ui, &status, move || refresh());
+        });
+    }
+    custom_row.add_suffix(&choose);
+    if let Some(path) = custom
+        && !custom_active
+        && path.is_file()
+    {
+        let button = gtk::Button::builder()
+            .icon_name("object-select-symbolic")
+            .tooltip_text("Use this custom backend")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        let ui = ui.clone();
+        let status = status.clone();
+        let refresh = refresh.clone();
+        button.connect_clicked(move |_| {
+            set_custom_server(&ui, path.clone(), None, None, &status);
+            refresh();
+        });
+        custom_row.add_suffix(&button);
+    }
+    list.append(&custom_row);
 }
 
 fn start_install(
