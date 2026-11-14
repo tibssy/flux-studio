@@ -44,31 +44,31 @@
       "id": "cuda12",
       "label": "CUDA 12 (custom build)",
       "kind": "cuda",
-      "version": "unpublished",
-      "url": "",
-      "sha256": "",
-      "size": 0,
+      "version": "master-1094-3bad892",
+      "url": "https://github.com/tibssy/flux-studio/releases/download/master-1094-3bad892/sd-cuda12-linux-x86_64.zip",
+      "sha256": "e6ad9b18b86bb56d1fb4085dc1b1ec241c6dc9ba64245222e7a67e5b76993bbb",
+      "size": 113479049,
       "backend": "cuda0",
       "cuda_major": 12,
       "archs": [52, 61, 70],
       "requires": ["libcudart.so.12"],
       "min_glibc": "2.35",
-      "notes": "Not published yet. Build it with the backend workflow, then pin it in this manifest."
+      "notes": "Built from stable-diffusion.cpp 3bad892 with CUDA 12.8.1. Maxwell, Pascal and Volta; requires libcudart.so.12."
     },
     {
       "id": "cuda13",
       "label": "CUDA 13 (custom build)",
       "kind": "cuda",
-      "version": "unpublished",
-      "url": "",
-      "sha256": "",
-      "size": 0,
+      "version": "master-1094-3bad892",
+      "url": "https://github.com/tibssy/flux-studio/releases/download/master-1094-3bad892/sd-cuda13-linux-x86_64.zip",
+      "sha256": "d87858d4a3cc6959e0241726eebc3e0b010e562b15243d591436f1dd5df335b4",
+      "size": 314326428,
       "backend": "cuda0",
       "cuda_major": 13,
       "archs": [75, 80, 86, 89, 90, 100, 120],
       "requires": ["libcudart.so.13"],
       "min_glibc": "2.39",
-      "notes": "Not published yet. Build it with the backend workflow, then pin it in this manifest."
+      "notes": "Built from stable-diffusion.cpp 3bad892 with CUDA 13.0. Turing and newer; requires libcudart.so.13."
     }
   ]
 }
