@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use flux_core::runtime::{self, BackendEntry, BackendManifest, HardwareProfile};
-use gtk::glib;
+use gtk::{gdk, glib};
 
 use crate::Ui;
 
@@ -118,10 +118,25 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     list.add_css_class("boxed-list");
     let refresh_button = gtk::Button::builder()
         .icon_name("view-refresh-symbolic")
-        .tooltip_text("Check the backend manifest")
+        .tooltip_text("Check the backend manifest (Ctrl+R)")
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
+    {
+        let refresh_button = refresh_button.clone();
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        key.connect_key_pressed(move |_, key, _, state| {
+            if state.contains(gdk::ModifierType::CONTROL_MASK)
+                && matches!(key, gdk::Key::r | gdk::Key::R)
+            {
+                refresh_button.emit_clicked();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        page.add_controller(key);
+    }
     let backends_group = adw::PreferencesGroup::builder()
         .title("Available backends")
         .description(
@@ -212,14 +227,14 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 .backend_manifest_url
                 .clone()
                 .unwrap_or_else(|| runtime::DEFAULT_MANIFEST_URL.to_string());
-            let (tx, rx) =
-                async_channel::bounded::<Result<(BackendManifest, Vec<String>), String>>(1);
+            let base = manifest.borrow().clone();
+            let (tx, rx) = async_channel::bounded::<Result<flux_models::ManifestRefresh, String>>(1);
             std::thread::spawn(move || {
-                let result = (|| -> anyhow::Result<(BackendManifest, Vec<String>)> {
+                let result = (|| -> anyhow::Result<flux_models::ManifestRefresh> {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
-                    runtime.block_on(flux_models::fetch_manifest(&url))
+                    runtime.block_on(flux_models::refresh_manifest(&base, &url))
                 })();
                 let _ = tx.send_blocking(result.map_err(|error| error.to_string()));
             });
@@ -232,28 +247,25 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 let result = rx.recv().await;
                 button.set_sensitive(true);
                 match result {
-                    Ok(Ok((remote, errors))) => {
-                        let merged = {
-                            let base = manifest.borrow();
-                            BackendManifest::merge(&base, &remote)
-                        };
-                        *manifest.borrow_mut() = merged;
-                        if errors.is_empty() {
-                            status.set_text("Backend manifest updated.");
-                            ui.toast
-                                .add_toast(adw::Toast::new("Backend manifest updated."));
+                    Ok(Ok(outcome)) => {
+                        *manifest.borrow_mut() = outcome.manifest;
+                        let mut message = if outcome.curated_ok && outcome.upstream_ok {
+                            "Backend manifest updated.".to_string()
+                        } else if outcome.upstream_ok {
+                            "Backend list updated from the latest upstream release.".to_string()
                         } else {
-                            status.set_text(&format!(
-                                "Manifest updated; skipped {} invalid backend entr{}.",
-                                errors.len(),
-                                if errors.len() == 1 { "y" } else { "ies" }
+                            "Backend manifest updated; upstream release check unavailable."
+                                .to_string()
+                        };
+                        if !outcome.errors.is_empty() {
+                            message.push_str(&format!(
+                                " Skipped {} invalid backend entr{}.",
+                                outcome.errors.len(),
+                                if outcome.errors.len() == 1 { "y" } else { "ies" }
                             ));
-                            ui.toast.add_toast(adw::Toast::new(&format!(
-                                "Manifest updated; skipped {} invalid entr{}.",
-                                errors.len(),
-                                if errors.len() == 1 { "y" } else { "ies" }
-                            )));
                         }
+                        status.set_text(&message);
+                        ui.toast.add_toast(adw::Toast::new(&message));
                         refresh();
                     }
                     Ok(Err(error)) => {
