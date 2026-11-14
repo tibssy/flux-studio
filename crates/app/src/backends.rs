@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use flux_core::Config;
 use flux_core::runtime::{self, BackendEntry, BackendManifest, HardwareProfile};
 use gtk::{gdk, glib};
 
@@ -12,6 +13,264 @@ const BACKEND_ICON: &str = "application-x-executable-symbolic";
 
 type Refresh = Rc<dyn Fn()>;
 type RefreshSlot = Rc<RefCell<Option<Refresh>>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Section {
+    StableDiffusion,
+    LlamaCpp,
+}
+
+impl Section {
+    const ALL: [Section; 2] = [Section::StableDiffusion, Section::LlamaCpp];
+
+    fn label(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "stable-diffusion",
+            Section::LlamaCpp => "llama.cpp",
+        }
+    }
+
+    fn root(self) -> PathBuf {
+        match self {
+            Section::StableDiffusion => runtime::backends_dir(),
+            Section::LlamaCpp => runtime::llama_backends_dir(),
+        }
+    }
+
+    fn bundled_manifest(self) -> BackendManifest {
+        match self {
+            Section::StableDiffusion => runtime::bundled_manifest(),
+            Section::LlamaCpp => runtime::bundled_llama_manifest(),
+        }
+    }
+
+    fn manifest_url(self, config: &Config) -> String {
+        match self {
+            Section::StableDiffusion => config
+                .backend_manifest_url
+                .clone()
+                .unwrap_or_else(|| runtime::DEFAULT_MANIFEST_URL.to_string()),
+            Section::LlamaCpp => config
+                .llama_manifest_url
+                .clone()
+                .unwrap_or_else(|| runtime::DEFAULT_LLAMA_MANIFEST_URL.to_string()),
+        }
+    }
+
+    fn system_path(self) -> Option<PathBuf> {
+        match self {
+            Section::StableDiffusion => runtime::find_system_server(),
+            Section::LlamaCpp => runtime::find_system_llama_cli(),
+        }
+    }
+
+    fn group_title(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Stable Diffusion backends",
+            Section::LlamaCpp => "llama.cpp backends",
+        }
+    }
+
+    fn group_description(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => {
+                "Compatible builds for this system. The refresh button checks the pinned manifest."
+            }
+            Section::LlamaCpp => {
+                "Compatible llama-cli builds used for prompt improvement. The refresh button checks the pinned manifest."
+            }
+        }
+    }
+
+    fn system_title(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "System backend",
+            Section::LlamaCpp => "System llama.cpp",
+        }
+    }
+
+    fn system_tooltip(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "sd-server installed by the system",
+            Section::LlamaCpp => "llama-cli installed by the system",
+        }
+    }
+
+    fn use_system_tooltip(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Use the system backend",
+            Section::LlamaCpp => "Use the system llama.cpp",
+        }
+    }
+
+    fn custom_title(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Custom backend",
+            Section::LlamaCpp => "Custom llama.cpp",
+        }
+    }
+
+    fn custom_placeholder(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Choose an sd-server binary",
+            Section::LlamaCpp => "Choose a llama-cli binary",
+        }
+    }
+
+    fn choose_title(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Choose sd-server",
+            Section::LlamaCpp => "Choose llama-cli",
+        }
+    }
+
+    fn choose_tooltip(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Choose a custom sd-server binary",
+            Section::LlamaCpp => "Choose a custom llama-cli binary",
+        }
+    }
+
+    fn active_id(self, config: &Config) -> Option<String> {
+        match self {
+            Section::StableDiffusion => config.backend_id.clone(),
+            Section::LlamaCpp => config.llama_backend_id.clone(),
+        }
+    }
+
+    fn active_path(self, config: &Config) -> Option<PathBuf> {
+        match self {
+            Section::StableDiffusion => config.sd_server.clone(),
+            Section::LlamaCpp => config.prompt_helper_cli.clone(),
+        }
+    }
+
+    fn custom(self, config: &Config) -> Option<PathBuf> {
+        match self {
+            Section::StableDiffusion => config.custom_server.clone(),
+            Section::LlamaCpp => config.llama_custom_cli.clone(),
+        }
+    }
+
+    fn set_custom(self, config: &mut Config, path: Option<PathBuf>) {
+        match self {
+            Section::StableDiffusion => config.custom_server = path,
+            Section::LlamaCpp => config.llama_custom_cli = path,
+        }
+    }
+
+    fn busy(self, ui: &Ui) -> bool {
+        match self {
+            Section::StableDiffusion => ui.generating.get() || ui.upscaling.get(),
+            Section::LlamaCpp => ui.improving.get(),
+        }
+    }
+
+    fn busy_message(self) -> &'static str {
+        match self {
+            Section::StableDiffusion => "Wait for the current image to finish.",
+            Section::LlamaCpp => "Wait for the prompt improvement to finish.",
+        }
+    }
+
+    fn set_active(
+        self,
+        ui: &Rc<Ui>,
+        path: PathBuf,
+        backend: Option<String>,
+        backend_id: Option<String>,
+    ) {
+        if !path.is_file() {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "{} does not exist.",
+                path.display()
+            )));
+            return;
+        }
+        if self.busy(ui) {
+            ui.toast.add_toast(adw::Toast::new(self.busy_message()));
+            return;
+        }
+        {
+            let mut config = ui.config.borrow_mut();
+            match self {
+                Section::StableDiffusion => {
+                    config.sd_server = Some(path.clone());
+                    config.backend = backend.clone();
+                    config.backend_id = backend_id;
+                }
+                Section::LlamaCpp => {
+                    config.prompt_helper_cli = Some(path.clone());
+                    config.llama_backend_id = backend_id;
+                }
+            }
+            let _ = config.save();
+        }
+        match self {
+            Section::StableDiffusion => {
+                ui.backend.set_server(path.clone(), backend);
+                ui.backend.unload();
+            }
+            Section::LlamaCpp => crate::refresh_prompt_helper(ui),
+        }
+        let message = match self {
+            Section::StableDiffusion => format!("Active backend: {}", path.display()),
+            Section::LlamaCpp => format!("Active llama.cpp: {}", path.display()),
+        };
+        ui.toast.add_toast(adw::Toast::new(&message));
+    }
+
+    fn refresh_message(self, outcome: &flux_models::ManifestRefresh) -> String {
+        let mut message = match (outcome.curated_ok, outcome.upstream_ok) {
+            (true, true) => match self {
+                Section::StableDiffusion => "Backend manifest updated.".to_string(),
+                Section::LlamaCpp => "llama.cpp backend list updated.".to_string(),
+            },
+            (false, true) => match self {
+                Section::StableDiffusion => {
+                    "Backend list updated from the latest upstream release.".to_string()
+                }
+                Section::LlamaCpp => {
+                    "llama.cpp backend list updated from the latest upstream release.".to_string()
+                }
+            },
+            _ => match self {
+                Section::StableDiffusion => {
+                    "Backend manifest updated; upstream release check unavailable.".to_string()
+                }
+                Section::LlamaCpp => {
+                    "llama.cpp backend list updated; upstream release check unavailable."
+                        .to_string()
+                }
+            },
+        };
+        if !outcome.errors.is_empty() {
+            message.push_str(&format!(
+                " Skipped {} invalid backend entr{}.",
+                outcome.errors.len(),
+                if outcome.errors.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ));
+        }
+        message
+    }
+
+    fn custom_selected_message(self, path: &std::path::Path) -> String {
+        match self {
+            Section::StableDiffusion => format!(
+                "Custom backend selected: {} · use the check button to activate it.",
+                path.display()
+            ),
+            Section::LlamaCpp => format!(
+                "Custom llama.cpp selected: {} · use the check button to activate it.",
+                path.display()
+            ),
+        }
+    }
+}
 
 /// Install the CPU backend automatically when no usable server exists.
 pub(crate) fn auto_install_cpu(ui: &Rc<Ui>) {
@@ -72,7 +331,7 @@ pub(crate) fn auto_install_cpu(ui: &Rc<Ui>) {
         }
     });
 
-    install_entry(ui, &entry, on_progress, on_done);
+    install_entry(ui, Section::StableDiffusion, &entry, on_progress, on_done);
 }
 
 /// Build the Backends preferences page.
@@ -83,7 +342,6 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .build();
 
     let hardware = Rc::new(HardwareProfile::detect());
-    let manifest = Rc::new(RefCell::new(runtime::bundled_manifest()));
     let hardware_group = adw::PreferencesGroup::builder()
         .title("Detected hardware")
         .description("Used to decide which downloadable backends are compatible.")
@@ -96,39 +354,60 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
     );
     page.add(&hardware_group);
 
-    let list = gtk::ListBox::new();
-    list.set_selection_mode(gtk::SelectionMode::None);
-    list.add_css_class("boxed-list");
-    let refresh_button = gtk::Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Check the backend manifest (Ctrl+R)")
-        .valign(gtk::Align::Center)
-        .css_classes(["flat"])
-        .build();
+    let refresh_buttons: Vec<gtk::Button> = Section::ALL
+        .into_iter()
+        .map(|section| build_section(ui, &page, section, &hardware))
+        .collect();
+
     {
-        let refresh_button = refresh_button.clone();
+        let buttons = refresh_buttons;
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
         key.connect_key_pressed(move |_, key, _, state| {
             if state.contains(gdk::ModifierType::CONTROL_MASK)
                 && matches!(key, gdk::Key::r | gdk::Key::R)
             {
-                refresh_button.emit_clicked();
+                for button in &buttons {
+                    if button.is_sensitive() {
+                        button.emit_clicked();
+                    }
+                }
                 return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed
         });
         page.add_controller(key);
     }
-    let backends_group = adw::PreferencesGroup::builder()
-        .title("Available backends")
-        .description(
-            "Compatible builds for this system. The refresh button checks the pinned manifest.",
-        )
+
+    page
+}
+
+fn build_section(
+    ui: &Rc<Ui>,
+    page: &adw::PreferencesPage,
+    section: Section,
+    hardware: &Rc<HardwareProfile>,
+) -> gtk::Button {
+    let manifest = Rc::new(RefCell::new(section.bundled_manifest()));
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.add_css_class("boxed-list");
+    let refresh_button = gtk::Button::builder()
+        .icon_name("view-refresh-symbolic")
+        .tooltip_text(format!(
+            "Check the {} backend manifest (Ctrl+R)",
+            section.label()
+        ))
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(section.group_title())
+        .description(section.group_description())
         .header_suffix(&refresh_button)
         .build();
-    backends_group.add(&list);
-    page.add(&backends_group);
+    group.add(&list);
+    page.add(&group);
 
     let refresh_slot: RefreshSlot = Rc::new(RefCell::new(None));
     let refresh: Refresh = {
@@ -147,7 +426,7 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         let list = list.clone();
         let refresh = refresh.clone();
         Rc::new(move || {
-            rebuild(&ui, &list, &manifest, &hardware, refresh.clone());
+            rebuild(&ui, &list, &manifest, &hardware, section, refresh.clone());
         })
     };
     *refresh_slot.borrow_mut() = Some(populate.clone());
@@ -159,12 +438,7 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         let refresh = refresh.clone();
         refresh_button.connect_clicked(move |button| {
             button.set_sensitive(false);
-            let url = ui
-                .config
-                .borrow()
-                .backend_manifest_url
-                .clone()
-                .unwrap_or_else(|| runtime::DEFAULT_MANIFEST_URL.to_string());
+            let url = section.manifest_url(&ui.config.borrow());
             let base = manifest.borrow().clone();
             let (tx, rx) = async_channel::bounded::<Result<flux_models::ManifestRefresh, String>>(1);
             std::thread::spawn(move || {
@@ -172,7 +446,14 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
-                    runtime.block_on(flux_models::refresh_manifest(&base, &url))
+                    match section {
+                        Section::StableDiffusion => {
+                            runtime.block_on(flux_models::refresh_manifest(&base, &url))
+                        }
+                        Section::LlamaCpp => {
+                            runtime.block_on(flux_models::refresh_llama_manifest(&base, &url))
+                        }
+                    }
                 })();
                 let _ = tx.send_blocking(result.map_err(|error| error.to_string()));
             });
@@ -185,35 +466,23 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 button.set_sensitive(true);
                 match result {
                     Ok(Ok(outcome)) => {
+                        let message = section.refresh_message(&outcome);
                         *manifest.borrow_mut() = outcome.manifest;
-                        let mut message = if outcome.curated_ok && outcome.upstream_ok {
-                            "Backend manifest updated.".to_string()
-                        } else if outcome.upstream_ok {
-                            "Backend list updated from the latest upstream release.".to_string()
-                        } else {
-                            "Backend manifest updated; upstream release check unavailable."
-                                .to_string()
-                        };
-                        if !outcome.errors.is_empty() {
-                            message.push_str(&format!(
-                                " Skipped {} invalid backend entr{}.",
-                                outcome.errors.len(),
-                                if outcome.errors.len() == 1 { "y" } else { "ies" }
-                            ));
-                        }
                         ui.toast.add_toast(adw::Toast::new(&message));
                         refresh();
                     }
                     Ok(Err(error)) => {
                         ui.toast.add_toast(adw::Toast::new(&format!(
-                            "Could not fetch the backend manifest; keeping the pinned list ({error})"
+                            "Could not fetch the {} backend manifest; keeping the pinned list ({error})",
+                            section.label()
                         )));
                         refresh();
                     }
                     Err(_) => {
-                        ui.toast.add_toast(adw::Toast::new(
-                            "Manifest request stopped; keeping the current backend list.",
-                        ));
+                        ui.toast.add_toast(adw::Toast::new(&format!(
+                            "{} backend manifest request stopped; keeping the current list.",
+                            section.label()
+                        )));
                         refresh();
                     }
                 }
@@ -221,7 +490,7 @@ pub(crate) fn build_page(ui: &Rc<Ui>) -> adw::PreferencesPage {
         });
     }
 
-    page
+    refresh_button
 }
 
 fn rebuild(
@@ -229,56 +498,59 @@ fn rebuild(
     list: &gtk::ListBox,
     manifest: &Rc<RefCell<BackendManifest>>,
     hardware: &HardwareProfile,
+    section: Section,
     refresh: Rc<dyn Fn()>,
 ) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
 
-    let system_path = runtime::find_system_server();
-    let (active_id, server, custom, custom_active) = {
+    let root = section.root();
+    let system_path = section.system_path();
+    let (active_id, active_path, custom, custom_active) = {
         let config = ui.config.borrow();
-        let mut custom = config.custom_server.clone();
+        let mut custom = section.custom(&config);
         if custom.is_none()
-            && config.backend_id.is_none()
-            && config.sd_server.as_deref() != system_path.as_deref()
+            && section.active_id(&config).is_none()
+            && section.active_path(&config).as_deref() != system_path.as_deref()
         {
-            custom = config.sd_server.clone();
+            custom = section.active_path(&config);
         }
         let custom_active = custom.as_deref().is_some_and(|path| {
-            config.backend_id.is_none() && config.sd_server.as_deref() == Some(path)
+            section.active_id(&config).is_none()
+                && section.active_path(&config).as_deref() == Some(path)
         });
         (
-            config.backend_id.clone(),
-            config.sd_server.clone(),
+            section.active_id(&config),
+            section.active_path(&config),
             custom,
             custom_active,
         )
     };
-    if custom.is_some() && ui.config.borrow().custom_server.is_none() {
+    if custom.is_some() && section.custom(&ui.config.borrow()).is_none() {
         let mut config = ui.config.borrow_mut();
-        config.custom_server = custom.clone();
+        section.set_custom(&mut config, custom.clone());
         let _ = config.save();
     }
 
     if let Some(path) = &system_path
-        && runtime::server_works(path)
+        && runtime::binary_works(path)
     {
-        let active =
-            server.as_deref() == Some(path.as_path()) || (server.is_none() && active_id.is_none());
+        let active = active_path.as_deref() == Some(path.as_path())
+            || (active_path.is_none() && active_id.is_none());
         let subtitle = path.display().to_string();
         let row = adw::ActionRow::builder()
-            .title("System backend")
+            .title(section.system_title())
             .subtitle(subtitle)
-            .tooltip_text("sd-server installed by the system")
+            .tooltip_text(section.system_tooltip())
             .build();
-        let check = check_button(active, "Use the system backend");
+        let check = check_button(active, section.use_system_tooltip());
         if !active {
             let ui = ui.clone();
             let refresh = refresh.clone();
             let path = path.clone();
             check.connect_clicked(move |_| {
-                set_custom_server(&ui, path.clone(), None, None);
+                section.set_active(&ui, path.clone(), None, None);
                 refresh();
             });
         }
@@ -288,9 +560,9 @@ fn rebuild(
 
     let entries = manifest.borrow().backends.clone();
     for entry in entries {
-        let installed = entry.is_installed(&runtime::backends_dir());
+        let installed = entry.is_installed(&root);
         let installed_version = entry
-            .installed_version(&runtime::backends_dir())
+            .installed_version(&root)
             .unwrap_or_else(|| entry.version.clone());
         let active = active_id.as_deref() == Some(entry.id.as_str());
         let compatibility = hardware.compatibility(&entry);
@@ -299,14 +571,16 @@ fn rebuild(
             continue;
         }
 
-        let installed_info = entry.installed_info(&runtime::backends_dir());
+        let installed_info = entry.installed_info(&root);
         let installed_size = installed_info
             .as_ref()
             .map(|marker| marker.size)
             .filter(|size| *size > 0)
             .unwrap_or(entry.size);
-        let previous = previous_info(&entry);
-        let previous_available = previous_dir(&entry).join("sd-server").is_file();
+        let previous = previous_info(&entry, &root);
+        let previous_available = previous_dir(&entry, &root)
+            .join(entry.binary_name())
+            .is_file();
         let update_available = update_available(
             installed,
             &installed_version,
@@ -425,7 +699,7 @@ fn rebuild(
             let entry = entry.clone();
             let refresh = refresh.clone();
             check.connect_clicked(move |_| {
-                activate_entry(&ui, &entry);
+                activate_entry(&ui, section, &entry);
                 refresh();
             });
         }
@@ -434,7 +708,7 @@ fn rebuild(
             let entry = entry.clone();
             let refresh = refresh.clone();
             delete.connect_clicked(move |_| {
-                confirm_remove(&ui, &entry, refresh.clone());
+                confirm_remove(&ui, section, &entry, refresh.clone());
             });
         }
         {
@@ -442,7 +716,7 @@ fn rebuild(
             let entry = entry.clone();
             let refresh = refresh.clone();
             rollback.connect_clicked(move |_| {
-                rollback_entry(&ui, &entry);
+                rollback_entry(&ui, section, &entry);
                 refresh();
             });
         }
@@ -456,6 +730,7 @@ fn rebuild(
             button.connect_clicked(move |_| {
                 start_install(
                     &ui,
+                    section,
                     &entry,
                     &row,
                     refresh.clone(),
@@ -467,7 +742,7 @@ fn rebuild(
     }
 
     let custom_row = adw::ActionRow::builder()
-        .title("Custom backend")
+        .title(section.custom_title())
         .subtitle(match &custom {
             Some(path) => {
                 let mut subtitle = path.display().to_string();
@@ -476,12 +751,12 @@ fn rebuild(
                 }
                 subtitle
             }
-            None => "Choose an sd-server binary".into(),
+            None => section.custom_placeholder().into(),
         })
         .build();
     let choose = gtk::Button::builder()
         .icon_name("document-open-symbolic")
-        .tooltip_text("Choose a custom sd-server binary")
+        .tooltip_text(section.choose_tooltip())
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
@@ -490,7 +765,7 @@ fn rebuild(
         let refresh = refresh.clone();
         choose.connect_clicked(move |_| {
             let refresh = refresh.clone();
-            choose_server(&ui, move || refresh());
+            choose_binary(&ui, section, move || refresh());
         });
     }
     custom_row.add_suffix(&choose);
@@ -503,10 +778,10 @@ fn rebuild(
             button.connect_clicked(move |_| {
                 {
                     let mut config = ui.config.borrow_mut();
-                    config.custom_server = Some(path.clone());
+                    section.set_custom(&mut config, Some(path.clone()));
                     let _ = config.save();
                 }
-                set_custom_server(&ui, path.clone(), None, None);
+                section.set_active(&ui, path.clone(), None, None);
                 refresh();
             });
             Some(button)
@@ -526,6 +801,7 @@ fn rebuild(
 
 fn start_install(
     ui: &Rc<Ui>,
+    section: Section,
     entry: &BackendEntry,
     row: &adw::ActionRow,
     refresh: Rc<dyn Fn()>,
@@ -537,18 +813,19 @@ fn start_install(
             .add_toast(adw::Toast::new("A backend download is already running."));
         return;
     }
-    let backends_dir = runtime::backends_dir();
-    let install_dir = entry.install_dir(&backends_dir);
-    let backup = previous_dir(entry);
-    let is_update = entry.is_installed(&backends_dir)
-        && entry.installed_version(&backends_dir).as_deref() != Some(entry.version.as_str());
+    if section.busy(ui) {
+        ui.toast.add_toast(adw::Toast::new(section.busy_message()));
+        return;
+    }
+    let root = section.root();
+    let install_dir = entry.install_dir(&root);
+    let backup = previous_dir(entry, &root);
+    let is_update = entry.is_installed(&root)
+        && entry.installed_version(&root).as_deref() != Some(entry.version.as_str());
     if is_update {
-        if ui.generating.get() || ui.upscaling.get() {
-            ui.toast
-                .add_toast(adw::Toast::new("Wait for the current image to finish."));
-            return;
+        if section == Section::StableDiffusion {
+            ui.backend.unload();
         }
-        ui.backend.unload();
         if backup.exists()
             && let Err(error) = std::fs::remove_dir_all(&backup)
         {
@@ -568,7 +845,9 @@ fn start_install(
     for button in &buttons {
         button.set_sensitive(false);
     }
-    if ui.config.borrow().backend_id.as_deref() == Some(entry.id.as_str()) {
+    if section == Section::StableDiffusion
+        && ui.config.borrow().backend_id.as_deref() == Some(entry.id.as_str())
+    {
         ui.backend.unload();
     }
     row.set_subtitle("Downloading…");
@@ -599,7 +878,7 @@ fn start_install(
                     .toast
                     .add_toast(adw::Toast::new(&format!("{} installed.", entry_done.label)));
                 if auto_activate {
-                    activate_entry(&ui_done, &entry_done);
+                    activate_entry(&ui_done, section, &entry_done);
                 }
             }
             Err(error) => {
@@ -618,11 +897,12 @@ fn start_install(
         refresh_done();
     });
 
-    install_entry(ui, entry, on_progress, on_done);
+    install_entry(ui, section, entry, on_progress, on_done);
 }
 
 fn install_entry(
     ui: &Rc<Ui>,
+    section: Section,
     entry: &BackendEntry,
     on_progress: Rc<dyn Fn(u64, u64)>,
     on_done: Rc<dyn Fn(Result<PathBuf, String>)>,
@@ -636,18 +916,14 @@ fn install_entry(
 
     let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::BackendProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<PathBuf, String>>(1);
-    let backends_dir = runtime::backends_dir();
+    let root = section.root();
     let entry = entry.clone();
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<PathBuf> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(flux_models::download_backend(
-                &entry,
-                &backends_dir,
-                progress_tx,
-            ))
+            runtime.block_on(flux_models::download_backend(&entry, &root, progress_tx))
         })();
         let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
     });
@@ -666,13 +942,8 @@ fn install_entry(
     });
 }
 
-fn activate_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
-    if ui.generating.get() || ui.upscaling.get() {
-        ui.toast
-            .add_toast(adw::Toast::new("Wait for the current image to finish."));
-        return;
-    }
-    let path = entry.server_path(&runtime::backends_dir());
+fn activate_entry(ui: &Rc<Ui>, section: Section, entry: &BackendEntry) {
+    let path = entry.binary_path(&section.root());
     if !path.is_file() {
         ui.toast.add_toast(adw::Toast::new(&format!(
             "{} is not installed.",
@@ -680,44 +951,11 @@ fn activate_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
         )));
         return;
     }
-    set_custom_server(ui, path, entry.backend.clone(), Some(entry.id.clone()));
+    section.set_active(ui, path, entry.backend.clone(), Some(entry.id.clone()));
 }
 
-fn set_custom_server(
-    ui: &Rc<Ui>,
-    path: PathBuf,
-    backend: Option<String>,
-    backend_id: Option<String>,
-) {
-    if !path.is_file() {
-        ui.toast.add_toast(adw::Toast::new(&format!(
-            "{} does not exist.",
-            path.display()
-        )));
-        return;
-    }
-    if ui.generating.get() || ui.upscaling.get() {
-        ui.toast
-            .add_toast(adw::Toast::new("Wait for the current image to finish."));
-        return;
-    }
-    {
-        let mut config = ui.config.borrow_mut();
-        config.sd_server = Some(path.clone());
-        config.backend = backend.clone();
-        config.backend_id = backend_id;
-        let _ = config.save();
-    }
-    ui.backend.set_server(path.clone(), backend);
-    ui.backend.unload();
-    ui.toast.add_toast(adw::Toast::new(&format!(
-        "Active backend: {}",
-        path.display()
-    )));
-}
-
-fn confirm_remove(ui: &Rc<Ui>, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
-    let path = entry.install_dir(&runtime::backends_dir());
+fn confirm_remove(ui: &Rc<Ui>, section: Section, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
+    let path = entry.install_dir(&section.root());
     let dialog = adw::AlertDialog::builder()
         .heading(format!("Remove {}?", entry.label))
         .body(format!(
@@ -737,13 +975,17 @@ fn confirm_remove(ui: &Rc<Ui>, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
             if response != "delete" {
                 return;
             }
-            if ui.config.borrow().backend_id.as_deref() == Some(entry.id.as_str()) {
+            if section.busy(&ui) {
+                ui.toast.add_toast(adw::Toast::new(section.busy_message()));
+                return;
+            }
+            if section.active_id(&ui.config.borrow()).as_deref() == Some(entry.id.as_str()) {
                 ui.toast.add_toast(adw::Toast::new(
                     "Switch to another backend before removing this one.",
                 ));
                 return;
             }
-            match std::fs::remove_dir_all(entry.install_dir(&runtime::backends_dir())) {
+            match std::fs::remove_dir_all(entry.install_dir(&section.root())) {
                 Ok(()) => ui
                     .toast
                     .add_toast(adw::Toast::new(&format!("{} removed.", entry.label))),
@@ -759,9 +1001,9 @@ fn confirm_remove(ui: &Rc<Ui>, entry: &BackendEntry, refresh: Rc<dyn Fn()>) {
     dialog.present(Some(&ui.window));
 }
 
-fn choose_server(ui: &Rc<Ui>, on_done: impl Fn() + 'static) {
+fn choose_binary(ui: &Rc<Ui>, section: Section, on_done: impl Fn() + 'static) {
     let dialog = gtk::FileDialog::builder()
-        .title("Choose sd-server")
+        .title(section.choose_title())
         .modal(true)
         .build();
     let ui = ui.clone();
@@ -782,13 +1024,11 @@ fn choose_server(ui: &Rc<Ui>, on_done: impl Fn() + 'static) {
         }
         {
             let mut config = ui.config.borrow_mut();
-            config.custom_server = Some(path.clone());
+            section.set_custom(&mut config, Some(path.clone()));
             let _ = config.save();
         }
-        ui.toast.add_toast(adw::Toast::new(&format!(
-            "Custom backend selected: {} · use the check button to activate it.",
-            path.display()
-        )));
+        ui.toast
+            .add_toast(adw::Toast::new(&section.custom_selected_message(&path)));
         on_done();
     });
 }
@@ -831,18 +1071,20 @@ fn check_button(active: bool, tooltip: &str) -> gtk::Button {
     button
 }
 
-fn previous_dir(entry: &BackendEntry) -> PathBuf {
-    runtime::backends_dir().join(format!("{}.previous", entry.id))
+fn previous_dir(entry: &BackendEntry, root: &std::path::Path) -> PathBuf {
+    root.join(format!("{}.previous", entry.id))
 }
 
-fn previous_info(entry: &BackendEntry) -> Option<flux_core::runtime::InstalledBackend> {
-    runtime::read_installed(&previous_dir(entry).join("installed.json"))
+fn previous_info(
+    entry: &BackendEntry,
+    root: &std::path::Path,
+) -> Option<flux_core::runtime::InstalledBackend> {
+    runtime::read_installed(&previous_dir(entry, root).join("installed.json"))
 }
 
-fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
-    if ui.generating.get() || ui.upscaling.get() {
-        ui.toast
-            .add_toast(adw::Toast::new("Wait for the current image to finish."));
+fn rollback_entry(ui: &Rc<Ui>, section: Section, entry: &BackendEntry) {
+    if section.busy(ui) {
+        ui.toast.add_toast(adw::Toast::new(section.busy_message()));
         return;
     }
     if ui.backend_installing.get() {
@@ -850,17 +1092,20 @@ fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
             .add_toast(adw::Toast::new("A backend download is already running."));
         return;
     }
-    let install_dir = entry.install_dir(&runtime::backends_dir());
-    let backup = previous_dir(entry);
-    if !backup.join("sd-server").is_file() {
+    let root = section.root();
+    let install_dir = entry.install_dir(&root);
+    let backup = previous_dir(entry, &root);
+    if !backup.join(entry.binary_name()).is_file() {
         ui.toast
             .add_toast(adw::Toast::new("No previous backend is available."));
         return;
     }
-    let version = previous_info(entry)
+    let version = previous_info(entry, &root)
         .map(|marker| short_version(&marker.version).to_string())
         .unwrap_or_else(|| "previous version".into());
-    ui.backend.unload();
+    if section == Section::StableDiffusion {
+        ui.backend.unload();
+    }
     if install_dir.exists()
         && let Err(error) = std::fs::remove_dir_all(&install_dir)
     {
@@ -874,6 +1119,9 @@ fn rollback_entry(ui: &Rc<Ui>, entry: &BackendEntry) {
             "Could not restore the previous backend: {error}"
         )));
         return;
+    }
+    if section == Section::LlamaCpp {
+        crate::refresh_prompt_helper(ui);
     }
     ui.toast.add_toast(adw::Toast::new(&format!(
         "{} rolled back to {version}.",

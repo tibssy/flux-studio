@@ -10,6 +10,10 @@ use crate::paths;
 pub const DEFAULT_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/tibssy/flux-studio/main/backends/manifest.json";
 
+/// Default location of the llama.cpp backend manifest.
+pub const DEFAULT_LLAMA_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/tibssy/flux-studio/main/backends/llama-manifest.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendKind {
@@ -17,6 +21,14 @@ pub enum BackendKind {
     Vulkan,
     Rocm,
     Cuda,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArchiveFormat {
+    #[default]
+    Zip,
+    TarGz,
 }
 
 impl BackendKind {
@@ -55,6 +67,12 @@ pub struct BackendEntry {
     pub strip_prefix: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// Executable to install and run. Defaults to `sd-server`.
+    #[serde(default)]
+    pub binary: Option<String>,
+    /// Archive format. Inferred from the URL when omitted.
+    #[serde(default)]
+    pub archive: Option<ArchiveFormat>,
 }
 
 impl BackendEntry {
@@ -62,8 +80,22 @@ impl BackendEntry {
         root.join(&self.id)
     }
 
-    pub fn server_path(&self, root: &Path) -> PathBuf {
-        self.install_dir(root).join("sd-server")
+    pub fn binary_name(&self) -> &str {
+        self.binary.as_deref().unwrap_or("sd-server")
+    }
+
+    pub fn binary_path(&self, root: &Path) -> PathBuf {
+        self.install_dir(root).join(self.binary_name())
+    }
+
+    pub fn archive_format(&self) -> ArchiveFormat {
+        self.archive.unwrap_or_else(|| {
+            if self.url.ends_with(".tar.gz") {
+                ArchiveFormat::TarGz
+            } else {
+                ArchiveFormat::Zip
+            }
+        })
     }
 
     pub fn marker_path(&self, root: &Path) -> PathBuf {
@@ -71,7 +103,7 @@ impl BackendEntry {
     }
 
     pub fn is_installed(&self, root: &Path) -> bool {
-        self.server_path(root).is_file()
+        self.binary_path(root).is_file()
     }
 
     pub fn installed_info(&self, root: &Path) -> Option<InstalledBackend> {
@@ -235,6 +267,11 @@ pub fn bundled_manifest() -> BackendManifest {
         .expect("bundled backend manifest is valid")
 }
 
+pub fn bundled_llama_manifest() -> BackendManifest {
+    BackendManifest::parse(include_str!("../../../backends/llama-manifest.json"))
+        .expect("bundled llama.cpp manifest is valid")
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GpuInfo {
     pub name: String,
@@ -385,14 +422,50 @@ pub fn find_system_server() -> Option<PathBuf> {
         .or_else(|| find_in_path("sd-server"))
 }
 
-/// Check that a server binary can at least load its shared libraries.
-pub fn server_works(path: &Path) -> bool {
+/// Places a system-installed `llama-cli` is commonly found.
+pub fn system_llama_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("llama-cli"));
+        candidates.push(dir.join("llama.cpp").join("llama-cli"));
+        candidates.push(dir.join("../lib/flux-studio/llama-cli"));
+        candidates.push(dir.join("../libexec/flux-studio/llama-cli"));
+    }
+    candidates.push(PathBuf::from("/usr/lib/flux-studio/llama-cli"));
+    candidates.push(PathBuf::from("/usr/lib/llama.cpp/llama-cli"));
+    candidates.push(PathBuf::from("/usr/lib64/llama.cpp/llama-cli"));
+    candidates.push(PathBuf::from("/usr/libexec/llama.cpp/llama-cli"));
+    candidates.push(PathBuf::from("/usr/local/lib/flux-studio/llama-cli"));
+    candidates.push(PathBuf::from("/usr/local/bin/llama-cli"));
+    candidates.push(PathBuf::from("/usr/bin/llama-cli"));
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local/bin/llama-cli"));
+        candidates.push(home.join(".local/lib/flux-studio/llama-cli"));
+    }
+    candidates
+}
+
+pub fn find_system_llama_cli() -> Option<PathBuf> {
+    system_llama_candidates()
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_in_path("llama-cli"))
+}
+
+/// Check that a binary can at least load its shared libraries.
+pub fn binary_works(path: &Path) -> bool {
     path.is_file()
         && std::process::Command::new(path)
             .arg("--version")
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+}
+
+pub fn server_works(path: &Path) -> bool {
+    binary_works(path)
 }
 
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -408,6 +481,10 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
 
 pub fn backends_dir() -> PathBuf {
     paths::backends_dir()
+}
+
+pub fn llama_backends_dir() -> PathBuf {
+    paths::backends_dir().join("llama")
 }
 
 fn detect_nvidia() -> Option<GpuInfo> {
@@ -609,6 +686,8 @@ mod tests {
             min_glibc: None,
             strip_prefix: None,
             notes: None,
+            binary: None,
+            archive: None,
         };
         assert!(entry.supports_archs(Some(52)));
         assert!(!entry.supports_archs(Some(89)));
@@ -655,6 +734,8 @@ mod tests {
                 min_glibc: None,
                 strip_prefix: None,
                 notes: None,
+                binary: None,
+                archive: None,
             }],
         };
         let overlay = BackendManifest {
@@ -683,6 +764,8 @@ mod tests {
                     min_glibc: None,
                     strip_prefix: None,
                     notes: None,
+                    binary: None,
+                    archive: None,
                 },
             ],
         };
@@ -699,6 +782,30 @@ mod tests {
         assert!(manifest.cpu_entry().is_some());
         for entry in &manifest.backends {
             assert!(!entry.id.is_empty());
+            assert_eq!(entry.binary_name(), "sd-server");
+            assert_eq!(entry.archive_format(), ArchiveFormat::Zip);
         }
+    }
+
+    #[test]
+    fn bundled_llama_manifest_is_valid() {
+        let manifest = bundled_llama_manifest();
+        assert!(!manifest.backends.is_empty());
+        assert!(manifest.cpu_entry().is_some());
+        for entry in &manifest.backends {
+            assert!(!entry.id.is_empty());
+            assert_eq!(entry.binary_name(), "llama-cli");
+            assert_eq!(entry.archive_format(), ArchiveFormat::TarGz);
+        }
+    }
+
+    #[test]
+    fn archive_format_is_inferred_from_the_url() {
+        let mut entry = bundled_manifest().backends[0].clone();
+        entry.archive = None;
+        entry.url = "https://example.com/backend.tar.gz".into();
+        assert_eq!(entry.archive_format(), ArchiveFormat::TarGz);
+        entry.url = "https://example.com/backend.zip".into();
+        assert_eq!(entry.archive_format(), ArchiveFormat::Zip);
     }
 }

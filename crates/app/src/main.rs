@@ -82,7 +82,6 @@ pub(crate) struct Ui {
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
-    pub prompt_helper: Option<PathBuf>,
     pub backend: Arc<dyn Backend>,
     pub worker: GenerationWorker,
     pub models_dir: PathBuf,
@@ -229,9 +228,9 @@ fn build_ui(app: &adw::Application) {
         size::snap(config.default_height),
     )));
 
-    let prompt_helper = prompt_ai::find_cli(&config);
     let view = main_view::build();
-    view.improve_button.set_visible(prompt_helper.is_some());
+    view.improve_button
+        .set_visible(prompt_ai::find_cli(&config).is_some());
     let side = sidebar::build(&config, size_cell.clone());
 
     let header = adw::HeaderBar::new();
@@ -306,7 +305,6 @@ fn build_ui(app: &adw::Application) {
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
-        prompt_helper,
         backend,
         worker,
         models_dir,
@@ -704,6 +702,7 @@ pub(crate) fn active_preset(ui: &Rc<Ui>) -> &'static ModelPreset {
 }
 
 pub(crate) fn refresh_model(ui: &Rc<Ui>) {
+    let prompt_helper = prompt_ai::find_cli(&ui.config.borrow());
     if ui.models.borrow().is_empty() {
         ui.model_dropdown
             .set_tooltip_text(Some("No models installed"));
@@ -713,7 +712,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         ui.advanced_summary
             .set_text("Download a model in Preferences");
         ui.generate.set_sensitive(false);
-        if ui.prompt_helper.is_some() {
+        if prompt_helper.is_some() {
             ui.improve_button
                 .set_tooltip_text(Some("No model installed"));
             ui.improve_button.set_sensitive(false);
@@ -752,7 +751,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         ui.generate.set_sensitive(false);
     }
 
-    if ui.prompt_helper.is_some() {
+    if prompt_helper.is_some() {
         let encoder = model.path(ModelRole::TextEncoder, &ui.models_dir);
         let encoder_ready = encoder.as_ref().map(|path| path.exists()).unwrap_or(false);
         if !ui.generating.get() && !ui.improving.get() {
@@ -769,6 +768,13 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         };
         ui.improve_button.set_tooltip_text(Some(&tooltip));
     }
+}
+
+/// Refresh the prompt-improvement button after the active llama.cpp changes.
+pub(crate) fn refresh_prompt_helper(ui: &Rc<Ui>) {
+    let found = prompt_ai::find_cli(&ui.config.borrow());
+    ui.improve_button.set_visible(found.is_some());
+    refresh_model(ui);
 }
 
 pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
@@ -1482,7 +1488,7 @@ fn improve_prompt(ui: &Rc<Ui>) {
         return;
     }
 
-    let Some(cli) = ui.prompt_helper.clone() else {
+    let Some(cli) = prompt_ai::find_cli(&ui.config.borrow()) else {
         return;
     };
     let encoder = ui

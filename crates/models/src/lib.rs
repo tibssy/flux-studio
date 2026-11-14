@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use async_channel::Sender;
 use flux_core::preset::{ModelFileSpec, ModelPreset};
-use flux_core::runtime::{BackendEntry, InstalledBackend};
+use flux_core::runtime::{ArchiveFormat, BackendEntry, InstalledBackend};
 use flux_core::upscaler::UpscalerPreset;
 use futures_util::StreamExt;
 use reqwest::StatusCode;
@@ -153,13 +153,17 @@ pub async fn download_backend(
         bail!("{} is not published yet", entry.label);
     }
     if entry.is_installed(backends_dir) {
-        return Ok(entry.server_path(backends_dir));
+        return Ok(entry.binary_path(backends_dir));
     }
 
     let downloads = backends_dir.join(".downloads");
     std::fs::create_dir_all(&downloads)?;
-    let archive = downloads.join(format!("{}.zip", entry.id));
-    let part = downloads.join(format!("{}.zip.part", entry.id));
+    let extension = match entry.archive_format() {
+        ArchiveFormat::Zip => "zip",
+        ArchiveFormat::TarGz => "tar.gz",
+    };
+    let archive = downloads.join(format!("{}.{extension}", entry.id));
+    let part = downloads.join(format!("{}.{extension}.part", entry.id));
 
     if archive.exists() && sha256_file(&archive)? != entry.sha256 {
         std::fs::remove_file(&archive)?;
@@ -194,15 +198,15 @@ pub async fn download_backend(
         return Err(error);
     }
 
-    let server = staging.join("sd-server");
-    if !server.is_file() {
+    let binary = staging.join(entry.binary_name());
+    if !binary.is_file() {
         let _ = std::fs::remove_dir_all(&staging);
-        bail!("{} does not contain sd-server", entry.label);
+        bail!("{} does not contain {}", entry.label, entry.binary_name());
     }
-    let output = std::process::Command::new(&server)
+    let output = std::process::Command::new(&binary)
         .arg("--version")
         .output()
-        .with_context(|| format!("failed to run {}", server.display()))?;
+        .with_context(|| format!("failed to run {}", binary.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -240,7 +244,7 @@ pub async fn download_backend(
     }
     std::fs::rename(&staging, &destination)?;
     let _ = std::fs::remove_file(&archive);
-    Ok(destination.join("sd-server"))
+    Ok(destination.join(entry.binary_name()))
 }
 
 async fn download_backend_archive(
@@ -278,13 +282,20 @@ async fn download_backend_archive(
 }
 
 fn extract_backend(archive: &Path, entry: &BackendEntry, destination: &Path) -> Result<()> {
+    match entry.archive_format() {
+        ArchiveFormat::Zip => extract_backend_zip(archive, entry, destination),
+        ArchiveFormat::TarGz => extract_backend_tar_gz(archive, entry, destination),
+    }
+}
+
+fn extract_backend_zip(archive: &Path, entry: &BackendEntry, destination: &Path) -> Result<()> {
     let file = File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)?;
     let prefix = entry
         .strip_prefix
         .clone()
         .map(PathBuf::from)
-        .or_else(|| detect_zip_prefix(&mut zip));
+        .or_else(|| detect_zip_prefix(&mut zip, entry.binary_name()));
 
     for index in 0..zip.len() {
         let mut file = zip.by_index(index)?;
@@ -313,23 +324,23 @@ fn extract_backend(archive: &Path, entry: &BackendEntry, destination: &Path) -> 
         std::io::copy(&mut file, &mut out)?;
         out.flush()?;
         drop(out);
-        set_permissions(&target, &relative)?;
+        set_permissions(&target, &relative, entry.binary_name())?;
     }
     Ok(())
 }
 
-fn detect_zip_prefix(zip: &mut zip::ZipArchive<File>) -> Option<PathBuf> {
+fn detect_zip_prefix(zip: &mut zip::ZipArchive<File>, binary: &str) -> Option<PathBuf> {
+    let marker = format!("/{binary}");
     let mut best: Option<PathBuf> = None;
     for index in 0..zip.len() {
         let Ok(file) = zip.by_index(index) else {
             continue;
         };
         let name = file.name();
-        if name == "sd-server" {
+        if name == binary {
             return None;
         }
-        if name.ends_with("/sd-server") {
-            let prefix = name.trim_end_matches("/sd-server");
+        if let Some(prefix) = name.strip_suffix(&marker) {
             let prefix = PathBuf::from(prefix);
             if best
                 .as_ref()
@@ -342,21 +353,71 @@ fn detect_zip_prefix(zip: &mut zip::ZipArchive<File>) -> Option<PathBuf> {
     best
 }
 
+fn extract_backend_tar_gz(archive: &Path, entry: &BackendEntry, destination: &Path) -> Result<()> {
+    let raw = destination.join(".extract");
+    if raw.exists() {
+        std::fs::remove_dir_all(&raw)?;
+    }
+    std::fs::create_dir_all(&raw)?;
+
+    let file = File::open(archive)?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(decoder);
+    tar.unpack(&raw)
+        .with_context(|| format!("extracting {}", archive.display()))?;
+
+    let source = if raw.join(entry.binary_name()).is_file() {
+        raw.clone()
+    } else {
+        find_tar_root(&raw, entry.binary_name())?
+    };
+
+    for child in std::fs::read_dir(&source)? {
+        let child = child?;
+        let target = destination.join(child.file_name());
+        if target.exists() {
+            std::fs::remove_dir_all(&target).or_else(|_| std::fs::remove_file(&target))?;
+        }
+        std::fs::rename(child.path(), &target)?;
+    }
+    std::fs::remove_dir_all(&raw)?;
+    Ok(())
+}
+
+fn find_tar_root(raw: &Path, binary: &str) -> Result<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(raw)? {
+        let path = entry?.path();
+        if path.is_dir() && path.join(binary).is_file() {
+            found.push(path);
+        }
+    }
+    match found.len() {
+        0 => bail!("archive does not contain {binary}"),
+        1 => Ok(found.remove(0)),
+        _ => bail!("archive contains multiple {binary} candidates"),
+    }
+}
+
 #[cfg(unix)]
-fn set_permissions(path: &Path, relative: &Path) -> Result<()> {
+fn set_permissions(path: &Path, relative: &Path, binary: &str) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let name = relative
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
-    let executable = name == "sd-server" || name == "sd-cli" || name.ends_with(".sh");
+    let executable = name == binary
+        || name == "sd-cli"
+        || name == "llama-server"
+        || (name.starts_with("llama-") && !name.contains(".so"))
+        || name.ends_with(".sh");
     let mode = if executable { 0o755 } else { 0o644 };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_permissions(_path: &Path, _relative: &Path) -> Result<()> {
+fn set_permissions(_path: &Path, _relative: &Path, _binary: &str) -> Result<()> {
     Ok(())
 }
 
@@ -519,6 +580,8 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
                 None
             },
             notes: Some(format!("Latest upstream release {tag}")),
+            binary: None,
+            archive: None,
         });
     }
 
@@ -533,6 +596,200 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
         },
         errors,
     ))
+}
+
+/// Build a manifest from the latest llama.cpp release with Linux x64 assets.
+///
+/// `/releases/latest` can point at a release without assets (for example
+/// `v1.0.0`), so the releases list is scanned for the newest usable build.
+pub async fn fetch_llama_upstream_latest()
+-> Result<(flux_core::runtime::BackendManifest, Vec<String>)> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let response = client
+        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20")
+        .header("Accept", "application/vnd.github+json")
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .context("GET llama.cpp releases")?;
+    if !response.status().is_success() {
+        bail!("GitHub release request failed: HTTP {}", response.status());
+    }
+    let releases: Vec<serde_json::Value> = response.json().await?;
+    let (tag, entries, errors) = select_llama_release(&releases)?;
+    Ok((
+        flux_core::runtime::BackendManifest {
+            schema_version: 1,
+            generated_at: tag,
+            backends: entries,
+        },
+        errors,
+    ))
+}
+
+fn select_llama_release(
+    releases: &[serde_json::Value],
+) -> Result<(String, Vec<flux_core::runtime::BackendEntry>, Vec<String>)> {
+    let mut errors = Vec::new();
+    for release in releases {
+        match llama_entries_from_release(release) {
+            Ok((tag, entries, entry_errors)) => {
+                errors.extend(entry_errors);
+                if !entries.is_empty() {
+                    return Ok((tag, entries, errors));
+                }
+            }
+            Err(error) => errors.push(error.to_string()),
+        }
+    }
+    bail!("no llama.cpp release with Linux x64 assets was found")
+}
+
+fn llama_entries_from_release(
+    release: &serde_json::Value,
+) -> Result<(String, Vec<flux_core::runtime::BackendEntry>, Vec<String>)> {
+    let tag = release
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let Some(assets) = release.get("assets").and_then(serde_json::Value::as_array) else {
+        return Ok((
+            tag.clone(),
+            Vec::new(),
+            vec![format!("release {tag} has no assets")],
+        ));
+    };
+
+    let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    for asset in assets {
+        let Some(name) = asset.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !name.starts_with("llama-")
+            || !name.contains("-bin-ubuntu-")
+            || !name.ends_with("-x64.tar.gz")
+        {
+            continue;
+        }
+        if ["arm64", "s390x", "openvino", "sycl", "zdnn", "snapdragon"]
+            .iter()
+            .any(|marker| name.contains(marker))
+        {
+            continue;
+        }
+
+        let (kind, cuda_major, rocm_major, id, label, requires) =
+            if name.ends_with("-bin-ubuntu-x64.tar.gz") {
+                (
+                    flux_core::runtime::BackendKind::Cpu,
+                    None,
+                    None,
+                    "llama-cpu".to_string(),
+                    "CPU (llama.cpp)".to_string(),
+                    Vec::new(),
+                )
+            } else if name.ends_with("-bin-ubuntu-vulkan-x64.tar.gz") {
+                (
+                    flux_core::runtime::BackendKind::Vulkan,
+                    None,
+                    None,
+                    "llama-vulkan".to_string(),
+                    "Vulkan (llama.cpp)".to_string(),
+                    vec!["libvulkan.so.1".to_string()],
+                )
+            } else if let Some(rest) = name.split("-bin-ubuntu-rocm-").nth(1) {
+                let version = rest.strip_suffix("-x64.tar.gz").unwrap_or(rest);
+                let Some(major) = version
+                    .split('.')
+                    .next()
+                    .and_then(|major| major.parse::<u32>().ok())
+                else {
+                    errors.push(format!("{name}: missing ROCm major version"));
+                    continue;
+                };
+                (
+                    flux_core::runtime::BackendKind::Rocm,
+                    None,
+                    Some(major),
+                    format!("llama-rocm{major}"),
+                    format!("ROCm {major} (llama.cpp)"),
+                    vec![format!("libamdhip64.so.{major}")],
+                )
+            } else if let Some(rest) = name.split("-bin-ubuntu-cuda-").nth(1) {
+                let version = rest.strip_suffix("-x64.tar.gz").unwrap_or(rest);
+                let Some(major) = version
+                    .split('.')
+                    .next()
+                    .and_then(|major| major.parse::<u32>().ok())
+                else {
+                    errors.push(format!("{name}: missing CUDA major version"));
+                    continue;
+                };
+                (
+                    flux_core::runtime::BackendKind::Cuda,
+                    Some(major),
+                    None,
+                    format!("llama-cuda{major}"),
+                    format!("CUDA {major} (llama.cpp)"),
+                    vec![format!("libcudart.so.{major}")],
+                )
+            } else {
+                continue;
+            };
+
+        if entries
+            .iter()
+            .any(|entry: &flux_core::runtime::BackendEntry| entry.id == id)
+        {
+            continue;
+        }
+        let Some(url) = asset
+            .get("browser_download_url")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(size) = asset.get("size").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let sha256 = asset
+            .get("digest")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .map(str::to_ascii_lowercase);
+        let Some(sha256) = sha256
+            .filter(|sha| sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        else {
+            errors.push(format!("{name}: missing SHA-256 digest"));
+            continue;
+        };
+
+        entries.push(flux_core::runtime::BackendEntry {
+            id,
+            label,
+            kind,
+            version: tag.clone(),
+            url: url.to_string(),
+            sha256,
+            size,
+            backend: None,
+            cuda_major,
+            rocm_major,
+            archs: Vec::new(),
+            requires,
+            min_glibc: None,
+            strip_prefix: None,
+            notes: Some(format!("Latest llama.cpp release {tag}")),
+            binary: Some("llama-cli".to_string()),
+            archive: Some(ArchiveFormat::TarGz),
+        });
+    }
+
+    Ok((tag, entries, errors))
 }
 
 /// Result of checking both the curated manifest and the latest upstream release.
@@ -554,6 +811,32 @@ pub async fn refresh_manifest(
 ) -> Result<ManifestRefresh> {
     let curated = fetch_manifest(curated_url).await;
     let upstream = fetch_upstream_latest().await;
+    merge_refresh(base, curated, upstream, "manifest", "upstream")
+}
+
+/// Merge the curated llama.cpp manifest and the latest upstream release.
+pub async fn refresh_llama_manifest(
+    base: &flux_core::runtime::BackendManifest,
+    curated_url: &str,
+) -> Result<ManifestRefresh> {
+    let curated = fetch_manifest(curated_url).await;
+    let upstream = fetch_llama_upstream_latest().await;
+    merge_refresh(
+        base,
+        curated,
+        upstream,
+        "llama.cpp manifest",
+        "llama.cpp upstream",
+    )
+}
+
+fn merge_refresh(
+    base: &flux_core::runtime::BackendManifest,
+    curated: Result<(flux_core::runtime::BackendManifest, Vec<String>)>,
+    upstream: Result<(flux_core::runtime::BackendManifest, Vec<String>)>,
+    curated_label: &str,
+    upstream_label: &str,
+) -> Result<ManifestRefresh> {
     let mut merged = base.clone();
     let mut errors = Vec::new();
     let mut failures = Vec::new();
@@ -566,7 +849,7 @@ pub async fn refresh_manifest(
             errors.extend(entry_errors);
             curated_ok = true;
         }
-        Err(error) => failures.push(format!("manifest: {error}")),
+        Err(error) => failures.push(format!("{curated_label}: {error}")),
     }
     match upstream {
         Ok((manifest, entry_errors)) => {
@@ -574,7 +857,7 @@ pub async fn refresh_manifest(
             errors.extend(entry_errors);
             upstream_ok = true;
         }
-        Err(error) => failures.push(format!("upstream: {error}")),
+        Err(error) => failures.push(format!("{upstream_label}: {error}")),
     }
     if !curated_ok && !upstream_ok {
         bail!("{}", failures.join("; "));
@@ -589,8 +872,11 @@ pub async fn refresh_manifest(
 
 #[cfg(test)]
 mod tests {
-    use crate::download_backend;
+    use crate::{
+        download_backend, extract_backend, llama_entries_from_release, select_llama_release,
+    };
     use flux_core::preset::{FLUX2_KLEIN_4B, ModelRole};
+    use flux_core::runtime::ArchiveFormat;
 
     #[test]
     #[ignore = "fetches the latest upstream GitHub release"]
@@ -664,6 +950,52 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "fetches the latest llama.cpp GitHub release"]
+    fn fetches_latest_llama_manifest() {
+        use crate::fetch_llama_upstream_latest;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (manifest, errors) = runtime.block_on(fetch_llama_upstream_latest()).unwrap();
+        assert!(manifest.cpu_entry().is_some());
+        assert!(manifest.entry("llama-vulkan").is_some());
+        println!("tag={} errors={errors:?}", manifest.generated_at);
+        for entry in &manifest.backends {
+            println!(
+                "{} {} {} {}",
+                entry.id, entry.version, entry.size, entry.sha256
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "downloads the upstream llama.cpp CPU backend"]
+    fn installs_llama_cpu_backend() {
+        use flux_core::runtime::bundled_llama_manifest;
+        let dir = std::env::temp_dir().join("flux-llama-backend-install-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = bundled_llama_manifest();
+        let entry = manifest.cpu_entry().expect("cpu entry");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (tx, _rx) = async_channel::unbounded();
+        let binary = runtime
+            .block_on(download_backend(entry, &dir, tx))
+            .expect("download llama.cpp cpu backend");
+        assert!(binary.is_file());
+        let output = std::process::Command::new(&binary)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn missing_reports_absent_files() {
         let dir = std::env::temp_dir().join(format!("flux-models-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -683,5 +1015,152 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_tar_gz(dir: &std::path::Path, prefix: &str) -> std::path::PathBuf {
+        let path = dir.join("backend.tar.gz");
+        let file = std::fs::File::create(&path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+
+        let binary = b"#!/bin/sh\nexit 0\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(binary.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, format!("{prefix}/llama-cli"), &binary[..])
+            .unwrap();
+
+        let library = b"library";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(library.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, format!("{prefix}/libggml.so"), &library[..])
+            .unwrap();
+
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn extracts_tar_gz_and_flattens_the_top_level_directory() {
+        let dir = std::env::temp_dir().join(format!("flux-tar-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let archive = write_tar_gz(&dir, "llama-b12383");
+        let entry = flux_core::runtime::bundled_llama_manifest().backends[0].clone();
+        let destination = dir.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+        extract_backend(&archive, &entry, &destination).unwrap();
+
+        assert!(destination.join("llama-cli").is_file());
+        assert!(destination.join("libggml.so").is_file());
+        assert!(!destination.join(".extract").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(destination.join("llama-cli"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn maps_llama_release_assets_to_entries() {
+        let sha = "a".repeat(64);
+        let asset = |name: &str, url: &str| {
+            serde_json::json!({
+                "name": name,
+                "browser_download_url": url,
+                "size": 1,
+                "digest": format!("sha256:{sha}"),
+            })
+        };
+        let release = serde_json::json!({
+            "tag_name": "b12383",
+            "assets": [
+                asset("llama-b12383-bin-ubuntu-x64.tar.gz", "https://example.com/cpu"),
+                asset("llama-b12383-bin-ubuntu-vulkan-x64.tar.gz", "https://example.com/vulkan"),
+                asset("llama-b12383-bin-ubuntu-rocm-10.0-x64.tar.gz", "https://example.com/rocm"),
+                asset("llama-b12383-bin-ubuntu-cuda-12.8-x64.tar.gz", "https://example.com/cuda12"),
+                asset("llama-b12383-bin-ubuntu-cuda-13.5-x64.tar.gz", "https://example.com/cuda13"),
+                asset("cudart-llama-b12383-bin-ubuntu-cuda-12.8-x64.tar.gz", "https://example.com/cudart"),
+                asset("llama-b12383-bin-ubuntu-arm64.tar.gz", "https://example.com/arm"),
+                asset("llama-b12383-bin-ubuntu-openvino-2026.4.1-x64.tar.gz", "https://example.com/openvino"),
+            ]
+        });
+
+        let (tag, entries, errors) = llama_entries_from_release(&release).unwrap();
+        assert_eq!(tag, "b12383");
+        assert!(errors.is_empty());
+        let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "llama-cpu",
+                "llama-vulkan",
+                "llama-rocm10",
+                "llama-cuda12",
+                "llama-cuda13"
+            ]
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.binary_name() == "llama-cli")
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.archive == Some(ArchiveFormat::TarGz))
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.id == "llama-cuda12")
+                .unwrap()
+                .cuda_major,
+            Some(12)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.id == "llama-rocm10")
+                .unwrap()
+                .rocm_major,
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn skips_llama_releases_without_linux_assets() {
+        let sha = "b".repeat(64);
+        let empty = serde_json::json!({
+            "tag_name": "v1.0.0",
+            "assets": []
+        });
+        let real = serde_json::json!({
+            "tag_name": "b12383",
+            "assets": [{
+                "name": "llama-b12383-bin-ubuntu-x64.tar.gz",
+                "browser_download_url": "https://example.com/cpu",
+                "size": 1,
+                "digest": format!("sha256:{sha}"),
+            }]
+        });
+
+        let (tag, entries, _) = select_llama_release(&[empty, real]).unwrap();
+        assert_eq!(tag, "b12383");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "llama-cpu");
     }
 }

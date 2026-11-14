@@ -1,12 +1,17 @@
-# Backend manifest
+# Backend manifests
 
-`manifest.json` is embedded in Flux Studio and also fetched from `main` when the
-user presses **Check for updates** in Preferences → Backends. It is deliberately
-pinned to tested builds; updating it is a manual release decision.
+Flux Studio ships two manifests:
+
+- `manifest.json` for `sd-server` (stable-diffusion.cpp) image-generation backends.
+- `llama-manifest.json` for `llama-cli` (llama.cpp) prompt-improvement backends.
+
+Both are embedded in the app and also fetched from `main` when the user presses
+**Check for updates** in Preferences → Backends. They are deliberately pinned to
+tested builds; updating them is a manual release decision.
 
 ## Entries
 
-Each entry describes one self-contained `sd-server` archive:
+Each entry describes one self-contained server archive:
 
 | Field | Meaning |
 |---|---|
@@ -22,6 +27,8 @@ Each entry describes one self-contained `sd-server` archive:
 | `requires` | Informational shared-library requirements |
 | `min_glibc` | Minimum glibc version |
 | `strip_prefix` | Directory to strip from the archive (auto-detected otherwise) |
+| `binary` | Executable to install and run (default `sd-server`) |
+| `archive` | `zip` (default) or `tar-gz`; inferred from the URL when omitted |
 
 An entry with an empty `url`, zero `size`, or empty `sha256` is shown as
 “not published yet” and cannot be downloaded.
@@ -56,3 +63,23 @@ commit so update detection works.
 
 CUDA 13 may not support Maxwell (`sm_52`). The app checks `compute_cap` against
 the entry's `archs` before offering the build.
+
+## llama.cpp builds
+
+`llama-manifest.json` pins `ggml-org/llama.cpp` release assets:
+
+- CPU: `llama-<tag>-bin-ubuntu-x64.tar.gz`
+- Vulkan: `llama-<tag>-bin-ubuntu-vulkan-x64.tar.gz`
+- ROCm: `llama-<tag>-bin-ubuntu-rocm-<major>.<minor>-x64.tar.gz`
+- CUDA: `llama-<tag>-bin-ubuntu-cuda-<major>.<minor>-x64.tar.gz`
+
+Entries use `binary: "llama-cli"` and `archive: "tar-gz"`. The archive contains
+a single top-level `llama-<tag>/` directory, which the installer flattens into
+`~/.local/share/flux-studio/backends/llama/<id>/`. Its binaries use
+`RUNPATH=$ORIGIN`.
+
+The refresh path queries the releases list rather than `/releases/latest`,
+because upstream can publish a release without assets (for example `v1.0.0`).
+It picks the newest release with Linux x64 assets and ignores `arm64`, `s390x`,
+OpenVINO, SYCL and `cudart-*` archives. CUDA and ROCm builds require the
+matching host runtime; the CUDA runtime is not bundled.
