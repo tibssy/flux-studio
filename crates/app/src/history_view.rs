@@ -134,25 +134,9 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     }
 }
 
-/// Load a history entry as the active image and restore its settings.
-pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() || ui.upscaling.get() {
-        return;
-    }
-    cancel_zoom(ui);
-
+/// Restore the prompt, model, style, size and seed recorded with an entry.
+fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     if entry.kind == "upscale" {
-        ui.undo.borrow_mut().clear();
-        ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
-        update_image_view(ui);
-        refresh_model(ui);
-        show_composer(ui, true);
-        ui.status.set_text(&format!(
-            "Upscaled · {} · {} × {}",
-            entry_model_label(entry),
-            entry.width,
-            entry.height
-        ));
         return;
     }
 
@@ -177,6 +161,43 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     }
 
     set_size(ui, entry.width, entry.height);
+}
+
+fn status_label(entry: &Generation) -> String {
+    let label = entry_model_label(entry);
+    if entry.kind == "upscale" {
+        format!("Upscaled · {label} · {} × {}", entry.width, entry.height)
+    } else {
+        format!("History · {label} · {} × {}", entry.width, entry.height)
+    }
+}
+
+/// Show a history entry on the canvas with the image actions, without making
+/// it the edit reference.
+pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
+    if ui.generating.get() || ui.upscaling.get() {
+        return;
+    }
+    cancel_zoom(ui);
+    restore_settings(ui, entry);
+
+    ui.undo.borrow_mut().clear();
+    ui.state
+        .borrow_mut()
+        .preview(PathBuf::from(&entry.image_path));
+    update_image_view(ui);
+    refresh_model(ui);
+    show_composer(ui, false);
+    ui.status.set_text(&status_label(entry));
+}
+
+/// Load a history entry as the edit reference and bring the composer back.
+pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
+    if ui.generating.get() || ui.upscaling.get() {
+        return;
+    }
+    cancel_zoom(ui);
+    restore_settings(ui, entry);
 
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
@@ -279,7 +300,7 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
                 ui.window.clipboard().set_text(&entry.prompt);
                 ui.toast.add_toast(adw::Toast::new("Prompt copied."));
             }
-            "use" => load_entry(&ui, &entry),
+            "use" => use_as_reference(&ui, &entry),
             _ => {}
         });
     }

@@ -25,8 +25,6 @@ pub struct Config {
     pub style_id: String,
     /// Whether the left sidebar is shown.
     pub sidebar_visible: bool,
-    /// Whether the sidebar hides itself after focus and pointer leave.
-    pub sidebar_auto_hide: bool,
     /// Optional override for the `sd-server` binary.
     pub sd_server: Option<PathBuf>,
     /// Id of the installed backend selected in Preferences.
@@ -65,7 +63,6 @@ impl Default for Config {
             upscale_factor: crate::upscaler::NATIVE_SCALE,
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
-            sidebar_auto_hide: true,
             sd_server: None,
             backend_id: None,
             backend: None,
@@ -112,12 +109,12 @@ mod tests {
             default_height = 768
             offload = true
             active_preset = "flux2-klein-4b"
+            sidebar_auto_hide = true
             "#,
         )
         .unwrap();
         assert_eq!(config.style_id, "none");
         assert!(config.sidebar_visible);
-        assert!(config.sidebar_auto_hide);
         assert!(config.sd_server.is_none());
         assert!(config.backend_id.is_none());
         assert!(config.backend.is_none());

@@ -23,8 +23,8 @@ Milestone 3 (packaged desktop app):
   reference, while text-to-image runs stay text-to-image
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry
-- clicking a history image restores its prompt, model, style, size and seed and
-  loads it as the reference
+- clicking a history image shows it on the canvas with the upscale/edit/crop
+  actions and restores its prompt, model, style, size and seed
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
@@ -35,7 +35,7 @@ Milestone 3 (packaged desktop app):
 - **history navigation** with a crossfade: scroll over the image or use the
   up/down arrows to step through history and compare an upscale with its source
 - the composer slides away during generation and returns via Edit/New
-- **preferences dialog**: output folder, CPU offload, models folder, auto-hide
+- **preferences dialog**: output folder, CPU offload, models folder
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
 - **model downloader** with resume, progress and per-preset install status,
   plus a delete action that keeps files shared with other presets
@@ -122,7 +122,7 @@ without leaving the app.
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
-| Edit an image | pick a reference with the image button, or click a history row |
+| Edit an image | pick a reference with the image button, or open a history row and press Edit |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
@@ -134,13 +134,10 @@ following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
 leave edit mode and generate from text alone; the prompt is kept.
 
 After a generation the prompt field slides away. Use the pencil button on the
-image (or `New`, or a history entry) to bring it back; the pencil makes the
-current image the edit reference. The selection button crops a region of the
-image with an animated zoom, uses the crop as the new reference, and opens the
-composer; undo plays the same zoom in reverse. The sidebar
-hides itself after 3 seconds when neither the keyboard focus nor the pointer is
-inside it; `Ctrl+B` brings it back. Turn this off in **Preferences → Interface →
-Auto-hide sidebar**.
+image (or `New`) to bring it back; the pencil makes the current image the edit
+reference. The selection button crops a region of the image with an animated
+zoom, uses the crop as the new reference, and opens the composer; undo plays the
+same zoom in reverse. `Ctrl+B` toggles the sidebar.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in

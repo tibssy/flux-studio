@@ -4,6 +4,7 @@ mod history_view;
 mod main_view;
 mod preferences;
 mod prompt_ai;
+mod rounded_paintable;
 mod sidebar;
 mod state;
 mod upscale_dialog;
@@ -26,7 +27,6 @@ use history::{Generation, History, NewGeneration};
 use state::{AppState, UndoStack};
 
 const HISTORY_LIMIT: usize = 100;
-pub(crate) const AUTO_HIDE_SECONDS: u32 = 3;
 
 type CropRect = (f64, f64, f64, f64);
 
@@ -118,10 +118,6 @@ pub(crate) struct Ui {
     pub crop_mode: Cell<bool>,
     pub crop_rect: Rc<RefCell<Option<CropRect>>>,
     pub undo: RefCell<UndoStack>,
-    pub sidebar_root: gtk::Box,
-    pub pointer_in_sidebar: Cell<bool>,
-    pub auto_hiding: Cell<bool>,
-    pub auto_hide_source: RefCell<Option<glib::SourceId>>,
 }
 
 /// Runs generations on one long-lived thread.
@@ -341,10 +337,6 @@ fn build_ui(app: &adw::Application) {
         crop_mode: Cell::new(false),
         crop_rect,
         undo: RefCell::new(UndoStack::default()),
-        sidebar_root: side.root.clone(),
-        pointer_in_sidebar: Cell::new(false),
-        auto_hiding: Cell::new(false),
-        auto_hide_source: RefCell::new(None),
     });
 
     sidebar_toggle
@@ -355,7 +347,6 @@ fn build_ui(app: &adw::Application) {
     wire_events(&ui, &preferences_button);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
-    setup_auto_hide(&ui);
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         for entry in &entries {
@@ -381,8 +372,6 @@ fn build_ui(app: &adw::Application) {
     if needs_backend {
         backends::auto_install_cpu(&ui);
     }
-
-    refresh_auto_hide(&ui);
 }
 
 fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
@@ -522,14 +511,6 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let split = ui.split.clone();
         split.connect_show_sidebar_notify(move |split| {
             let visible = split.shows_sidebar();
-            if !visible {
-                cancel_auto_hide(&ui);
-            } else {
-                refresh_auto_hide(&ui);
-            }
-            if ui.auto_hiding.get() {
-                return;
-            }
             let mut config = ui.config.borrow_mut();
             if config.sidebar_visible != visible {
                 config.sidebar_visible = visible;
@@ -834,7 +815,8 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
             Ok(texture) => {
                 ui.image_size
                     .set((texture.width() as u32, texture.height() as u32));
-                ui.picture.set_paintable(Some(&texture));
+                let rounded = rounded_paintable::RoundedPaintable::new(&texture);
+                ui.picture.set_paintable(Some(&rounded));
                 ui.stack.set_visible_child_name("image");
             }
             Err(error) => {
@@ -876,7 +858,6 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
 pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
     ui.composer.set_reveal_child(show);
     update_image_actions(ui);
-    refresh_auto_hide(ui);
     if show {
         ui.prompt.grab_focus();
     }
@@ -1284,135 +1265,6 @@ pub(crate) fn cancel_zoom(ui: &Rc<Ui>) {
     }
 }
 
-fn cancel_auto_hide(ui: &Rc<Ui>) {
-    if let Some(source) = ui.auto_hide_source.borrow_mut().take() {
-        source.remove();
-    }
-}
-
-/// Whether the pointer is physically over the sidebar.
-///
-/// The enter/leave flag can go stale when a dialog or another surface covers
-/// the sidebar, so ask the seat for the real position when possible.
-fn pointer_over_sidebar(ui: &Rc<Ui>) -> bool {
-    let fallback = ui.pointer_in_sidebar.get();
-    let Some(surface) = ui.window.surface() else {
-        return fallback;
-    };
-    let display = gtk::prelude::WidgetExt::display(&ui.window);
-    let Some(seat) = display.default_seat() else {
-        return fallback;
-    };
-    let Some(pointer) = seat.pointer() else {
-        return fallback;
-    };
-    let Some((x, y, _)) = surface.device_position(&pointer) else {
-        return fallback;
-    };
-    let Some(bounds) = ui.sidebar_root.compute_bounds(&ui.window) else {
-        return fallback;
-    };
-    let inside = bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32));
-    tracing::debug!(
-        x,
-        y,
-        left = bounds.x(),
-        top = bounds.y(),
-        width = bounds.width(),
-        height = bounds.height(),
-        inside,
-        "sidebar pointer position"
-    );
-    inside
-}
-
-fn schedule_auto_hide(ui: &Rc<Ui>) {
-    if !ui.config.borrow().sidebar_auto_hide
-        || !ui.split.shows_sidebar()
-        || ui.generating.get()
-        || ui.upscaling.get()
-        || pointer_over_sidebar(ui)
-    {
-        return;
-    }
-    cancel_auto_hide(ui);
-    tracing::debug!("scheduling sidebar auto-hide");
-    let callback_ui = ui.clone();
-    let source = glib::timeout_add_seconds_local(AUTO_HIDE_SECONDS, move || {
-        let ui = &callback_ui;
-        *ui.auto_hide_source.borrow_mut() = None;
-        let focus = gtk::prelude::GtkWindowExt::focus(&ui.window);
-        let pointer = pointer_over_sidebar(ui);
-        tracing::debug!(
-            active = ui.window.is_active(),
-            pointer,
-            focus = focus
-                .as_ref()
-                .map(|focus| focus.widget_name().to_string())
-                .unwrap_or_default(),
-            "sidebar auto-hide check"
-        );
-        if !ui.config.borrow().sidebar_auto_hide
-            || !ui.split.shows_sidebar()
-            || ui.generating.get()
-            || ui.upscaling.get()
-            || pointer
-            || !ui.window.is_active()
-        {
-            return glib::ControlFlow::Break;
-        }
-        ui.auto_hiding.set(true);
-        ui.split.set_show_sidebar(false);
-        ui.auto_hiding.set(false);
-        glib::ControlFlow::Break
-    });
-    *ui.auto_hide_source.borrow_mut() = Some(source);
-}
-
-pub(crate) fn refresh_auto_hide(ui: &Rc<Ui>) {
-    if !ui.config.borrow().sidebar_auto_hide
-        || !ui.split.shows_sidebar()
-        || ui.generating.get()
-        || ui.upscaling.get()
-        || pointer_over_sidebar(ui)
-    {
-        cancel_auto_hide(ui);
-        return;
-    }
-    schedule_auto_hide(ui);
-}
-
-fn setup_auto_hide(ui: &Rc<Ui>) {
-    let motion = gtk::EventControllerMotion::new();
-    {
-        let ui = ui.clone();
-        motion.connect_enter(move |_, _, _| {
-            ui.pointer_in_sidebar.set(true);
-            cancel_auto_hide(&ui);
-        });
-    }
-    {
-        let ui = ui.clone();
-        motion.connect_leave(move |_| {
-            ui.pointer_in_sidebar.set(false);
-            schedule_auto_hide(&ui);
-        });
-    }
-    ui.sidebar_root.add_controller(motion);
-
-    {
-        let ui = ui.clone();
-        let window = ui.window.clone();
-        window.connect_notify_local(Some("is-active"), move |window, _| {
-            if window.is_active() {
-                refresh_auto_hide(&ui);
-            } else {
-                cancel_auto_hide(&ui);
-            }
-        });
-    }
-}
-
 pub(crate) fn new_image(ui: &Rc<Ui>) {
     if ui.generating.get() || ui.upscaling.get() {
         return;
@@ -1817,7 +1669,8 @@ fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     } else {
         ("image", &ui.picture)
     };
-    back.set_paintable(Some(&texture));
+    let rounded = rounded_paintable::RoundedPaintable::new(&texture);
+    back.set_paintable(Some(&rounded));
     ui.image_size
         .set((texture.width() as u32, texture.height() as u32));
     ui.state.borrow_mut().preview(path.to_path_buf());
@@ -2069,7 +1922,6 @@ fn finish(ui: &Rc<Ui>, message: &str) {
     set_controls_enabled(ui, true);
     refresh_model(ui);
     update_image_actions(ui);
-    refresh_auto_hide(ui);
     ui.status.set_text(message);
 }
 
