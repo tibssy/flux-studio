@@ -42,6 +42,12 @@ pub struct Config {
     /// Optional GGUF used for prompt improvement; defaults to the active
     /// preset's text encoder.
     pub prompt_helper_model: Option<PathBuf>,
+    /// Id of the installed llama.cpp backend selected in Preferences.
+    pub llama_backend_id: Option<String>,
+    /// Optional override for the llama.cpp backend manifest URL.
+    pub llama_manifest_url: Option<String>,
+    /// Custom `llama-cli` selected in Preferences but not necessarily active.
+    pub llama_custom_cli: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -67,6 +73,9 @@ impl Default for Config {
             custom_server: None,
             prompt_helper_cli: None,
             prompt_helper_model: None,
+            llama_backend_id: None,
+            llama_manifest_url: None,
+            llama_custom_cli: None,
         }
     }
 }
@@ -116,6 +125,9 @@ mod tests {
         assert!(config.custom_server.is_none());
         assert!(config.prompt_helper_cli.is_none());
         assert!(config.prompt_helper_model.is_none());
+        assert!(config.llama_backend_id.is_none());
+        assert!(config.llama_manifest_url.is_none());
+        assert!(config.llama_custom_cli.is_none());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
     }

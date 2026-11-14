@@ -151,8 +151,9 @@ minimalist and pixel art. The selected style is stored with each history entry.
 Prompt improvement reuses the active preset's own text encoder via
 [llama.cpp](https://github.com/ggml-org/llama.cpp): it runs `llama-cli` with the
 same Qwen GGUF for a few seconds (`-rea off`, 4k context), so no extra model is
-needed. The button is hidden when `llama-cli` is not installed. Override the
-binary or use a dedicated instruct GGUF in `config.toml`:
+needed. The button is hidden when `llama-cli` is not installed; install one from
+**Preferences → Backends → llama.cpp backends**. Override the binary or use a
+dedicated instruct GGUF in `config.toml`:
 
 ```toml
 prompt_helper_cli = "/usr/bin/llama-cli"
@@ -170,6 +171,7 @@ Data locations:
 | `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
 | `~/.local/share/flux-studio/models/` | downloaded model files |
 | `~/.local/share/flux-studio/backends/` | downloaded `sd-server` backends |
+| `~/.local/share/flux-studio/backends/llama/` | downloaded `llama-cli` backends |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
 | `~/.cache/flux-studio/crops/` | cropped reference images |
@@ -243,6 +245,12 @@ The **Preferences → Backends** page detects NVIDIA, AMD, Vulkan and CPU,
 shows which downloadable builds are compatible, and lets you download, update,
 remove or activate one. It also accepts a custom `sd-server` path.
 
+The same page has a **llama.cpp backends** section for the prompt improver. It
+installs `llama-cli` from upstream `ggml-org/llama.cpp` releases (CPU, Vulkan,
+ROCm or CUDA, depending on the detected hardware), detects a system `llama-cli`
+as **System**, and supports a custom path. llama.cpp is optional, so its CPU
+build is only downloaded when you ask for it.
+
 | Backend | Source | Notes |
 |---|---|---|
 | CPU | upstream `leejet/stable-diffusion.cpp` | Universal fallback; slow |
@@ -265,6 +273,13 @@ The backend is launched with an explicit `--backend` value (`cpu`, `vulkan0`,
 `cuda0`). Changing it in Preferences restarts the server on the next request.
 The self-contained upstream zips use `RUNPATH=$ORIGIN`, so no
 `LD_LIBRARY_PATH` is needed.
+
+llama.cpp builds are pinned in `backends/llama-manifest.json`. Upstream ships
+them as `.tar.gz` archives whose single top-level directory is flattened during
+install. The refresh button checks the curated manifest and then the newest
+upstream release with Linux x64 assets; releases without assets (such as
+`v1.0.0`) are skipped. CUDA and ROCm builds expect the matching host runtime;
+the separate `cudart-*` archives are not bundled.
 
 ## Packaging
 

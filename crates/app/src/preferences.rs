@@ -434,6 +434,15 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .subtitle(server_path)
             .build(),
     );
+    let prompt_helper = crate::prompt_ai::find_cli(&ui.config.borrow())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "not found".into());
+    about_group.add(
+        &adw::ActionRow::builder()
+            .title("Prompt helper")
+            .subtitle(format!("llama.cpp · {prompt_helper}"))
+            .build(),
+    );
     about.add(&about_group);
 
     let project_group = adw::PreferencesGroup::builder().title("Project").build();

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-14",
+  "backends": [
+    {
+      "id": "llama-cpu",
+      "label": "CPU (llama.cpp)",
+      "kind": "cpu",
+      "version": "b12383",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12383/llama-b12383-bin-ubuntu-x64.tar.gz",
+      "sha256": "8e1d9d147d7f0dd2399fb32381de126ebc926d452225ef3b19e1675a55e0c794",
+      "size": 23336228,
+      "binary": "llama-cli",
+      "archive": "tar-gz",
+      "min_glibc": "2.34",
+      "notes": "Universal fallback for prompt improvement. Uses the active model's text encoder."
+    },
+    {
+      "id": "llama-vulkan",
+      "label": "Vulkan (llama.cpp)",
+      "kind": "vulkan",
+      "version": "b12383",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12383/llama-b12383-bin-ubuntu-vulkan-x64.tar.gz",
+      "sha256": "6c596df86ee0af1e71798eb211304a2b5e448d344032faa422eb6d7bd638b97f",
+      "size": 36191252,
+      "binary": "llama-cli",
+      "archive": "tar-gz",
+      "requires": ["libvulkan.so.1"],
+      "min_glibc": "2.34",
+      "notes": "Cross-vendor GPU build. May be slower than CPU for short prompt rewrites."
+    },
+    {
+      "id": "llama-rocm10",
+      "label": "ROCm 10 (llama.cpp)",
+      "kind": "rocm",
+      "version": "b12383",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12383/llama-b12383-bin-ubuntu-rocm-10.0-x64.tar.gz",
+      "sha256": "d1fcd3e9569919d3f82c4eae38a9268226ad410657bd8bfdfa882be1295b8b01",
+      "size": 271144114,
+      "binary": "llama-cli",
+      "archive": "tar-gz",
+      "rocm_major": 10,
+      "requires": ["libamdhip64.so.10"],
+      "notes": "AMD GPUs only. Large download; requires a compatible ROCm runtime."
+    },
+    {
+      "id": "llama-cuda12",
+      "label": "CUDA 12 (llama.cpp)",
+      "kind": "cuda",
+      "version": "b12383",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12383/llama-b12383-bin-ubuntu-cuda-12.8-x64.tar.gz",
+      "sha256": "adb5614fee53ae29f645b1174c46fd2645f0ba2eb12f142d81e427150b47594a",
+      "size": 199480829,
+      "binary": "llama-cli",
+      "archive": "tar-gz",
+      "cuda_major": 12,
+      "requires": ["libcudart.so.12"],
+      "notes": "NVIDIA GPUs with a CUDA 12 runtime. The CUDA runtime is not bundled."
+    },
+    {
+      "id": "llama-cuda13",
+      "label": "CUDA 13 (llama.cpp)",
+      "kind": "cuda",
+      "version": "b12383",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12383/llama-b12383-bin-ubuntu-cuda-13.5-x64.tar.gz",
+      "sha256": "eeb06aa56ee77e73f710d059e6fa3a0331de526c4e6fbbdc60763171d39fa35c",
+      "size": 201725324,
+      "binary": "llama-cli",
+      "archive": "tar-gz",
+      "cuda_major": 13,
+      "requires": ["libcudart.so.13"],
+      "notes": "NVIDIA GPUs with a CUDA 13 runtime. CUDA 13 may not support Maxwell (sm_52)."
+    }
+  ]
+}
