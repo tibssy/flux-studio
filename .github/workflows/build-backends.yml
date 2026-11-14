@@ -7,10 +7,6 @@ on:
         description: "Release tag to upload to (leave empty to keep artifacts only)"
         required: false
         default: ""
-      cuda_major:
-        description: "Build only one CUDA major (12 or 13; leave empty for both)"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -32,7 +28,6 @@ jobs:
             runner: ubuntu-24.04
             archs: "75;80;86;89;90;100;120"
             min_glibc: "2.39"
-    if: ${{ inputs.cuda_major == '' || inputs.cuda_major == matrix.cuda_major }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     steps:
