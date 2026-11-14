@@ -163,7 +163,7 @@ fn install_styles() {
              background-color: transparent;
          }
          .prompt-field:focus-within {
-             border-color: @accent_bg_color;
+             border-color: @card_bg_color;
          }
          .reference-bar {
              background-color: @accent_bg_color;
@@ -804,6 +804,25 @@ pub(crate) fn set_size(ui: &Rc<Ui>, width: u32, height: u32) {
     update_size_ui(ui);
 }
 
+/// Match the size sliders to the reference image's aspect ratio.
+fn fit_reference_size(ui: &Rc<Ui>) {
+    let (width, height) = ui.image_size.get();
+    if width == 0 || height == 0 {
+        return;
+    }
+    let target_area = ui.width_scale.value() * ui.height_scale.value();
+    let (width, height) = size::fit_aspect(width, height, target_area);
+    set_size(ui, width, height);
+}
+
+/// Keep the sidebar selection in sync with the image on the canvas.
+fn sync_history_selection(ui: &Rc<Ui>) {
+    match ui.state.borrow().display.clone() {
+        Some(path) => history_view::highlight(ui, &path),
+        None => ui.history_list.unselect_all(),
+    }
+}
+
 pub(crate) fn update_image_view(ui: &Rc<Ui>) {
     let (display, reference) = {
         let state = ui.state.borrow();
@@ -834,6 +853,10 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         }
     }
 
+    if reference.is_some() {
+        fit_reference_size(ui);
+    }
+
     match reference {
         Some(path) => {
             let name = path
@@ -852,6 +875,7 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         }
     }
 
+    sync_history_selection(ui);
     update_image_actions(ui);
 }
 
@@ -873,9 +897,9 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let navigation = has_image && !generating && !upscaling && !zooming;
 
     ui.nav_up_button
-        .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
-    ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
+    ui.nav_down_button
+        .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.upscale_button
         .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
     ui.edit_button
@@ -1621,6 +1645,7 @@ fn start_generation(ui: &Rc<Ui>) {
                             ui.entries.borrow_mut().insert(0, entry.clone());
                             history_view::add_row(&ui, &entry, true);
                             trim_history(&ui);
+                            history_view::highlight(&ui, Path::new(&entry.image_path));
                             update_image_actions(&ui);
                         }
                         Err(error) => {
@@ -1678,6 +1703,7 @@ fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     ui.reference_name.set_tooltip_text(None);
     ui.reference_bar.set_visible(false);
     ui.stack.set_visible_child_name(target);
+    sync_history_selection(ui);
     update_image_actions(ui);
     true
 }

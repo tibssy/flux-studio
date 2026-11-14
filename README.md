@@ -20,7 +20,8 @@ Milestone 3 (packaged desktop app):
   sampler, CPU offload) in the sidebar
 - focused composer: prompt, Generate/Cancel and a reference-image button
 - **reference-image editing** (`-r`); edits promote their result to the next
-  reference, while text-to-image runs stay text-to-image
+  reference, while text-to-image runs stay text-to-image. Loading a reference
+  or crop fits the width/height sliders to its aspect ratio
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry
 - clicking a history image shows it on the canvas with the upscale/edit/crop
@@ -33,7 +34,8 @@ Milestone 3 (packaged desktop app):
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
-  up/down arrows to step through history and compare an upscale with its source
+  up/down arrows to step through history and compare an upscale with its source;
+  the sidebar highlights the image currently on the canvas
 - the composer slides away during generation and returns via Edit/New
 - **preferences dialog**: output folder, CPU offload, models folder
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation

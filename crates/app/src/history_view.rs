@@ -5,6 +5,7 @@ use adw::prelude::*;
 use flux_core::preset::preset;
 use flux_core::style::STYLES;
 use flux_core::upscaler::upscaler;
+use glib::types::StaticType;
 use gtk::{gdk, glib};
 
 use crate::history::Generation;
@@ -387,6 +388,48 @@ fn row_by_id(list: &gtk::ListBox, id: i64) -> Option<gtk::ListBoxRow> {
         child = next;
     }
     None
+}
+
+/// Highlight the history row for `path` and scroll it into view.
+pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
+    let id = ui
+        .entries
+        .borrow()
+        .iter()
+        .find(|entry| Path::new(&entry.image_path) == path)
+        .map(|entry| entry.id);
+    let Some(id) = id else {
+        ui.history_list.unselect_all();
+        return;
+    };
+    let Some(row) = row_by_id(&ui.history_list, id) else {
+        return;
+    };
+    ui.history_list.select_row(Some(&row));
+    reveal_row(&ui.history_list, &row);
+}
+
+/// Scroll a history row into view without moving keyboard focus.
+fn reveal_row(list: &gtk::ListBox, row: &gtk::ListBoxRow) {
+    let Some(scroller) = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+    else {
+        return;
+    };
+    let Some(bounds) = row.compute_bounds(list) else {
+        return;
+    };
+    let adjustment = scroller.vadjustment();
+    let top = bounds.y() as f64;
+    let bottom = top + bounds.height() as f64;
+    let page = adjustment.page_size();
+    let value = adjustment.value();
+    if top < value {
+        adjustment.set_value(top);
+    } else if bottom > value + page {
+        adjustment.set_value(bottom - page);
+    }
 }
 
 fn kv(title: &str, value: &str) -> gtk::Box {
