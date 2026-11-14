@@ -541,18 +541,15 @@ fn rebuild(
     }
     custom_row.add_suffix(&choose);
     if let Some(path) = custom {
-        let button = gtk::Button::builder()
-            .icon_name("object-select-symbolic")
-            .tooltip_text(if custom_active {
-                "Active custom backend"
-            } else {
-                "Use this custom backend"
-            })
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .sensitive(!custom_active && path.is_file())
-            .build();
-        if !custom_active && path.is_file() {
+        if custom_active {
+            custom_row.add_suffix(&active_label());
+        } else if path.is_file() {
+            let button = gtk::Button::builder()
+                .icon_name("object-select-symbolic")
+                .tooltip_text("Use this custom backend")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
             let ui = ui.clone();
             let status = status.clone();
             let refresh = refresh.clone();
@@ -565,10 +562,7 @@ fn rebuild(
                 set_custom_server(&ui, path.clone(), None, None, &status);
                 refresh();
             });
-        }
-        custom_row.add_suffix(&button);
-        if custom_active {
-            custom_row.add_suffix(&active_label());
+            custom_row.add_suffix(&button);
         }
     }
     list.append(&custom_row);
