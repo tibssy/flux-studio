@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::paths;
+use crate::{paths, size};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -14,6 +14,11 @@ pub struct Config {
     pub output_dir: PathBuf,
     pub default_width: u32,
     pub default_height: u32,
+    /// Target megapixels selected in the sidebar. Optional for older configs.
+    pub default_mp: Option<f64>,
+    /// Aspect ratio selected in the sidebar. Optional for older configs.
+    pub default_ratio_width: Option<u32>,
+    pub default_ratio_height: Option<u32>,
     pub offload: bool,
     /// Id of the preset selected in the model dropdown.
     pub active_preset: String,
@@ -25,8 +30,6 @@ pub struct Config {
     pub style_id: String,
     /// Whether the left sidebar is shown.
     pub sidebar_visible: bool,
-    /// Whether the sidebar hides itself after focus and pointer leave.
-    pub sidebar_auto_hide: bool,
     /// Optional override for the `sd-server` binary.
     pub sd_server: Option<PathBuf>,
     /// Id of the installed backend selected in Preferences.
@@ -59,13 +62,15 @@ impl Default for Config {
             output_dir: paths::default_output_dir(),
             default_width: preset.default_width,
             default_height: preset.default_height,
+            default_mp: None,
+            default_ratio_width: None,
+            default_ratio_height: None,
             offload: true,
             active_preset: preset.id.to_string(),
             upscaler_id: crate::upscaler::default_upscaler().id.to_string(),
             upscale_factor: crate::upscaler::NATIVE_SCALE,
             style_id: crate::style::default_style().id.to_string(),
             sidebar_visible: true,
-            sidebar_auto_hide: true,
             sd_server: None,
             backend_id: None,
             backend: None,
@@ -81,6 +86,27 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Target megapixels, deriving it from the legacy width/height when the
+    /// newer field is missing.
+    pub fn mp(&self) -> f64 {
+        let derived = size::mp_for_size(self.default_width.max(1), self.default_height.max(1));
+        let mp = self
+            .default_mp
+            .filter(|mp| mp.is_finite())
+            .unwrap_or(derived);
+        mp.clamp(size::MP_MIN, size::MP_MAX)
+    }
+
+    /// Selected aspect ratio, reduced to lowest terms.
+    pub fn ratio(&self) -> (u32, u32) {
+        match (self.default_ratio_width, self.default_ratio_height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => {
+                size::reduce_ratio(width, height)
+            }
+            _ => size::reduce_ratio(self.default_width.max(1), self.default_height.max(1)),
+        }
+    }
+
     pub fn load() -> Self {
         match std::fs::read_to_string(paths::config_file()) {
             Ok(text) => toml::from_str(&text).unwrap_or_default(),
@@ -112,12 +138,12 @@ mod tests {
             default_height = 768
             offload = true
             active_preset = "flux2-klein-4b"
+            sidebar_auto_hide = true
             "#,
         )
         .unwrap();
         assert_eq!(config.style_id, "none");
         assert!(config.sidebar_visible);
-        assert!(config.sidebar_auto_hide);
         assert!(config.sd_server.is_none());
         assert!(config.backend_id.is_none());
         assert!(config.backend.is_none());
@@ -130,5 +156,39 @@ mod tests {
         assert!(config.llama_custom_cli.is_none());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
+        assert!((config.mp() - 0.589824).abs() < 1e-6);
+        assert_eq!(config.ratio(), (1, 1));
+    }
+
+    #[test]
+    fn reads_explicit_mp_and_ratio() {
+        let config: Config = toml::from_str(
+            r#"
+            models_dir = "/models"
+            output_dir = "/out"
+            default_width = 1344
+            default_height = 752
+            default_mp = 1.0
+            default_ratio_width = 16
+            default_ratio_height = 9
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.mp(), 1.0);
+        assert_eq!(config.ratio(), (16, 9));
+    }
+
+    #[test]
+    fn derives_custom_ratio_from_legacy_size() {
+        let config: Config = toml::from_str(
+            r#"
+            models_dir = "/models"
+            output_dir = "/out"
+            default_width = 1216
+            default_height = 832
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.ratio(), (19, 13));
     }
 }

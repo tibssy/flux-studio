@@ -1,7 +1,8 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use flux_core::size::RatioMatch;
 use flux_core::style::STYLES;
 use flux_core::{Config, size};
 
@@ -10,10 +11,11 @@ pub(crate) struct Sidebar {
     pub model_dropdown: gtk::DropDown,
     pub model_hint: gtk::Label,
     pub style_dropdown: gtk::DropDown,
-    pub width_scale: gtk::Scale,
-    pub height_scale: gtk::Scale,
-    pub width_value: gtk::Label,
-    pub height_value: gtk::Label,
+    pub mp_scale: gtk::Scale,
+    pub mp_value: gtk::Label,
+    pub ratio_dropdown: gtk::DropDown,
+    pub ratio_model: gtk::StringList,
+    pub custom_ratio: Rc<RefCell<Option<(u32, u32)>>>,
     pub ratio_area: gtk::DrawingArea,
     pub ratio_label: gtk::Label,
     pub mp_label: gtk::Label,
@@ -61,14 +63,32 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     style_dropdown.set_hexpand(true);
     style_dropdown.set_tooltip_text(Some("Appends a look preset to the prompt"));
 
-    let width = size::snap(config.default_width);
-    let height = size::snap(config.default_height);
+    let mp = config.mp();
+    let ratio = config.ratio();
+    let (width, height) = size::size_for_mp(mp, ratio);
     size_cell.set((width, height));
 
-    let width_scale = make_scale(width);
-    let height_scale = make_scale(height);
-    let width_value = value_label(width);
-    let height_value = value_label(height);
+    let mp_scale = make_mp_scale(mp);
+    let mp_value = mp_value_label(mp);
+
+    let labels = ratio_labels();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let ratio_model = gtk::StringList::new(&label_refs);
+    let custom_ratio = Rc::new(RefCell::new(None));
+    let ratio_index = match size::ratio_for_size(ratio.0, ratio.1) {
+        RatioMatch::Preset(index) => index as u32,
+        RatioMatch::Custom(custom) => {
+            ratio_model.append(&size::ratio_label(custom));
+            *custom_ratio.borrow_mut() = Some(custom);
+            size::RATIOS.len() as u32
+        }
+    };
+    let ratio_dropdown = gtk::DropDown::builder()
+        .model(&ratio_model)
+        .selected(ratio_index)
+        .hexpand(true)
+        .tooltip_text("Target aspect ratio")
+        .build();
 
     let ratio_area = gtk::DrawingArea::builder()
         .content_width(112)
@@ -112,12 +132,15 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     }
 
     let ratio_label = gtk::Label::builder()
-        .label(size::aspect_label(width, height))
+        .label(size::ratio_label(ratio))
         .xalign(0.0)
         .css_classes(["heading"])
         .build();
     let mp_label = gtk::Label::builder()
-        .label(format!("{:.2} MP", size::megapixels(width, height)))
+        .label(format!(
+            "{:.2} MP · {width} × {height} px",
+            size::megapixels(width, height)
+        ))
         .xalign(0.0)
         .css_classes(["caption", "dim-label"])
         .build();
@@ -197,16 +220,15 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     setup.append(&model_hint);
     setup.append(&row("Style", &style_dropdown));
 
-    let width_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    width_row.append(&field_label("Width"));
-    width_row.append(&width_scale);
-    width_row.append(&width_value);
-    let height_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    height_row.append(&field_label("Height"));
-    height_row.append(&height_scale);
-    height_row.append(&height_value);
-    setup.append(&width_row);
-    setup.append(&height_row);
+    let size_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    size_row.append(&field_label("Size"));
+    size_row.append(&mp_scale);
+    size_row.append(&mp_value);
+    let ratio_select_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    ratio_select_row.append(&field_label("Ratio"));
+    ratio_select_row.append(&ratio_dropdown);
+    setup.append(&size_row);
+    setup.append(&ratio_select_row);
     setup.append(&ratio_row);
     setup.append(&seed_row);
     setup.append(&advanced_toggle);
@@ -250,10 +272,11 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
         model_dropdown,
         model_hint,
         style_dropdown,
-        width_scale,
-        height_scale,
-        width_value,
-        height_value,
+        mp_scale,
+        mp_value,
+        ratio_dropdown,
+        ratio_model,
+        custom_ratio,
         ratio_area,
         ratio_label,
         mp_label,
@@ -267,33 +290,36 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     }
 }
 
-fn make_scale(value: u32) -> gtk::Scale {
+fn ratio_labels() -> Vec<String> {
+    size::RATIOS
+        .iter()
+        .map(|&ratio| size::ratio_label(ratio))
+        .collect()
+}
+
+fn make_mp_scale(value: f64) -> gtk::Scale {
     let scale = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
-        size::MIN_SIZE as f64,
-        size::MAX_SIZE as f64,
-        size::SIZE_STEP as f64,
+        size::MP_MIN,
+        size::MP_MAX,
+        0.01,
     );
     scale.set_draw_value(false);
     scale.set_hexpand(true);
-    scale.set_round_digits(0);
-    scale.set_value(value as f64);
-    scale.set_tooltip_text(Some(&format!(
-        "{}–{} px, steps of {}",
-        size::MIN_SIZE,
-        size::MAX_SIZE,
-        size::SIZE_STEP
-    )));
-    for mark in [512, 768, 1024, 1280] {
-        scale.add_mark(mark as f64, gtk::PositionType::Bottom, None);
+    scale.set_digits(2);
+    scale.set_round_digits(2);
+    scale.set_value(value);
+    scale.set_tooltip_text(Some("Target size in megapixels"));
+    for mark in [0.5, 1.0, 1.5] {
+        scale.add_mark(mark, gtk::PositionType::Bottom, None);
     }
     scale
 }
 
-fn value_label(value: u32) -> gtk::Label {
+fn mp_value_label(value: f64) -> gtk::Label {
     gtk::Label::builder()
-        .label(value.to_string())
-        .width_chars(4)
+        .label(format!("{value:.2} MP"))
+        .width_chars(7)
         .xalign(1.0)
         .css_classes(["caption", "dim-label"])
         .build()

@@ -10,6 +10,7 @@ use async_channel::Sender;
 use flux_core::preset::{ModelFileSpec, ModelPreset};
 use flux_core::runtime::{ArchiveFormat, BackendEntry, InstalledBackend};
 use flux_core::upscaler::UpscalerPreset;
+use flux_core::vision::VisionHelper;
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::RANGE;
@@ -131,6 +132,22 @@ pub async fn download_upscaler(
     progress: Sender<DownloadProgress>,
 ) -> Result<PathBuf> {
     download(&preset.file, models_dir, 0, 1, progress).await
+}
+
+/// Download the optional vision helper model and its projector.
+pub async fn download_vision_helper(
+    helper: &VisionHelper,
+    models_dir: &Path,
+    progress: Sender<DownloadProgress>,
+) -> Result<Vec<PathBuf>> {
+    let missing = helper.missing(models_dir);
+    let file_count = missing.len();
+    let mut paths = Vec::with_capacity(file_count);
+
+    for (index, file) in missing.into_iter().enumerate() {
+        paths.push(download(file, models_dir, index, file_count, progress.clone()).await?);
+    }
+    Ok(paths)
 }
 
 #[derive(Debug, Clone)]

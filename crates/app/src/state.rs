@@ -98,6 +98,15 @@ mod tests {
     }
 
     #[test]
+    fn preview_shows_an_image_without_making_a_reference() {
+        let mut state = AppState::default();
+        state.load(PathBuf::from("/tmp/ref.png"));
+        state.preview(PathBuf::from("/tmp/other.png"));
+        assert_eq!(state.display, Some(PathBuf::from("/tmp/other.png")));
+        assert_eq!(state.reference, None);
+    }
+
+    #[test]
     fn new_image_clears_everything() {
         let mut state = AppState::default();
         state.load(PathBuf::from("/tmp/ref.png"));

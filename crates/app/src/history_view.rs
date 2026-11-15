@@ -5,6 +5,7 @@ use adw::prelude::*;
 use flux_core::preset::preset;
 use flux_core::style::STYLES;
 use flux_core::upscaler::upscaler;
+use glib::types::StaticType;
 use gtk::{gdk, glib};
 
 use crate::history::Generation;
@@ -82,7 +83,7 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     row_box.append(&actions);
     row.set_child(Some(&row_box));
 
-    let tooltip = if entry.kind == "upscale" {
+    let tooltip = if kind_label(&entry.kind).is_some() {
         format!(
             "{}\n{} · {} × {} · {:.1}s{}",
             entry.prompt,
@@ -134,25 +135,9 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     }
 }
 
-/// Load a history entry as the active image and restore its settings.
-pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() || ui.upscaling.get() {
-        return;
-    }
-    cancel_zoom(ui);
-
+/// Restore the prompt, model, style, size and seed recorded with an entry.
+fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     if entry.kind == "upscale" {
-        ui.undo.borrow_mut().clear();
-        ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
-        update_image_view(ui);
-        refresh_model(ui);
-        show_composer(ui, true);
-        ui.status.set_text(&format!(
-            "Upscaled · {} · {} × {}",
-            entry_model_label(entry),
-            entry.width,
-            entry.height
-        ));
         return;
     }
 
@@ -177,6 +162,54 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     }
 
     set_size(ui, entry.width, entry.height);
+}
+
+pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
+    match kind {
+        "upscale" => Some("Upscaled"),
+        "colorize" => Some("Colorized"),
+        "night" => Some("Night"),
+        "day" => Some("Daylight"),
+        "expand" => Some("Expanded"),
+        _ => None,
+    }
+}
+
+pub(crate) fn status_label(entry: &Generation) -> String {
+    let label = entry_model_label(entry);
+    if let Some(action) = kind_label(&entry.kind) {
+        format!("{action} · {label} · {} × {}", entry.width, entry.height)
+    } else {
+        format!("History · {label} · {} × {}", entry.width, entry.height)
+    }
+}
+
+/// Show a history entry on the canvas with the image actions, without making
+/// it the edit reference.
+pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
+    if ui.generating.get() || ui.upscaling.get() {
+        return;
+    }
+    cancel_zoom(ui);
+    restore_settings(ui, entry);
+
+    ui.undo.borrow_mut().clear();
+    ui.state
+        .borrow_mut()
+        .preview(PathBuf::from(&entry.image_path));
+    update_image_view(ui);
+    refresh_model(ui);
+    show_composer(ui, false);
+    ui.status.set_text(&status_label(entry));
+}
+
+/// Load a history entry as the edit reference and bring the composer back.
+pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
+    if ui.generating.get() || ui.upscaling.get() {
+        return;
+    }
+    cancel_zoom(ui);
+    restore_settings(ui, entry);
 
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().load(PathBuf::from(&entry.image_path));
@@ -240,8 +273,12 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
             &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
         ));
         content.append(&kv("Created", &created_label(entry.created_at)));
-        if let Some(reference) = entry.reference_path.as_deref() {
-            content.append(&kv("Reference", reference));
+        if entry.kind == "generate" {
+            if let Some(reference) = entry.reference_path.as_deref() {
+                content.append(&kv("Reference", reference));
+            }
+        } else if let Some(source) = entry.source_path.as_deref() {
+            content.append(&kv("Source", source));
         }
         content.append(&kv("File", &entry.image_path));
     }
@@ -254,10 +291,13 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         .build();
 
     let dialog = adw::AlertDialog::builder()
-        .heading(if entry.kind == "upscale" {
-            "Upscale details"
-        } else {
-            "Image details"
+        .heading(match entry.kind.as_str() {
+            "upscale" => "Upscale details",
+            "colorize" => "Colorize details",
+            "night" => "Night details",
+            "day" => "Daylight details",
+            "expand" => "Expand details",
+            _ => "Image details",
         })
         .content_width(880)
         .extra_child(&scroller)
@@ -279,7 +319,7 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
                 ui.window.clipboard().set_text(&entry.prompt);
                 ui.toast.add_toast(adw::Toast::new("Prompt copied."));
             }
-            "use" => load_entry(&ui, &entry),
+            "use" => use_as_reference(&ui, &entry),
             _ => {}
         });
     }
@@ -366,6 +406,48 @@ fn row_by_id(list: &gtk::ListBox, id: i64) -> Option<gtk::ListBoxRow> {
         child = next;
     }
     None
+}
+
+/// Highlight the history row for `path` and scroll it into view.
+pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
+    let id = ui
+        .entries
+        .borrow()
+        .iter()
+        .find(|entry| Path::new(&entry.image_path) == path)
+        .map(|entry| entry.id);
+    let Some(id) = id else {
+        ui.history_list.unselect_all();
+        return;
+    };
+    let Some(row) = row_by_id(&ui.history_list, id) else {
+        return;
+    };
+    ui.history_list.select_row(Some(&row));
+    reveal_row(&ui.history_list, &row);
+}
+
+/// Scroll a history row into view without moving keyboard focus.
+fn reveal_row(list: &gtk::ListBox, row: &gtk::ListBoxRow) {
+    let Some(scroller) = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+    else {
+        return;
+    };
+    let Some(bounds) = row.compute_bounds(list) else {
+        return;
+    };
+    let adjustment = scroller.vadjustment();
+    let top = bounds.y() as f64;
+    let bottom = top + bounds.height() as f64;
+    let page = adjustment.page_size();
+    let value = adjustment.value();
+    if top < value {
+        adjustment.set_value(top);
+    } else if bottom > value + page {
+        adjustment.set_value(bottom - page);
+    }
 }
 
 fn kv(title: &str, value: &str) -> gtk::Box {

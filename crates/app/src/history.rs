@@ -17,7 +17,7 @@ pub struct Generation {
     pub duration_ms: i64,
     pub image_path: String,
     pub reference_path: Option<String>,
-    /// `generate` or `upscale`.
+    /// `generate`, `upscale`, `colorize`, or `expand`.
     pub kind: String,
     /// Original image for an upscale entry.
     pub source_path: Option<String>,

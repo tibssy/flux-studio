@@ -20,6 +20,12 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub colorize_button: gtk::Button,
+    pub auto_lighting_button: gtk::Button,
+    pub daylight_button: gtk::Button,
+    pub night_button: gtk::Button,
+    pub expand_button: gtk::Button,
+    pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
     pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
@@ -82,6 +88,42 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
+    let colorize_button = gtk::Button::builder()
+        .icon_name("color-select-symbolic")
+        .tooltip_text("Colorize this black-and-white image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let auto_lighting_button = gtk::Button::builder()
+        .icon_name("daytime-sunset-symbolic")
+        .tooltip_text("Auto: convert day ↔ night")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let daylight_button = gtk::Button::builder()
+        .icon_name("weather-clear-symbolic")
+        .tooltip_text("Convert to daylight")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let night_button = gtk::Button::builder()
+        .icon_name("weather-clear-night-symbolic")
+        .tooltip_text("Convert to night")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let expand_button = gtk::Button::builder()
+        .icon_name("zoom-fit-best-symbolic")
+        .tooltip_text("Expand to the sidebar size and ratio")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let back_button = gtk::Button::builder()
+        .icon_name("go-previous-symbolic")
+        .tooltip_text("Back to view")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
     let nav_up_button = gtk::Button::builder()
         .icon_name("go-up-symbolic")
         .tooltip_text("Newer image (scroll up)")
@@ -111,10 +153,16 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
+    image_actions.append(&colorize_button);
+    image_actions.append(&auto_lighting_button);
+    image_actions.append(&daylight_button);
+    image_actions.append(&night_button);
+    image_actions.append(&expand_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
     image_actions.append(&undo_button);
+    image_actions.append(&back_button);
 
     let image_overlay = gtk::Overlay::builder()
         .child(&stack)
@@ -225,9 +273,9 @@ pub(crate) fn build() -> MainView {
         .show_text(true)
         .build();
     let cancel = gtk::Button::builder()
-        .label("Cancel")
+        .icon_name("process-stop-symbolic")
         .tooltip_text("Cancel generation")
-        .css_classes(["pill"])
+        .css_classes(["destructive-action", "circular"])
         .build();
     let progress_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     progress_row.set_visible(false);
@@ -275,6 +323,12 @@ pub(crate) fn build() -> MainView {
         zoom_overlay,
         edit_button,
         upscale_button,
+        colorize_button,
+        auto_lighting_button,
+        daylight_button,
+        night_button,
+        expand_button,
+        back_button,
         nav_up_button,
         nav_down_button,
         crop_button,
