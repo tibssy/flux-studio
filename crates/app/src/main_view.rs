@@ -24,7 +24,10 @@ pub(crate) struct MainView {
     pub effects_popover: gtk::Popover,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
+    pub enhance_item: gtk::Button,
+    pub denoise_item: gtk::Button,
     pub photoreal_item: gtk::Button,
+    pub background_item: gtk::Button,
     pub auto_lighting_item: gtk::Button,
     pub daylight_item: gtk::Button,
     pub night_item: gtk::Button,
@@ -102,10 +105,21 @@ pub(crate) fn build() -> MainView {
         "Recover",
         "Renew old, scratched or damaged photos",
     );
+    let enhance_item = effect_item("starred-symbolic", "Enhance", "Sharpen detail and clarity");
+    let denoise_item = effect_item(
+        "edit-clear-symbolic",
+        "Denoise",
+        "Remove grain and compression artifacts",
+    );
     let photoreal_item = effect_item(
         "camera-photo-symbolic",
         "Photoreal",
         "Turn a drawing or cartoon into a realistic photo",
+    );
+    let background_item = effect_item(
+        "image-x-generic-symbolic",
+        "Replace background",
+        "Swap the background while keeping the subject",
     );
     let auto_lighting_item = effect_item(
         "daytime-sunset-symbolic",
@@ -135,8 +149,11 @@ pub(crate) fn build() -> MainView {
     effects_box.set_margin_end(6);
     effects_box.append(&colorize_item);
     effects_box.append(&recover_item);
+    effects_box.append(&enhance_item);
+    effects_box.append(&denoise_item);
     effects_box.append(&photoreal_item);
     effects_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    effects_box.append(&background_item);
     effects_box.append(&auto_lighting_item);
     effects_box.append(&daylight_item);
     effects_box.append(&night_item);
@@ -356,7 +373,10 @@ pub(crate) fn build() -> MainView {
         effects_popover,
         colorize_item,
         recover_item,
+        enhance_item,
+        denoise_item,
         photoreal_item,
+        background_item,
         auto_lighting_item,
         daylight_item,
         night_item,

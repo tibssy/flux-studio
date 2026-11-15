@@ -80,7 +80,10 @@ pub(crate) struct Ui {
     pub effects_popover: gtk::Popover,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
+    pub enhance_item: gtk::Button,
+    pub denoise_item: gtk::Button,
     pub photoreal_item: gtk::Button,
+    pub background_item: gtk::Button,
     pub auto_lighting_item: gtk::Button,
     pub daylight_item: gtk::Button,
     pub night_item: gtk::Button,
@@ -307,7 +310,10 @@ fn build_ui(app: &adw::Application) {
         effects_popover: view.effects_popover,
         colorize_item: view.colorize_item,
         recover_item: view.recover_item,
+        enhance_item: view.enhance_item,
+        denoise_item: view.denoise_item,
         photoreal_item: view.photoreal_item,
+        background_item: view.background_item,
         auto_lighting_item: view.auto_lighting_item,
         daylight_item: view.daylight_item,
         night_item: view.night_item,
@@ -565,10 +571,34 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        let button = ui.enhance_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            enhance_image(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.denoise_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            denoise_image(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
         let button = ui.photoreal_item.clone();
         button.connect_clicked(move |_| {
             ui.effects_popover.popdown();
             photoreal_image(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.background_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            replace_background_image(&ui);
         });
     }
     {
@@ -1028,6 +1058,11 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
+    if show {
+        ui.crop_button.set_active(false);
+        set_crop_mode(ui, false);
+        ui.effects_popover.popdown();
+    }
     ui.composer.set_reveal_child(show);
     update_image_actions(ui);
     if show {
@@ -1047,27 +1082,29 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let classifying = ui.classifying.get();
     let busy = generating || upscaling || zooming || classifying;
     let position = history_position(ui);
-    let navigation = has_image && !busy && !editing;
-    let view = has_image && !composing && !busy && !editing;
+    let actions = has_image && !busy;
+    let navigation = actions && !editing;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
-    ui.effects_button.set_visible(view);
+    ui.effects_button.set_visible(actions);
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
-    ui.upscale_button.set_visible(view);
-    ui.edit_button.set_visible(view);
-    ui.crop_button.set_visible(view);
+    ui.upscale_button.set_visible(actions);
+    ui.edit_button.set_visible(actions && !composing);
+    ui.crop_button.set_visible(actions);
     ui.back_button.set_visible(editing && !busy);
     ui.undo_button
-        .set_visible(has_image && !busy && ui.undo.borrow().can_undo());
+        .set_visible(actions && ui.undo.borrow().can_undo());
 
-    if !view {
+    if composing || !actions {
         ui.effects_popover.popdown();
+    }
+    if !actions {
         ui.crop_button.set_active(false);
     }
 }
@@ -1120,9 +1157,8 @@ fn undo_crop(ui: &Rc<Ui>) {
 
     *ui.state.borrow_mut() = previous;
     update_image_view(ui);
-    let editing = ui.state.borrow().reference.is_some();
     fit_reference_size(ui);
-    show_composer(ui, editing);
+    show_composer(ui, false);
     ui.status.set_text("Crop undone");
 
     match load_zoom_surface(&path) {
@@ -1247,10 +1283,12 @@ fn apply_crop(ui: &Rc<Ui>, selection: CropRect) {
                 surface,
                 (0.0, 0.0, image_w as f64, image_h as f64),
                 (x as f64, y as f64, width as f64, height as f64),
-                true,
+                false,
             );
-            ui.status
-                .set_text(&format!("Cropped to {width} × {height}"));
+            show_composer(ui, false);
+            ui.status.set_text(&format!(
+                "Cropped to {width} × {height} · press Edit to prompt"
+            ));
             ui.toast
                 .add_toast(adw::Toast::new(&format!("Cropped to {width} × {height}.")));
             ui.crop_button.set_active(false);
@@ -1510,8 +1548,9 @@ fn choose_reference(ui: &Rc<Ui>) {
         ui.state.borrow_mut().load(path);
         update_image_view(&ui);
         fit_reference_size(&ui);
-        show_composer(&ui, true);
-        ui.status.set_text(&format!("Editing reference · {name}"));
+        show_composer(&ui, false);
+        ui.status
+            .set_text(&format!("Reference ready · {name} · press Edit to prompt"));
     });
 }
 
@@ -1623,7 +1662,10 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 
 const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
 const RECOVER_PROMPT: &str = "restore this old damaged photograph, remove scratches, stains, creases, dust and tears, repair missing areas, recover natural detail and texture, photorealistic restoration, keep the same composition, subjects, and expression";
+const ENHANCE_PROMPT: &str = "enhance this image, sharpen fine details, increase clarity and micro-contrast, reduce blur and compression artifacts, natural textures, photorealistic, keep the same composition, subjects, colors, and lighting";
+const DENOISE_PROMPT: &str = "remove noise, grain, compression artifacts and banding from this image, smooth flat areas while preserving edges and fine detail, keep the same composition, subjects, colors, and lighting";
 const PHOTOREAL_PROMPT: &str = "transform this drawing or cartoon into a photorealistic photograph, realistic skin, hair, fabric and material textures, natural lighting and shadows, accurate anatomy and perspective, keep the same composition, subjects, pose, and details";
+const BACKGROUND_PROMPT: &str = "replace the background with a clean neutral studio backdrop, soft even lighting, keep the subject, pose, expression, hair and clothing unchanged, realistic shadows and edges";
 const NIGHT_PROMPT: &str = "transform this daytime scene into night, dark blue sky, moonlight, glowing windows and street lights, deep shadows, cinematic night photography, keep the same composition, subjects, and details";
 const DAY_PROMPT: &str = "transform this night scene into bright daylight, clear blue sky, warm sunlight, natural colors, soft shadows, keep the same composition, subjects, and details";
 const EXPAND_PROMPT: &str = "expand the image to fill the new canvas, extending the scene naturally beyond the original borders, keep the same composition, subjects, lighting, and details";
@@ -1634,7 +1676,10 @@ enum GenerationMode {
     Edit,
     Colorize,
     Recover,
+    Enhance,
+    Denoise,
     Photoreal,
+    Background,
     Night,
     Day,
     Expand,
@@ -1649,7 +1694,10 @@ impl GenerationMode {
         match self {
             Self::Colorize => "colorize",
             Self::Recover => "recover",
+            Self::Enhance => "enhance",
+            Self::Denoise => "denoise",
             Self::Photoreal => "photoreal",
+            Self::Background => "background",
             Self::Night => "night",
             Self::Day => "day",
             Self::Expand => "expand",
@@ -1661,7 +1709,10 @@ impl GenerationMode {
         match self {
             Self::Colorize => "Image colorized.",
             Self::Recover => "Image recovered.",
+            Self::Enhance => "Image enhanced.",
+            Self::Denoise => "Image denoised.",
             Self::Photoreal => "Image made photorealistic.",
+            Self::Background => "Background replaced.",
             Self::Night => "Converted to night.",
             Self::Day => "Converted to day.",
             Self::Expand => "Image expanded.",
@@ -1921,7 +1972,10 @@ fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
     match mode {
         GenerationMode::Colorize
         | GenerationMode::Recover
+        | GenerationMode::Enhance
+        | GenerationMode::Denoise
         | GenerationMode::Photoreal
+        | GenerationMode::Background
         | GenerationMode::Night
         | GenerationMode::Day
         | GenerationMode::Expand => {
@@ -1993,12 +2047,39 @@ fn recover_image(ui: &Rc<Ui>) {
     );
 }
 
+fn enhance_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Enhance,
+        ENHANCE_PROMPT,
+        "No image to enhance.",
+    );
+}
+
+fn denoise_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Denoise,
+        DENOISE_PROMPT,
+        "No image to denoise.",
+    );
+}
+
 fn photoreal_image(ui: &Rc<Ui>) {
     start_effect(
         ui,
         GenerationMode::Photoreal,
         PHOTOREAL_PROMPT,
         "No image to convert.",
+    );
+}
+
+fn replace_background_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Background,
+        BACKGROUND_PROMPT,
+        "No image to change.",
     );
 }
 

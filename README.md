@@ -37,8 +37,8 @@ Milestone 3 (packaged desktop app):
   day/night detection inside the effects menu; without it, explicit daylight
   and night entries are used
 - **image actions** over the canvas: an effects menu (colorize, recover,
-  photoreal, day/night, expand), upscale, edit, crop-to-reference, undo, and
-  back-to-view
+  enhance, denoise, photoreal, replace background, day/night, expand),
+  upscale, edit, crop-to-reference, undo, and back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
@@ -114,10 +114,10 @@ source image.
 ## Day/night helper
 
 The optional **LFM2.5-VL-450M** vision helper (~332 MB: Q4_K_M weights plus a
-Q8 multimodal projector) lets the sunset button decide whether the current
-image is night or daylight before applying the opposite prompt. Download it
-from **Preferences → Models → Vision helper**. Without it, the sun and moon
-buttons apply the daylight and night prompts explicitly.
+Q8 multimodal projector) lets the **Auto day ↔ night** effect decide whether the
+current image is night or daylight before applying the opposite prompt. Download
+it from **Preferences → Models → Vision helper**. Without it, the **To daylight**
+and **To night** effects apply those prompts explicitly.
 
 After a run the upscaled image fades in over the original. Scroll up or down
 over the canvas, or use the arrows on the right edge, to step through history
@@ -134,7 +134,7 @@ without leaving the app.
 | Preferences | `Ctrl+,` or the header menu |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
-| Colorize / recover / photoreal | **Effects** menu at the top-right of the image |
+| Colorize / recover / enhance / denoise / photoreal / replace background | **Effects** menu at the top-right of the image |
 | Auto day ↔ night | **Effects → Auto day ↔ night** (needs the optional vision helper) |
 | Convert to daylight | **Effects → To daylight** (used when the helper is not installed) |
 | Convert to night | **Effects → To night** (used when the helper is not installed) |
@@ -160,14 +160,16 @@ leave edit mode and generate from text alone; the prompt is kept.
 After a generation the prompt field slides away. Use the pencil button on the
 image (or `New`) to bring it back; the pencil makes the current image the edit
 reference. **Back** leaves edit mode without clearing the image. The selection
-button crops a region of the image with an animated zoom, uses the crop as the
-new reference, and opens the composer; undo plays the same zoom in reverse.
-`Ctrl+B` toggles the sidebar.
+button crops a region of the image with an animated zoom and uses the crop as
+the new reference; undo plays the same zoom in reverse. Selecting a reference
+or cropping keeps the action toolbar visible and leaves the composer closed;
+press **Edit** when you want to type a prompt. `Ctrl+B` toggles the sidebar.
 
-**Colorize**, **Recover** and **Photoreal** use built-in prompts and preserve
-the source aspect at the current MP target. With the optional vision helper
-installed, **Effects → Auto day ↔ night** asks LFM2.5-VL-450M whether the image
-is night or daylight and applies the opposite prompt automatically. Without it,
+**Colorize**, **Recover**, **Enhance**, **Denoise**, **Photoreal** and
+**Replace background** use built-in prompts and preserve the source aspect at
+the current MP target. With the optional vision helper installed,
+**Effects → Auto day ↔ night** asks LFM2.5-VL-450M whether the image is night or
+daylight and applies the opposite prompt automatically. Without it,
 **Effects → To daylight** and **To night** apply those prompts explicitly.
 **Effects → Expand** uses the sidebar MP + ratio as the target size and falls
 back to a built-in expansion prompt when the prompt field is empty, so it works
