@@ -168,6 +168,8 @@ pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
     match kind {
         "upscale" => Some("Upscaled"),
         "colorize" => Some("Colorized"),
+        "recover" => Some("Recovered"),
+        "photoreal" => Some("Photoreal"),
         "night" => Some("Night"),
         "day" => Some("Daylight"),
         "expand" => Some("Expanded"),

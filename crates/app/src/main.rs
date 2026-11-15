@@ -76,11 +76,15 @@ pub(crate) struct Ui {
     pub classifying: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
-    pub colorize_button: gtk::Button,
-    pub auto_lighting_button: gtk::Button,
-    pub daylight_button: gtk::Button,
-    pub night_button: gtk::Button,
-    pub expand_button: gtk::Button,
+    pub effects_button: gtk::MenuButton,
+    pub effects_popover: gtk::Popover,
+    pub colorize_item: gtk::Button,
+    pub recover_item: gtk::Button,
+    pub photoreal_item: gtk::Button,
+    pub auto_lighting_item: gtk::Button,
+    pub daylight_item: gtk::Button,
+    pub night_item: gtk::Button,
+    pub expand_item: gtk::Button,
     pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
     pub nav_down_button: gtk::Button,
@@ -299,11 +303,15 @@ fn build_ui(app: &adw::Application) {
         classifying: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
-        colorize_button: view.colorize_button,
-        auto_lighting_button: view.auto_lighting_button,
-        daylight_button: view.daylight_button,
-        night_button: view.night_button,
-        expand_button: view.expand_button,
+        effects_button: view.effects_button,
+        effects_popover: view.effects_popover,
+        colorize_item: view.colorize_item,
+        recover_item: view.recover_item,
+        photoreal_item: view.photoreal_item,
+        auto_lighting_item: view.auto_lighting_item,
+        daylight_item: view.daylight_item,
+        night_item: view.night_item,
+        expand_item: view.expand_item,
         back_button: view.back_button,
         nav_up_button: view.nav_up_button,
         nav_down_button: view.nav_down_button,
@@ -541,28 +549,59 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
-        let button = ui.colorize_button.clone();
-        button.connect_clicked(move |_| colorize_image(&ui));
+        let button = ui.colorize_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            colorize_image(&ui);
+        });
     }
     {
         let ui = ui.clone();
-        let button = ui.auto_lighting_button.clone();
-        button.connect_clicked(move |_| auto_lighting(&ui));
+        let button = ui.recover_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            recover_image(&ui);
+        });
     }
     {
         let ui = ui.clone();
-        let button = ui.daylight_button.clone();
-        button.connect_clicked(move |_| convert_lighting(&ui, false));
+        let button = ui.photoreal_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            photoreal_image(&ui);
+        });
     }
     {
         let ui = ui.clone();
-        let button = ui.night_button.clone();
-        button.connect_clicked(move |_| convert_lighting(&ui, true));
+        let button = ui.auto_lighting_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            auto_lighting(&ui);
+        });
     }
     {
         let ui = ui.clone();
-        let button = ui.expand_button.clone();
-        button.connect_clicked(move |_| expand_image(&ui));
+        let button = ui.daylight_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            convert_lighting(&ui, false);
+        });
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.night_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            convert_lighting(&ui, true);
+        });
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.expand_item.clone();
+        button.connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            expand_image(&ui);
+        });
     }
     {
         let ui = ui.clone();
@@ -1016,11 +1055,10 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
-    ui.colorize_button.set_visible(view);
-    ui.auto_lighting_button.set_visible(view && vision_ready);
-    ui.daylight_button.set_visible(view && !vision_ready);
-    ui.night_button.set_visible(view && !vision_ready);
-    ui.expand_button.set_visible(view);
+    ui.effects_button.set_visible(view);
+    ui.auto_lighting_item.set_visible(vision_ready);
+    ui.daylight_item.set_visible(!vision_ready);
+    ui.night_item.set_visible(!vision_ready);
     ui.upscale_button.set_visible(view);
     ui.edit_button.set_visible(view);
     ui.crop_button.set_visible(view);
@@ -1029,6 +1067,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(has_image && !busy && ui.undo.borrow().can_undo());
 
     if !view {
+        ui.effects_popover.popdown();
         ui.crop_button.set_active(false);
     }
 }
@@ -1583,6 +1622,8 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 }
 
 const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
+const RECOVER_PROMPT: &str = "restore this old damaged photograph, remove scratches, stains, creases, dust and tears, repair missing areas, recover natural detail and texture, photorealistic restoration, keep the same composition, subjects, and expression";
+const PHOTOREAL_PROMPT: &str = "transform this drawing or cartoon into a photorealistic photograph, realistic skin, hair, fabric and material textures, natural lighting and shadows, accurate anatomy and perspective, keep the same composition, subjects, pose, and details";
 const NIGHT_PROMPT: &str = "transform this daytime scene into night, dark blue sky, moonlight, glowing windows and street lights, deep shadows, cinematic night photography, keep the same composition, subjects, and details";
 const DAY_PROMPT: &str = "transform this night scene into bright daylight, clear blue sky, warm sunlight, natural colors, soft shadows, keep the same composition, subjects, and details";
 const EXPAND_PROMPT: &str = "expand the image to fill the new canvas, extending the scene naturally beyond the original borders, keep the same composition, subjects, lighting, and details";
@@ -1592,6 +1633,8 @@ enum GenerationMode {
     Generate,
     Edit,
     Colorize,
+    Recover,
+    Photoreal,
     Night,
     Day,
     Expand,
@@ -1605,6 +1648,8 @@ impl GenerationMode {
     fn kind(self) -> &'static str {
         match self {
             Self::Colorize => "colorize",
+            Self::Recover => "recover",
+            Self::Photoreal => "photoreal",
             Self::Night => "night",
             Self::Day => "day",
             Self::Expand => "expand",
@@ -1615,6 +1660,8 @@ impl GenerationMode {
     fn done_message(self) -> &'static str {
         match self {
             Self::Colorize => "Image colorized.",
+            Self::Recover => "Image recovered.",
+            Self::Photoreal => "Image made photorealistic.",
             Self::Night => "Converted to night.",
             Self::Day => "Converted to day.",
             Self::Expand => "Image expanded.",
@@ -1873,6 +1920,8 @@ fn generate(
 fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
     match mode {
         GenerationMode::Colorize
+        | GenerationMode::Recover
+        | GenerationMode::Photoreal
         | GenerationMode::Night
         | GenerationMode::Day
         | GenerationMode::Expand => {
@@ -1898,7 +1947,7 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
     true
 }
 
-fn colorize_image(ui: &Rc<Ui>) {
+fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
     if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
@@ -1906,7 +1955,7 @@ fn colorize_image(ui: &Rc<Ui>) {
         return;
     }
     let Some(source) = ui.state.borrow().display.clone() else {
-        ui.toast.add_toast(adw::Toast::new("No image to colorize."));
+        ui.toast.add_toast(adw::Toast::new(empty_message));
         return;
     };
 
@@ -1914,15 +1963,42 @@ fn colorize_image(ui: &Rc<Ui>) {
     fit_reference_size(ui);
     ui.state.borrow_mut().reference = Some(source.clone());
     update_image_view(ui);
-    ui.prompt.buffer().set_text(COLORIZE_PROMPT);
+    ui.prompt.buffer().set_text(prompt);
     ui.seed_entry.set_text("");
     generate(
         ui,
-        GenerationMode::Colorize,
-        COLORIZE_PROMPT.to_string(),
+        mode,
+        prompt.to_string(),
         "none",
         false,
         Some(source.to_string_lossy().into_owned()),
+    );
+}
+
+fn colorize_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Colorize,
+        COLORIZE_PROMPT,
+        "No image to colorize.",
+    );
+}
+
+fn recover_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Recover,
+        RECOVER_PROMPT,
+        "No image to recover.",
+    );
+}
+
+fn photoreal_image(ui: &Rc<Ui>) {
+    start_effect(
+        ui,
+        GenerationMode::Photoreal,
+        PHOTOREAL_PROMPT,
+        "No image to convert.",
     );
 }
 

@@ -20,11 +20,15 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
-    pub colorize_button: gtk::Button,
-    pub auto_lighting_button: gtk::Button,
-    pub daylight_button: gtk::Button,
-    pub night_button: gtk::Button,
-    pub expand_button: gtk::Button,
+    pub effects_button: gtk::MenuButton,
+    pub effects_popover: gtk::Popover,
+    pub colorize_item: gtk::Button,
+    pub recover_item: gtk::Button,
+    pub photoreal_item: gtk::Button,
+    pub auto_lighting_item: gtk::Button,
+    pub daylight_item: gtk::Button,
+    pub night_item: gtk::Button,
+    pub expand_item: gtk::Button,
     pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
     pub nav_down_button: gtk::Button,
@@ -88,35 +92,64 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
-    let colorize_button = gtk::Button::builder()
-        .icon_name("color-select-symbolic")
-        .tooltip_text("Colorize this black-and-white image")
+    let colorize_item = effect_item(
+        "color-select-symbolic",
+        "Colorize",
+        "Restore color in black-and-white photos",
+    );
+    let recover_item = effect_item(
+        "view-refresh-symbolic",
+        "Recover",
+        "Renew old, scratched or damaged photos",
+    );
+    let photoreal_item = effect_item(
+        "camera-photo-symbolic",
+        "Photoreal",
+        "Turn a drawing or cartoon into a realistic photo",
+    );
+    let auto_lighting_item = effect_item(
+        "daytime-sunset-symbolic",
+        "Auto day ↔ night",
+        "Detect the lighting and convert it",
+    );
+    let daylight_item = effect_item(
+        "weather-clear-symbolic",
+        "To daylight",
+        "Convert this night scene into daylight",
+    );
+    let night_item = effect_item(
+        "weather-clear-night-symbolic",
+        "To night",
+        "Convert this daytime scene into night",
+    );
+    let expand_item = effect_item(
+        "zoom-fit-best-symbolic",
+        "Expand",
+        "Extend the image to the sidebar size and ratio",
+    );
+
+    let effects_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    effects_box.set_margin_top(6);
+    effects_box.set_margin_bottom(6);
+    effects_box.set_margin_start(6);
+    effects_box.set_margin_end(6);
+    effects_box.append(&colorize_item);
+    effects_box.append(&recover_item);
+    effects_box.append(&photoreal_item);
+    effects_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    effects_box.append(&auto_lighting_item);
+    effects_box.append(&daylight_item);
+    effects_box.append(&night_item);
+    effects_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    effects_box.append(&expand_item);
+
+    let effects_popover = gtk::Popover::builder().child(&effects_box).build();
+    let effects_button = gtk::MenuButton::builder()
+        .icon_name("applications-graphics-symbolic")
+        .tooltip_text("Image effects")
         .visible(false)
         .css_classes(["osd", "circular"])
-        .build();
-    let auto_lighting_button = gtk::Button::builder()
-        .icon_name("daytime-sunset-symbolic")
-        .tooltip_text("Auto: convert day ↔ night")
-        .visible(false)
-        .css_classes(["osd", "circular"])
-        .build();
-    let daylight_button = gtk::Button::builder()
-        .icon_name("weather-clear-symbolic")
-        .tooltip_text("Convert to daylight")
-        .visible(false)
-        .css_classes(["osd", "circular"])
-        .build();
-    let night_button = gtk::Button::builder()
-        .icon_name("weather-clear-night-symbolic")
-        .tooltip_text("Convert to night")
-        .visible(false)
-        .css_classes(["osd", "circular"])
-        .build();
-    let expand_button = gtk::Button::builder()
-        .icon_name("zoom-fit-best-symbolic")
-        .tooltip_text("Expand to the sidebar size and ratio")
-        .visible(false)
-        .css_classes(["osd", "circular"])
+        .popover(&effects_popover)
         .build();
     let back_button = gtk::Button::builder()
         .icon_name("go-previous-symbolic")
@@ -153,11 +186,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
-    image_actions.append(&colorize_button);
-    image_actions.append(&auto_lighting_button);
-    image_actions.append(&daylight_button);
-    image_actions.append(&night_button);
-    image_actions.append(&expand_button);
+    image_actions.append(&effects_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
@@ -323,15 +352,47 @@ pub(crate) fn build() -> MainView {
         zoom_overlay,
         edit_button,
         upscale_button,
-        colorize_button,
-        auto_lighting_button,
-        daylight_button,
-        night_button,
-        expand_button,
+        effects_button,
+        effects_popover,
+        colorize_item,
+        recover_item,
+        photoreal_item,
+        auto_lighting_item,
+        daylight_item,
+        night_item,
+        expand_item,
         back_button,
         nav_up_button,
         nav_down_button,
         crop_button,
         undo_button,
     }
+}
+
+fn effect_item(icon_name: &str, title: &str, subtitle: &str) -> gtk::Button {
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_valign(gtk::Align::Start);
+
+    let title = gtk::Label::builder().label(title).xalign(0.0).build();
+    let subtitle = gtk::Label::builder()
+        .label(subtitle)
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(34)
+        .css_classes(["caption", "dim-label"])
+        .build();
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    text.set_hexpand(true);
+    text.append(&title);
+    text.append(&subtitle);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.append(&icon);
+    row.append(&text);
+
+    gtk::Button::builder()
+        .child(&row)
+        .css_classes(["flat"])
+        .build()
 }

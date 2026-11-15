@@ -26,7 +26,7 @@ Milestone 3 (packaged desktop app):
   or crop adopts its aspect ratio at the current MP target
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry
-- clicking a history image shows it on the canvas with the colorize, expand,
+- clicking a history image shows it on the canvas with the effects menu,
   upscale, edit and crop actions and restores its prompt, model, style, size
   and seed
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
@@ -34,9 +34,11 @@ Milestone 3 (packaged desktop app):
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
 - **optional vision helper** (LFM2.5-VL-450M, ~332 MB) for automatic
-  day/night detection; without it, explicit sun/moon buttons are used
-- **image actions** over the canvas: colorize, day/night, expand, upscale,
-  edit, crop-to-reference, undo, and back-to-view
+  day/night detection inside the effects menu; without it, explicit daylight
+  and night entries are used
+- **image actions** over the canvas: an effects menu (colorize, recover,
+  photoreal, day/night, expand), upscale, edit, crop-to-reference, undo, and
+  back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
@@ -132,11 +134,11 @@ without leaving the app.
 | Preferences | `Ctrl+,` or the header menu |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
-| Colorize the image | **Colorize** button (source aspect at the sidebar MP target) |
-| Auto day ↔ night | sunset button (needs the optional vision helper) |
-| Convert to daylight | sun button (used when the helper is not installed) |
-| Convert to night | moon button (used when the helper is not installed) |
-| Expand the image | **Expand** button (sidebar MP + ratio target) |
+| Colorize / recover / photoreal | **Effects** menu at the top-right of the image |
+| Auto day ↔ night | **Effects → Auto day ↔ night** (needs the optional vision helper) |
+| Convert to daylight | **Effects → To daylight** (used when the helper is not installed) |
+| Convert to night | **Effects → To night** (used when the helper is not installed) |
+| Expand the image | **Effects → Expand** (sidebar MP + ratio target) |
 | Leave edit mode | **Back** button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Upscale from the keyboard | `Ctrl+U` |
@@ -162,14 +164,14 @@ button crops a region of the image with an animated zoom, uses the crop as the
 new reference, and opens the composer; undo plays the same zoom in reverse.
 `Ctrl+B` toggles the sidebar.
 
-**Colorize** uses the built-in restoration prompt and preserves the source
-aspect at the current MP target. With the optional vision helper installed, the
-**sunset** button asks LFM2.5-VL-450M whether the image is night or daylight
-and applies the opposite prompt automatically. Without it, the **sun** and
-**moon** buttons apply the daylight and night prompts explicitly. **Expand**
-uses the sidebar MP + ratio as the target size and falls back to a built-in
-expansion prompt when the prompt field is empty, so it works directly from the
-canvas.
+**Colorize**, **Recover** and **Photoreal** use built-in prompts and preserve
+the source aspect at the current MP target. With the optional vision helper
+installed, **Effects → Auto day ↔ night** asks LFM2.5-VL-450M whether the image
+is night or daylight and applies the opposite prompt automatically. Without it,
+**Effects → To daylight** and **To night** apply those prompts explicitly.
+**Effects → Expand** uses the sidebar MP + ratio as the target size and falls
+back to a built-in expansion prompt when the prompt field is empty, so it works
+directly from the canvas.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in
