@@ -148,7 +148,7 @@ pub(crate) fn build(
 
     let ratio_label = gtk::Label::builder()
         .label(size::ratio_label(ratio))
-        .xalign(0.0)
+        .xalign(0.5)
         .css_classes(["heading"])
         .build();
     let mp_label = gtk::Label::builder()
@@ -156,7 +156,7 @@ pub(crate) fn build(
             "{:.2} MP - {width} × {height} px",
             size::megapixels(width, height)
         ))
-        .xalign(0.0)
+        .xalign(0.5)
         .css_classes(["caption", "dim-label"])
         .build();
     let size_hint = gtk::Label::builder()
@@ -167,6 +167,7 @@ pub(crate) fn build(
         .build();
 
     let ratio_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    ratio_text.set_halign(gtk::Align::Fill);
     ratio_text.append(&ratio_label);
     ratio_text.append(&mp_label);
 
@@ -174,8 +175,8 @@ pub(crate) fn build(
     ratio_preview.set_halign(gtk::Align::Fill);
     ratio_preview.set_margin_top(2);
     ratio_preview.set_margin_bottom(2);
-    ratio_preview.append(&ratio_text);
     ratio_preview.append(&ratio_area);
+    ratio_preview.append(&ratio_text);
     ratio_preview.append(&size_hint);
 
     let seed_entry = gtk::Entry::builder()
