@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -170,18 +170,29 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     offload_row.set_active(ui.config.borrow().offload);
     {
         let ui = ui.clone();
+        let updating = Rc::new(Cell::new(false));
         offload_row.connect_active_notify(move |row| {
+            if updating.get() {
+                return;
+            }
             let active = row.is_active();
+            if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get()
             {
-                let mut config = ui.config.borrow_mut();
-                if config.offload != active {
-                    config.offload = active;
-                    let _ = config.save();
-                }
+                updating.set(true);
+                row.set_active(ui.config.borrow().offload);
+                updating.set(false);
+                ui.toast
+                    .add_toast(adw::Toast::new("Wait for the current image to finish."));
+                return;
             }
-            if ui.offload_switch.is_active() != active {
-                ui.offload_switch.set_active(active);
+            let mut config = ui.config.borrow_mut();
+            if config.offload != active {
+                config.offload = active;
+                let _ = config.save();
             }
+            drop(config);
+            // Offload is a server start-up flag, so release the context.
+            ui.backend.unload();
         });
     }
     performance_group.add(&offload_row);

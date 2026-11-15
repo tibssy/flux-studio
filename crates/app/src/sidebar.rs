@@ -22,8 +22,6 @@ pub(crate) struct Sidebar {
     pub size_hint: gtk::Label,
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
-    pub offload_switch: gtk::Switch,
-    pub advanced_summary: gtk::Label,
     pub new_button: gtk::Button,
     pub history_list: gtk::ListBox,
 }
@@ -95,8 +93,8 @@ pub(crate) fn build(
         .build();
 
     let ratio_area = gtk::DrawingArea::builder()
-        .content_width(112)
-        .content_height(112)
+        .content_width(180)
+        .content_height(180)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
         .build();
@@ -196,43 +194,6 @@ pub(crate) fn build(
     seed_row.append(&seed_entry);
     seed_row.append(&random_button);
 
-    let advanced_summary = gtk::Label::builder()
-        .label("")
-        .xalign(0.0)
-        .wrap(true)
-        .css_classes(["caption", "dim-label"])
-        .build();
-    let offload_switch = gtk::Switch::builder().active(config.offload).build();
-    let offload_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let offload_label = gtk::Label::builder()
-        .label("Offload weights to CPU")
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    offload_row.append(&offload_label);
-    offload_row.append(&offload_switch);
-
-    let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    advanced_body.append(&advanced_summary);
-    advanced_body.append(&offload_row);
-
-    let advanced_revealer = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideDown)
-        .child(&advanced_body)
-        .reveal_child(false)
-        .build();
-    let advanced_toggle = gtk::ToggleButton::builder()
-        .label("Advanced")
-        .halign(gtk::Align::Start)
-        .css_classes(["flat"])
-        .build();
-    {
-        let revealer = advanced_revealer.clone();
-        advanced_toggle.connect_toggled(move |button| {
-            revealer.set_reveal_child(button.is_active());
-        });
-    }
-
     let setup = gtk::Box::new(gtk::Orientation::Vertical, 6);
     setup.append(&row("Model", &model_dropdown));
     setup.append(&model_hint);
@@ -249,8 +210,6 @@ pub(crate) fn build(
     setup.append(&ratio_select_row);
     setup.append(&size_row);
     setup.append(&ratio_preview);
-    setup.append(&advanced_toggle);
-    setup.append(&advanced_revealer);
 
     let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
 
@@ -301,8 +260,6 @@ pub(crate) fn build(
         size_hint,
         seed_entry,
         random_button,
-        offload_switch,
-        advanced_summary,
         new_button,
         history_list,
     }

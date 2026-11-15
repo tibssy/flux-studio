@@ -18,8 +18,8 @@ Milestone 3 (packaged desktop app):
   plus a snapped-size readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
   as prompt suffixes
-- **model dropdown restricted to installed presets**, seed control and an Advanced group (fixed steps/CFG,
-  sampler, CPU offload) in the sidebar
+- **model dropdown restricted to installed presets** and seed control in the
+  sidebar
 - focused composer: prompt, Generate/Cancel and a reference-image button
 - **reference-image editing** (`-r`); edits promote their result to the next
   reference, while text-to-image runs stay text-to-image. Loading a reference
@@ -167,8 +167,9 @@ aspect at the current MP target. With the optional vision helper installed, the
 **sunset** button asks LFM2.5-VL-450M whether the image is night or daylight
 and applies the opposite prompt automatically. Without it, the **sun** and
 **moon** buttons apply the daylight and night prompts explicitly. **Expand**
-uses the sidebar MP + ratio as the target size, so choose a larger MP or a
-different ratio before pressing it.
+uses the sidebar MP + ratio as the target size and falls back to a built-in
+expansion prompt when the prompt field is empty, so it works directly from the
+canvas.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in

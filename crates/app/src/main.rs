@@ -113,8 +113,6 @@ pub(crate) struct Ui {
     pub size_hint: gtk::Label,
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
-    pub offload_switch: gtk::Switch,
-    pub advanced_summary: gtk::Label,
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
     pub upscaling: Cell<bool>,
@@ -338,8 +336,6 @@ fn build_ui(app: &adw::Application) {
         size_hint: side.size_hint,
         seed_entry: side.seed_entry,
         random_button: side.random_button,
-        offload_switch: side.offload_switch,
-        advanced_summary: side.advanced_summary,
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
         upscaling: Cell::new(false),
@@ -493,21 +489,6 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let button = ui.random_button.clone();
         button.connect_clicked(move |_| {
             entry.set_text(&GenerateRequest::random_seed().to_string());
-        });
-    }
-    {
-        let ui = ui.clone();
-        let switch = ui.offload_switch.clone();
-        switch.connect_active_notify(move |switch| {
-            let active = switch.is_active();
-            let mut config = ui.config.borrow_mut();
-            if config.offload != active {
-                config.offload = active;
-                let _ = config.save();
-            }
-            drop(config);
-            // Offload is a server start-up flag, so release the context.
-            ui.backend.unload();
         });
     }
     {
@@ -755,8 +736,6 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         ui.model_hint
             .set_text("No models installed — download in Preferences");
         ui.model_hint.add_css_class("error");
-        ui.advanced_summary
-            .set_text("Download a model in Preferences");
         ui.generate.set_sensitive(false);
         if prompt_helper.is_some() {
             ui.improve_button
@@ -770,12 +749,6 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
     let missing = model.missing(&ui.models_dir);
 
     ui.model_dropdown.set_tooltip_text(Some(model.description));
-    ui.advanced_summary.set_text(&format!(
-        "{} steps · CFG {:.1} · {} (fixed by preset)",
-        model.steps,
-        model.cfg,
-        model.sampler.as_str()
-    ));
 
     if missing.is_empty() {
         ui.model_hint.set_text(&format!(
@@ -1458,7 +1431,6 @@ fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.ratio_dropdown.set_sensitive(enabled);
     ui.seed_entry.set_sensitive(enabled);
     ui.random_button.set_sensitive(enabled);
-    ui.offload_switch.set_sensitive(enabled);
     ui.new_button.set_sensitive(enabled);
     ui.history_list.set_sensitive(enabled);
     ui.reference_button.set_sensitive(enabled);
@@ -1613,6 +1585,7 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
 const NIGHT_PROMPT: &str = "transform this daytime scene into night, dark blue sky, moonlight, glowing windows and street lights, deep shadows, cinematic night photography, keep the same composition, subjects, and details";
 const DAY_PROMPT: &str = "transform this night scene into bright daylight, clear blue sky, warm sunlight, natural colors, soft shadows, keep the same composition, subjects, and details";
+const EXPAND_PROMPT: &str = "expand the image to fill the new canvas, extending the scene naturally beyond the original borders, keep the same composition, subjects, lighting, and details";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GenerationMode {
@@ -2079,10 +2052,12 @@ fn expand_image(ui: &Rc<Ui>) {
     }
 
     let prompt = current_prompt(ui);
-    if prompt.trim().is_empty() {
-        ui.toast.add_toast(adw::Toast::new("Enter a prompt first."));
-        return;
-    }
+    let prompt = if prompt.trim().is_empty() {
+        ui.prompt.buffer().set_text(EXPAND_PROMPT);
+        EXPAND_PROMPT.to_string()
+    } else {
+        prompt
+    };
     let style_id = current_style_id(ui);
     ui.state.borrow_mut().reference = Some(source.clone());
     update_image_view(ui);
