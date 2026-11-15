@@ -73,9 +73,11 @@ pub(crate) struct Ui {
     pub zoom_state: Rc<RefCell<Option<ZoomState>>>,
     pub zoom_source: RefCell<Option<glib::SourceId>>,
     pub zooming: Cell<bool>,
+    pub classifying: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
     pub colorize_button: gtk::Button,
+    pub auto_lighting_button: gtk::Button,
     pub daylight_button: gtk::Button,
     pub night_button: gtk::Button,
     pub expand_button: gtk::Button,
@@ -295,9 +297,11 @@ fn build_ui(app: &adw::Application) {
         zoom_state,
         zoom_source: RefCell::new(None),
         zooming: Cell::new(false),
+        classifying: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
         colorize_button: view.colorize_button,
+        auto_lighting_button: view.auto_lighting_button,
         daylight_button: view.daylight_button,
         night_button: view.night_button,
         expand_button: view.expand_button,
@@ -509,7 +513,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let list = ui.history_list.clone();
         list.connect_row_activated(move |_, row| {
-            if ui.generating.get() || ui.upscaling.get() {
+            if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
                 return;
             }
             let Ok(id) = row.widget_name().parse::<i64>() else {
@@ -560,6 +564,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        let button = ui.auto_lighting_button.clone();
+        button.connect_clicked(move |_| auto_lighting(&ui));
+    }
+    {
+        let ui = ui.clone();
         let button = ui.daylight_button.clone();
         button.connect_clicked(move |_| convert_lighting(&ui, false));
     }
@@ -593,7 +602,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let stack = ui.stack.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll(move |_, _dx, dy| {
-            if dy == 0.0 || ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+            if dy == 0.0
+                || ui.generating.get()
+                || ui.upscaling.get()
+                || ui.zooming.get()
+                || ui.classifying.get()
+            {
                 return glib::Propagation::Proceed;
             }
             if ui
@@ -1016,18 +1030,21 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let generating = ui.generating.get();
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
-    let busy = generating || upscaling || zooming;
+    let classifying = ui.classifying.get();
+    let busy = generating || upscaling || zooming || classifying;
     let position = history_position(ui);
     let navigation = has_image && !busy && !editing;
     let view = has_image && !composing && !busy && !editing;
+    let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.colorize_button.set_visible(view);
-    ui.daylight_button.set_visible(view);
-    ui.night_button.set_visible(view);
+    ui.auto_lighting_button.set_visible(view && vision_ready);
+    ui.daylight_button.set_visible(view && !vision_ready);
+    ui.night_button.set_visible(view && !vision_ready);
     ui.expand_button.set_visible(view);
     ui.upscale_button.set_visible(view);
     ui.edit_button.set_visible(view);
@@ -1042,7 +1059,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
 }
 
 fn edit_current_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
         return;
     }
     let Some(path) = ui.state.borrow().display.clone() else {
@@ -1070,7 +1087,7 @@ fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
 }
 
 fn undo_crop(ui: &Rc<Ui>) {
-    if ui.generating.get() {
+    if ui.generating.get() || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -1421,7 +1438,7 @@ pub(crate) fn cancel_zoom(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn new_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -1670,6 +1687,7 @@ fn generate(
     if ui.generating.get()
         || ui.upscaling.get()
         || ui.zooming.get()
+        || ui.classifying.get()
         || !ui.generate.is_sensitive()
         || (require_composer && !ui.composer.reveals_child())
     {
@@ -1906,7 +1924,7 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
 }
 
 fn colorize_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -1934,7 +1952,7 @@ fn colorize_image(ui: &Rc<Ui>) {
 }
 
 fn convert_lighting(ui: &Rc<Ui>, to_night: bool) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -1944,7 +1962,10 @@ fn convert_lighting(ui: &Rc<Ui>, to_night: bool) {
         ui.toast.add_toast(adw::Toast::new("No image to convert."));
         return;
     };
+    start_lighting_conversion(ui, source, to_night);
+}
 
+fn start_lighting_conversion(ui: &Rc<Ui>, source: PathBuf, to_night: bool) {
     let (mode, prompt) = if to_night {
         (GenerationMode::Night, NIGHT_PROMPT)
     } else {
@@ -1967,8 +1988,70 @@ fn convert_lighting(ui: &Rc<Ui>, to_night: bool) {
     );
 }
 
+fn auto_lighting(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+        return;
+    }
+    if !can_start_image_action(ui) {
+        return;
+    }
+    let Some(source) = ui.state.borrow().display.clone() else {
+        ui.toast.add_toast(adw::Toast::new("No image to convert."));
+        return;
+    };
+
+    let helper = &flux_core::vision::VISION_HELPER;
+    if !helper.is_installed(&ui.models_dir) {
+        ui.toast
+            .add_toast(adw::Toast::new("Install the vision helper in Preferences."));
+        return;
+    }
+    let Some(cli) = prompt_ai::find_cli(&ui.config.borrow()) else {
+        ui.toast
+            .add_toast(adw::Toast::new("Install llama.cpp to use auto day/night."));
+        return;
+    };
+
+    let model = helper.model_path(&ui.models_dir);
+    let mmproj = helper.mmproj_path(&ui.models_dir);
+
+    ui.classifying.set(true);
+    set_controls_enabled(ui, false);
+    ui.status.set_text("Checking lighting…");
+    update_image_actions(ui);
+
+    let (sender, receiver) = async_channel::bounded(1);
+    let image = source.clone();
+    std::thread::spawn(move || {
+        let result = prompt_ai::classify_lighting(&image, &model, &mmproj, &cli);
+        let _ = sender.send_blocking(result);
+    });
+
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let result = receiver.recv().await;
+        ui.classifying.set(false);
+        set_controls_enabled(&ui, true);
+        match result {
+            Ok(Ok(is_night)) => start_lighting_conversion(&ui, source, !is_night),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "lighting classification failed");
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Could not check lighting: {error}"
+                )));
+                ui.status.set_text("Ready");
+                update_image_actions(&ui);
+            }
+            Err(_) => {
+                ui.status.set_text("Ready");
+                update_image_actions(&ui);
+            }
+        }
+    });
+}
+
 fn expand_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -2012,7 +2095,7 @@ fn expand_image(ui: &Rc<Ui>) {
 }
 
 fn back_to_view(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -2066,7 +2149,7 @@ fn history_position(ui: &Ui) -> Option<(usize, usize)> {
 
 /// Move `delta` entries through history: positive is older, negative newer.
 fn navigate_history(ui: &Rc<Ui>, delta: isize) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     let Some((index, count)) = history_position(ui) else {
@@ -2096,7 +2179,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
             .add_toast(adw::Toast::new("The backend is still installing."));
         return;
     }
-    if ui.generating.get() || ui.upscaling.get() {
+    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
         return;
     }
     let Some(input) = ui.state.borrow().display.clone() else {

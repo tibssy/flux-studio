@@ -5,6 +5,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use flux_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
 use flux_core::upscaler::{UPSCALERS, UpscalerPreset};
+use flux_core::vision::{VISION_HELPER, VisionHelper};
 use gtk::glib;
 
 use crate::{Ui, active_preset, refresh_model_list};
@@ -16,6 +17,9 @@ const FLUX2_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-k
 const FLUX3_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/flux-3-image-klein";
 const QWEN3_URL: &str = "https://huggingface.co/Qwen/Qwen3-4B";
 const QWEN3_VL_URL: &str = "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct";
+const LFM25_VL_URL: &str = "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF";
+const LFM25_VL_LICENSE_URL: &str =
+    "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/blob/main/LICENSE";
 const SDCPP_URL: &str = "https://github.com/leejet/stable-diffusion.cpp";
 const LLAMA_CPP_URL: &str = "https://github.com/ggml-org/llama.cpp";
 const FLUX2_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF";
@@ -60,6 +64,30 @@ fn preset_status(preset: &ModelPreset, models_dir: &Path) -> String {
             missing.len(),
             format_bytes(preset.total_bytes()),
             preset.steps
+        )
+    }
+}
+
+fn vision_helper_present(helper: &VisionHelper, models_dir: &Path) -> bool {
+    helper.files().into_iter().any(|file| {
+        let path = models_dir.join(file.rel_path);
+        path.exists() || part_path(&path).exists()
+    })
+}
+
+fn vision_helper_status(helper: &VisionHelper, models_dir: &Path) -> String {
+    if helper.is_installed(models_dir) {
+        format!(
+            "Installed · {} · {}",
+            format_bytes(helper.approx_bytes()),
+            helper.license
+        )
+    } else {
+        format!(
+            "{} · {} · {}",
+            format_bytes(helper.approx_bytes()),
+            helper.license,
+            helper.description
         )
     }
 }
@@ -257,6 +285,37 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     }
     models_page.add(&upscalers_group);
 
+    let vision_group = adw::PreferencesGroup::builder()
+        .title("Vision helper")
+        .description("Optional small vision model for automatic day/night detection.")
+        .build();
+    let vision_row = adw::ActionRow::builder()
+        .title(VISION_HELPER.label)
+        .subtitle(vision_helper_status(&VISION_HELPER, &ui.models_dir))
+        .build();
+    let vision_button = gtk::Button::builder()
+        .icon_name("document-save-symbolic")
+        .tooltip_text("Download the vision helper")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let vision_delete = gtk::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Delete the vision helper from disk")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let vision_installed = VISION_HELPER.is_installed(&ui.models_dir);
+    let vision_present = vision_helper_present(&VISION_HELPER, &ui.models_dir);
+    vision_button.set_visible(!vision_installed);
+    vision_button.set_sensitive(!vision_installed);
+    vision_delete.set_visible(vision_present);
+    vision_delete.set_sensitive(vision_present);
+    vision_row.add_suffix(&vision_delete);
+    vision_row.add_suffix(&vision_button);
+    vision_group.add(&vision_row);
+    models_page.add(&vision_group);
+
     let download_group = adw::PreferencesGroup::builder().title("Downloads").build();
     let download_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     download_box.append(&progress);
@@ -301,6 +360,45 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         })
     };
     refresh_upscalers();
+
+    let refresh_vision: Rc<dyn Fn()> = {
+        let ui = ui.clone();
+        let row = vision_row.clone();
+        let button = vision_button.clone();
+        let delete = vision_delete.clone();
+        Rc::new(move || {
+            let installed = VISION_HELPER.is_installed(&ui.models_dir);
+            let present = vision_helper_present(&VISION_HELPER, &ui.models_dir);
+            row.set_subtitle(&vision_helper_status(&VISION_HELPER, &ui.models_dir));
+            button.set_visible(!installed);
+            button.set_sensitive(!installed);
+            delete.set_visible(present);
+            delete.set_sensitive(present);
+            crate::update_image_actions(&ui);
+        })
+    };
+    refresh_vision();
+
+    {
+        let ui = ui.clone();
+        let refresh = refresh_vision.clone();
+        let dialog_ref = dialog.downgrade();
+        vision_delete.connect_clicked(move |_| {
+            if let Some(dialog) = dialog_ref.upgrade() {
+                confirm_delete_vision_helper(&ui, &dialog, refresh.clone());
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
+        let progress = progress.clone();
+        let download_status = download_status.clone();
+        let refresh = refresh_vision.clone();
+        let buttons = vec![vision_button.clone(), vision_delete.clone()];
+        vision_button.connect_clicked(move |_| {
+            start_vision_download(&ui, &progress, &download_status, &buttons, refresh.clone());
+        });
+    }
 
     let upscaler_buttons: Vec<gtk::Button> = upscaler_rows
         .borrow()
@@ -462,6 +560,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         QWEN3_VL_URL,
     ));
     credits_group.add(&link_row(
+        "LFM2.5-VL-450M vision helper",
+        "Liquid AI · LFM Open License v1.0",
+        LFM25_VL_URL,
+    ));
+    credits_group.add(&link_row(
         "stable-diffusion.cpp",
         "leejet and contributors · MIT",
         SDCPP_URL,
@@ -514,6 +617,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "FLUX.2 VAE",
         "Apache-2.0",
         "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B",
+    ));
+    legal_group.add(&link_row(
+        "LFM2.5-VL-450M vision helper",
+        "LFM Open License v1.0",
+        LFM25_VL_LICENSE_URL,
     ));
     legal_group.add(&link_row(
         "FLUX.3 Image klein weights",
@@ -992,6 +1100,174 @@ fn start_upscaler_download(
         }
         refresh();
     });
+}
+
+fn start_vision_download(
+    ui: &Rc<Ui>,
+    progress: &gtk::ProgressBar,
+    status: &gtk::Label,
+    buttons: &[gtk::Button],
+    refresh: Rc<dyn Fn()>,
+) {
+    let missing: Vec<_> = VISION_HELPER
+        .files()
+        .into_iter()
+        .filter(|file| !ui.models_dir.join(file.rel_path).exists())
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    for button in buttons {
+        button.set_sensitive(false);
+    }
+    progress.set_visible(true);
+    progress.set_fraction(0.0);
+    progress.set_text(Some("Starting…"));
+    status.set_text(&format!("Downloading {}…", VISION_HELPER.label));
+
+    let sizes: Vec<u64> = missing.iter().map(|file| file.approx_bytes).collect();
+    let total_bytes: u64 = sizes.iter().sum();
+    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
+    let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
+    let models_dir = ui.models_dir.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(flux_models::download_vision_helper(
+                &VISION_HELPER,
+                &models_dir,
+                progress_tx,
+            ))?;
+            Ok(())
+        })();
+        let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
+    });
+
+    let progress = progress.clone();
+    let status = status.clone();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        while let Ok(event) = progress_rx.recv().await {
+            let before: u64 = sizes
+                .get(..event.file_index.min(sizes.len()))
+                .map(|slice| slice.iter().sum())
+                .unwrap_or(0);
+            let fraction = if total_bytes > 0 {
+                (before + event.downloaded) as f64 / total_bytes as f64
+            } else {
+                0.0
+            };
+            progress.set_fraction(fraction.min(1.0));
+            progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
+            status.set_text(&format!(
+                "{} · {} / {}",
+                event.file,
+                format_bytes(event.downloaded),
+                format_bytes(event.total)
+            ));
+        }
+        let result = done_rx.recv().await;
+        progress.set_visible(false);
+        match result {
+            Ok(Ok(())) => {
+                status.set_text(&format!("{} is ready.", VISION_HELPER.label));
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "{} downloaded.",
+                    VISION_HELPER.label
+                )));
+            }
+            Ok(Err(error)) => {
+                status.set_text(&format!("Download failed: {error}"));
+                ui.toast
+                    .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
+            }
+            Err(_) => {}
+        }
+        refresh();
+    });
+}
+
+fn confirm_delete_vision_helper(
+    ui: &Rc<Ui>,
+    parent: &adw::PreferencesDialog,
+    refresh: Rc<dyn Fn()>,
+) {
+    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+        ui.toast.add_toast(adw::Toast::new(
+            "Cannot delete the vision helper while an image is running.",
+        ));
+        return;
+    }
+
+    let files: Vec<_> = VISION_HELPER
+        .files()
+        .into_iter()
+        .filter(|file| {
+            let path = ui.models_dir.join(file.rel_path);
+            path.exists() || part_path(&path).exists()
+        })
+        .collect();
+    if files.is_empty() {
+        refresh();
+        return;
+    }
+    let bytes: u64 = files
+        .iter()
+        .map(|file| file_size(&ui.models_dir.join(file.rel_path)))
+        .sum();
+
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Delete {}?", VISION_HELPER.label))
+        .body(format!(
+            "This permanently removes {} file(s) ({}) from disk.",
+            files.len(),
+            format_bytes(bytes)
+        ))
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    {
+        let ui = ui.clone();
+        let refresh = refresh.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "delete" {
+                return;
+            }
+            let mut freed = 0;
+            for file in &files {
+                let path = ui.models_dir.join(file.rel_path);
+                for candidate in [path.clone(), part_path(&path)] {
+                    let size = std::fs::metadata(&candidate)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0);
+                    match std::fs::remove_file(&candidate) {
+                        Ok(()) => freed += size,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            ui.toast.add_toast(adw::Toast::new(&format!(
+                                "Could not delete {}: {error}",
+                                candidate.display()
+                            )));
+                        }
+                    }
+                }
+            }
+            refresh();
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Deleted {} file(s) · {}.",
+                files.len(),
+                format_bytes(freed)
+            )));
+        });
+    }
+
+    dialog.present(Some(parent));
 }
 
 #[cfg(test)]

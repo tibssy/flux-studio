@@ -32,6 +32,8 @@ Milestone 3 (packaged desktop app):
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
+- **optional vision helper** (LFM2.5-VL-450M, ~332 MB) for automatic
+  day/night detection; without it, explicit sun/moon buttons are used
 - **image actions** over the canvas: colorize, day/night, expand, upscale,
   edit, crop-to-reference, undo, and back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
@@ -106,6 +108,14 @@ Upscaled images are saved to the output folder and appear in history with their
 source path, upscaler and output size. Deleting an upscale never deletes the
 source image.
 
+## Day/night helper
+
+The optional **LFM2.5-VL-450M** vision helper (~332 MB: Q4_K_M weights plus a
+Q8 multimodal projector) lets the sunset button decide whether the current
+image is night or daylight before applying the opposite prompt. Download it
+from **Preferences → Models → Vision helper**. Without it, the sun and moon
+buttons apply the daylight and night prompts explicitly.
+
 After a run the upscaled image fades in over the original. Scroll up or down
 over the canvas, or use the arrows on the right edge, to step through history
 with the same crossfade. Since an upscale is recorded next to its source, one
@@ -122,8 +132,9 @@ without leaving the app.
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
 | Colorize the image | **Colorize** button (source aspect at the sidebar MP target) |
-| Convert to daylight | sun button |
-| Convert to night | moon button |
+| Auto day ↔ night | sunset button (needs the optional vision helper) |
+| Convert to daylight | sun button (used when the helper is not installed) |
+| Convert to night | moon button (used when the helper is not installed) |
 | Expand the image | **Expand** button (sidebar MP + ratio target) |
 | Leave edit mode | **Back** button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
@@ -151,10 +162,12 @@ new reference, and opens the composer; undo plays the same zoom in reverse.
 `Ctrl+B` toggles the sidebar.
 
 **Colorize** uses the built-in restoration prompt and preserves the source
-aspect at the current MP target. The **sun** button applies the daylight
-prompt and the **moon** button applies the night prompt, so the direction is
-always explicit. **Expand** uses the sidebar MP + ratio as the target size, so
-choose a larger MP or a different ratio before pressing it.
+aspect at the current MP target. With the optional vision helper installed, the
+**sunset** button asks LFM2.5-VL-450M whether the image is night or daylight
+and applies the opposite prompt automatically. Without it, the **sun** and
+**moon** buttons apply the daylight and night prompts explicitly. **Expand**
+uses the sidebar MP + ratio as the target size, so choose a larger MP or a
+different ratio before pressing it.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in
@@ -203,6 +216,9 @@ Data locations:
   review the [model card](https://huggingface.co/black-forest-labs/flux-3-image-klein)
   before commercial use. The weights are gated on Hugging Face.
 - **Qwen3-4B** and **Qwen3-VL-4B-Instruct** text encoders are **Apache-2.0**.
+- **LFM2.5-VL-450M** is released under the **LFM Open License v1.0**; commercial
+  use is allowed below the revenue threshold defined in that license. The
+  weights are downloaded at runtime from Liquid AI's Hugging Face repository.
 - **Real-ESRGAN** upscaler weights are **BSD-3-Clause**.
 - The **Nomos** and **MoSR** upscalers by Philip Hofmann (Phips) are
   **CC-BY-4.0**; their model cards are linked from Preferences → Credits.

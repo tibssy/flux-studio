@@ -1,8 +1,9 @@
-//! Prompt rewriting through llama.cpp using the active model's text encoder.
+//! Prompt rewriting and small vision decisions through llama.cpp.
 //!
 //! The stable-diffusion.cpp server keeps the encoder for conditioning only and
 //! has no text-generation API, so this spawns `llama-cli` with the same GGUF
-//! file for a few seconds. No extra model download and no external service.
+//! file for a few seconds. The optional day/night helper uses the small
+//! LFM2.5-VL model plus its multimodal projector instead.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,9 @@ the scene. Keep it under 60 words. Return only the improved prompt wrapped in \
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_TOKENS: u32 = 220;
+const VISION_PROMPT: &str =
+    "Is this a night scene or a daylight scene? Answer with one word: night or daylight.";
+const VISION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Locate `llama-cli` from config, the environment, or `PATH`.
 pub(crate) fn find_cli(config: &Config) -> Option<PathBuf> {
@@ -68,12 +72,43 @@ pub(crate) fn improve(prompt: &str, encoder: &Path, cli: &Path) -> Result<String
         bail!("text encoder not found at {}", encoder.display());
     }
 
-    let mut child = build_command(cli, encoder, prompt)
+    let stdout = run_command(build_command(cli, encoder, prompt), TIMEOUT)?;
+    extract(&stdout).ok_or_else(|| anyhow!("the model did not return a prompt"))
+}
+
+/// Ask the vision helper whether `image` is a night scene.
+pub(crate) fn classify_lighting(
+    image: &Path,
+    model: &Path,
+    mmproj: &Path,
+    cli: &Path,
+) -> Result<bool> {
+    if !model.exists() {
+        bail!("vision model not found at {}", model.display());
+    }
+    if !mmproj.exists() {
+        bail!("vision projector not found at {}", mmproj.display());
+    }
+    if !image.exists() {
+        bail!("image not found at {}", image.display());
+    }
+
+    let stdout = run_command(
+        build_vision_command(cli, model, mmproj, image),
+        VISION_TIMEOUT,
+    )?;
+    parse_lighting(&stdout)
+        .ok_or_else(|| anyhow!("the vision model did not return night or daylight"))
+}
+
+fn run_command(mut command: Command, timeout: Duration) -> Result<String> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("failed to start {}", cli.display()))?;
+        .with_context(|| format!("failed to start {program}"))?;
 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
@@ -85,10 +120,10 @@ pub(crate) fn improve(prompt: &str, encoder: &Path, cli: &Path) -> Result<String
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started.elapsed() > TIMEOUT {
+        if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("prompt helper timed out after {}s", TIMEOUT.as_secs());
+            bail!("llama-cli timed out after {}s", timeout.as_secs());
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -100,7 +135,7 @@ pub(crate) fn improve(prompt: &str, encoder: &Path, cli: &Path) -> Result<String
         bail!("llama-cli exited with {status}{}", stderr_tail(&stderr));
     }
 
-    extract(&stdout).ok_or_else(|| anyhow!("the model did not return a prompt"))
+    Ok(stdout)
 }
 
 fn build_command(cli: &Path, encoder: &Path, prompt: &str) -> Command {
@@ -130,6 +165,62 @@ fn build_command(cli: &Path, encoder: &Path, prompt: &str) -> Command {
         .arg(threads().to_string())
         .arg("--simple-io");
     command
+}
+
+fn build_vision_command(cli: &Path, model: &Path, mmproj: &Path, image: &Path) -> Command {
+    let mut command = Command::new(cli);
+    command
+        .arg("-m")
+        .arg(model)
+        .arg("--mmproj")
+        .arg(mmproj)
+        .arg("--image")
+        .arg(image)
+        .arg("-p")
+        .arg(VISION_PROMPT)
+        .arg("-st")
+        .arg("--no-display-prompt")
+        .arg("--color")
+        .arg("off")
+        .arg("-c")
+        .arg("2048")
+        .arg("--no-warmup")
+        .arg("-n")
+        .arg("8")
+        .arg("--temp")
+        .arg("0")
+        .arg("-t")
+        .arg(threads().to_string())
+        .arg("--simple-io");
+    command
+}
+
+/// Pick the last lighting word in the model's answer. The echoed prompt is
+/// removed first so its "night or daylight" wording cannot be mistaken for the
+/// answer.
+fn parse_lighting(stdout: &str) -> Option<bool> {
+    let text = strip_ansi(stdout);
+    let body = if let Some((_, rest)) = text.rsplit_once(VISION_PROMPT) {
+        rest
+    } else {
+        text.as_str()
+    };
+    let body = body.split("\n[ Prompt:").next().unwrap_or(body);
+    let answer = if text.contains(VISION_PROMPT) {
+        body.lines().find(|line| !line.trim().is_empty())?
+    } else {
+        body.lines().rev().find(|line| !line.trim().is_empty())?
+    };
+    let answer = answer.to_ascii_lowercase();
+    let night = answer.rfind("night");
+    let day = answer.rfind("day");
+
+    match (night, day) {
+        (Some(night), Some(day)) => Some(night > day),
+        (Some(_), None) => Some(true),
+        (None, Some(_)) => Some(false),
+        (None, None) => None,
+    }
 }
 
 fn threads() -> u32 {
@@ -300,5 +391,46 @@ mod tests {
         if let Some(path) = std::env::var_os("PATH") {
             assert!(std::env::split_paths(&path).next().is_some());
         }
+    }
+
+    #[test]
+    fn builds_the_vision_command() {
+        let args: Vec<String> = build_vision_command(
+            Path::new("/usr/bin/llama-cli"),
+            Path::new("/models/vision/model.gguf"),
+            Path::new("/models/vision/mmproj.gguf"),
+            Path::new("/tmp/photo.png"),
+        )
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-m", "/models/vision/model.gguf"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--mmproj", "/models/vision/mmproj.gguf"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--image", "/tmp/photo.png"])
+        );
+        assert!(args.windows(2).any(|pair| pair == ["-n", "8"]));
+        assert!(args.windows(2).any(|pair| pair == ["--temp", "0"]));
+    }
+
+    #[test]
+    fn parses_lighting_answers() {
+        let night = format!("\n> {VISION_PROMPT}\nNight\n\n[ Prompt: 500 t/s ]\n");
+        let day = format!("\n> {VISION_PROMPT}\nDaylight\n\n[ Prompt: 500 t/s ]\n");
+        assert_eq!(parse_lighting(&night), Some(true));
+        assert_eq!(parse_lighting(&day), Some(false));
+        assert_eq!(
+            parse_lighting("It is not night, it is daylight."),
+            Some(false)
+        );
+        assert_eq!(parse_lighting("night"), Some(true));
+        assert_eq!(parse_lighting("unclear"), None);
     }
 }
