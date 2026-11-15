@@ -28,7 +28,11 @@ pub(crate) struct Sidebar {
     pub history_list: gtk::ListBox,
 }
 
-pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar {
+pub(crate) fn build(
+    config: &Config,
+    size_cell: Rc<Cell<(u32, u32)>>,
+    image_size: Rc<Cell<(u32, u32)>>,
+) -> Sidebar {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.set_margin_top(12);
     root.set_margin_bottom(12);
@@ -93,41 +97,54 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     let ratio_area = gtk::DrawingArea::builder()
         .content_width(112)
         .content_height(112)
-        .valign(gtk::Align::Start)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
         .build();
     {
         let size_cell = size_cell.clone();
+        let image_size = image_size.clone();
         ratio_area.set_draw_func(move |area, cr, width, height| {
-            let (image_w, image_h) = size_cell.get();
+            let target = size_cell.get();
+            let source = image_size.get();
             let color = area.color();
+            let red = color.red() as f64;
+            let green = color.green() as f64;
+            let blue = color.blue() as f64;
             let pad = 8.0;
             let available_w = (width as f64 - 2.0 * pad).max(1.0);
             let available_h = (height as f64 - 2.0 * pad).max(1.0);
-            let ratio = image_w as f64 / image_h.max(1) as f64;
-            let (box_w, box_h) = if available_w / available_h > ratio {
-                (available_h * ratio, available_h)
-            } else {
-                (available_w, available_w / ratio)
-            };
+            let target_ratio = target.0.max(1) as f64 / target.1.max(1) as f64;
+            let (box_w, box_h) = fit_ratio(target_ratio, available_w, available_h);
             let x = (width as f64 - box_w) / 2.0;
             let y = (height as f64 - box_h) / 2.0;
 
             cr.rectangle(x, y, box_w, box_h);
-            cr.set_source_rgba(
-                color.red() as f64,
-                color.green() as f64,
-                color.blue() as f64,
-                0.25,
-            );
+            cr.set_source_rgba(red, green, blue, 0.25);
             cr.fill_preserve().ok();
-            cr.set_source_rgba(
-                color.red() as f64,
-                color.green() as f64,
-                color.blue() as f64,
-                0.6,
-            );
+            cr.set_source_rgba(red, green, blue, 0.6);
             cr.set_line_width(2.0);
             cr.stroke().ok();
+
+            let Some(source_ratio) = source_overlay(source, target) else {
+                return;
+            };
+            let inset = 2.0;
+            let (inner_w, inner_h) = fit_ratio(
+                source_ratio,
+                (box_w - inset * 2.0).max(1.0),
+                (box_h - inset * 2.0).max(1.0),
+            );
+            let inner_x = x + (box_w - inner_w) / 2.0;
+            let inner_y = y + (box_h - inner_h) / 2.0;
+
+            cr.rectangle(inner_x, inner_y, inner_w, inner_h);
+            cr.set_source_rgba(red, green, blue, 0.10);
+            cr.fill_preserve().ok();
+            cr.set_source_rgba(red, green, blue, 0.85);
+            cr.set_line_width(1.5);
+            cr.set_dash(&[4.0, 3.0], 0.0);
+            cr.stroke().ok();
+            cr.set_dash(&[], 0.0);
         });
     }
 
@@ -138,7 +155,7 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
         .build();
     let mp_label = gtk::Label::builder()
         .label(format!(
-            "{:.2} MP · {width} × {height} px",
+            "{:.2} MP - {width} × {height} px",
             size::megapixels(width, height)
         ))
         .xalign(0.0)
@@ -152,15 +169,16 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
         .build();
 
     let ratio_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    ratio_text.set_valign(gtk::Align::Center);
     ratio_text.append(&ratio_label);
     ratio_text.append(&mp_label);
-    ratio_text.append(&size_hint);
 
-    let ratio_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    ratio_row.set_halign(gtk::Align::Center);
-    ratio_row.append(&ratio_area);
-    ratio_row.append(&ratio_text);
+    let ratio_preview = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    ratio_preview.set_halign(gtk::Align::Fill);
+    ratio_preview.set_margin_top(2);
+    ratio_preview.set_margin_bottom(2);
+    ratio_preview.append(&ratio_text);
+    ratio_preview.append(&ratio_area);
+    ratio_preview.append(&size_hint);
 
     let seed_entry = gtk::Entry::builder()
         .placeholder_text("random")
@@ -230,7 +248,7 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     setup.append(&seed_row);
     setup.append(&ratio_select_row);
     setup.append(&size_row);
-    setup.append(&ratio_row);
+    setup.append(&ratio_preview);
     setup.append(&advanced_toggle);
     setup.append(&advanced_revealer);
 
@@ -339,4 +357,63 @@ fn row(text: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     row.append(&field_label(text));
     row.append(widget);
     row
+}
+
+/// Largest rectangle with `ratio` that fits in the available area.
+fn fit_ratio(ratio: f64, max_width: f64, max_height: f64) -> (f64, f64) {
+    if max_width / max_height > ratio {
+        (max_height * ratio, max_height)
+    } else {
+        (max_width, max_width / ratio)
+    }
+}
+
+/// The source aspect to overlay inside the target, or `None` when they match.
+fn source_overlay(source: (u32, u32), target: (u32, u32)) -> Option<f64> {
+    const TOLERANCE: f64 = 0.01;
+    if source.0 == 0 || source.1 == 0 || target.0 == 0 || target.1 == 0 {
+        return None;
+    }
+    let source_ratio = source.0 as f64 / source.1 as f64;
+    let target_ratio = target.0 as f64 / target.1 as f64;
+    ((source_ratio - target_ratio).abs() / target_ratio > TOLERANCE).then_some(source_ratio)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fits_rectangles_into_the_available_area() {
+        let (width, height) = fit_ratio(16.0 / 9.0, 96.0, 96.0);
+        assert!((width - 96.0).abs() < 1e-9);
+        assert!((height - 54.0).abs() < 1e-9);
+
+        let (width, height) = fit_ratio(9.0 / 16.0, 96.0, 96.0);
+        assert!((width - 54.0).abs() < 1e-9);
+        assert!((height - 96.0).abs() < 1e-9);
+
+        let (width, height) = fit_ratio(4.0 / 3.0, 96.0, 96.0);
+        assert!((width - 96.0).abs() < 1e-9);
+        assert!((height - 72.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn overlays_the_source_only_when_the_aspect_differs() {
+        assert_eq!(source_overlay((1024, 768), (1024, 768)), None);
+        assert_eq!(source_overlay((0, 0), (1024, 768)), None);
+        assert_eq!(source_overlay((1024, 768), (0, 0)), None);
+
+        let ratio = source_overlay((1920, 1080), (1024, 768)).unwrap();
+        assert!((ratio - 16.0 / 9.0).abs() < 1e-9);
+
+        let ratio = source_overlay((1024, 768), (1280, 1024)).unwrap();
+        assert!((ratio - 4.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ignores_tiny_aspect_differences() {
+        // 1024x768 and 1025x768 differ by far less than one percent.
+        assert_eq!(source_overlay((1024, 768), (1025, 768)), None);
+    }
 }

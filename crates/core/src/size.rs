@@ -76,7 +76,7 @@ pub fn aspect_label(width: u32, height: u32) -> String {
     format!("{width}:{height}")
 }
 
-/// A friendly dropdown label, e.g. `16:9 · Landscape`.
+/// A friendly dropdown label, e.g. `16:9 - Landscape`.
 pub fn ratio_label(ratio: (u32, u32)) -> String {
     let (width, height) = ratio;
     let orientation = if width > height {
@@ -86,7 +86,7 @@ pub fn ratio_label(ratio: (u32, u32)) -> String {
     } else {
         "Square"
     };
-    format!("{width}:{height} · {orientation}")
+    format!("{width}:{height} - {orientation}")
 }
 
 /// Whether a size is big enough to warn about on an 8 GB card.
@@ -259,9 +259,9 @@ mod tests {
 
     #[test]
     fn labels_presets_and_custom_ratios() {
-        assert_eq!(ratio_label((16, 9)), "16:9 · Landscape");
-        assert_eq!(ratio_label((1, 1)), "1:1 · Square");
-        assert_eq!(ratio_label((9, 16)), "9:16 · Portrait");
-        assert_eq!(ratio_label((19, 13)), "19:13 · Landscape");
+        assert_eq!(ratio_label((16, 9)), "16:9 - Landscape");
+        assert_eq!(ratio_label((1, 1)), "1:1 - Square");
+        assert_eq!(ratio_label((9, 16)), "9:16 - Portrait");
+        assert_eq!(ratio_label((19, 13)), "19:13 - Landscape");
     }
 }

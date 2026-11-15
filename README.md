@@ -14,7 +14,8 @@ Milestone 3 (packaged desktop app):
 - **hideable sidebar** with a Setup section and a History section
 - **megapixel + aspect-ratio target** (0.01–2.00 MP, 12 landscape/portrait
   presets, 128–2048 px sides on a 16 px grid) with a live aspect-ratio preview
-  and snapped-size readout
+  that overlays the current image's aspect when it differs from the target,
+  plus a snapped-size readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
   as prompt suffixes
 - **model dropdown restricted to installed presets**, seed control and an Advanced group (fixed steps/CFG,

@@ -121,7 +121,7 @@ pub(crate) struct Ui {
     pub backend_installing: Cell<bool>,
     pub size_guard: Cell<bool>,
     pub size_cell: Rc<Cell<(u32, u32)>>,
-    pub image_size: Cell<(u32, u32)>,
+    pub image_size: Rc<Cell<(u32, u32)>>,
     pub last_scroll: Cell<Option<Instant>>,
     pub crop_mode: Cell<bool>,
     pub crop_rect: Rc<RefCell<Option<CropRect>>>,
@@ -228,11 +228,12 @@ fn build_ui(app: &adw::Application) {
     };
 
     let size_cell = Rc::new(Cell::new(size::size_for_mp(config.mp(), config.ratio())));
+    let image_size = Rc::new(Cell::new((0u32, 0u32)));
 
     let view = main_view::build();
     view.improve_button
         .set_visible(prompt_ai::find_cli(&config).is_some());
-    let side = sidebar::build(&config, size_cell.clone());
+    let side = sidebar::build(&config, size_cell.clone(), image_size.clone());
 
     let header = adw::HeaderBar::new();
     let sidebar_toggle = gtk::ToggleButton::builder()
@@ -345,7 +346,7 @@ fn build_ui(app: &adw::Application) {
         backend_installing: Cell::new(false),
         size_guard: Cell::new(false),
         size_cell,
-        image_size: Cell::new((0, 0)),
+        image_size: image_size.clone(),
         last_scroll: Cell::new(None),
         crop_mode: Cell::new(false),
         crop_rect,
@@ -891,7 +892,7 @@ pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
     ui.mp_value.set_text(&format!("{mp:.2} MP"));
     ui.ratio_label.set_text(&size::ratio_label(ratio));
     ui.mp_label
-        .set_text(&format!("{megapixels:.2} MP · {width} × {height} px"));
+        .set_text(&format!("{megapixels:.2} MP - {width} × {height} px"));
 
     let mut hint = String::new();
     if size::is_large(width, height) {
@@ -1009,6 +1010,7 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         }
     }
 
+    ui.ratio_area.queue_draw();
     sync_history_selection(ui);
     update_image_actions(ui);
 }
