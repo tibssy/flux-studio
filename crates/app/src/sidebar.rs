@@ -227,10 +227,10 @@ pub(crate) fn build(config: &Config, size_cell: Rc<Cell<(u32, u32)>>) -> Sidebar
     let ratio_select_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     ratio_select_row.append(&field_label("Ratio"));
     ratio_select_row.append(&ratio_dropdown);
-    setup.append(&size_row);
-    setup.append(&ratio_select_row);
-    setup.append(&ratio_row);
     setup.append(&seed_row);
+    setup.append(&ratio_select_row);
+    setup.append(&size_row);
+    setup.append(&ratio_row);
     setup.append(&advanced_toggle);
     setup.append(&advanced_revealer);
 
