@@ -12,8 +12,9 @@ editing, so text-to-image and image-to-image share the same weights.
 Milestone 3 (packaged desktop app):
 
 - **hideable sidebar** with a Setup section and a History section
-- **resolution sliders** (128–1280 px in 64 px steps) with a live aspect-ratio
-  preview and megapixel readout
+- **megapixel + aspect-ratio target** (0.01–2.00 MP, 12 landscape/portrait
+  presets, 128–2048 px sides on a 16 px grid) with a live aspect-ratio preview
+  and snapped-size readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
   as prompt suffixes
 - **model dropdown restricted to installed presets**, seed control and an Advanced group (fixed steps/CFG,
@@ -21,22 +22,24 @@ Milestone 3 (packaged desktop app):
 - focused composer: prompt, Generate/Cancel and a reference-image button
 - **reference-image editing** (`-r`); edits promote their result to the next
   reference, while text-to-image runs stay text-to-image. Loading a reference
-  or crop fits the width/height sliders to its aspect ratio
+  or crop adopts its aspect ratio at the current MP target
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry
-- clicking a history image shows it on the canvas with the upscale/edit/crop
-  actions and restores its prompt, model, style, size and seed
+- clicking a history image shows it on the canvas with the colorize, expand,
+  upscale, edit and crop actions and restores its prompt, model, style, size
+  and seed
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
-- **image actions** over the canvas: upscale, edit, crop-to-reference, and undo
+- **image actions** over the canvas: colorize, expand, upscale, edit,
+  crop-to-reference, undo, and back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
   up/down arrows to step through history and compare an upscale with its source;
   the sidebar highlights the image currently on the canvas
-- the composer slides away during generation and returns via Edit/New
+- the composer slides away during generation and returns via Edit/New/Back
 - **preferences dialog**: output folder, CPU offload, models folder
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
 - **model downloader** with resume, progress and per-preset install status,
@@ -118,6 +121,9 @@ without leaving the app.
 | Preferences | `Ctrl+,` or the header menu |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
+| Colorize the image | **Colorize** button (source aspect at the sidebar MP target) |
+| Expand the image | **Expand** button (sidebar MP + ratio target) |
+| Leave edit mode | **Back** button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Upscale from the keyboard | `Ctrl+U` |
 | Older/newer image | scroll/arrow up for newer, down for older, or `Ctrl+Up` / `Ctrl+Down` |
@@ -137,9 +143,14 @@ leave edit mode and generate from text alone; the prompt is kept.
 
 After a generation the prompt field slides away. Use the pencil button on the
 image (or `New`) to bring it back; the pencil makes the current image the edit
-reference. The selection button crops a region of the image with an animated
-zoom, uses the crop as the new reference, and opens the composer; undo plays the
-same zoom in reverse. `Ctrl+B` toggles the sidebar.
+reference. **Back** leaves edit mode without clearing the image. The selection
+button crops a region of the image with an animated zoom, uses the crop as the
+new reference, and opens the composer; undo plays the same zoom in reverse.
+`Ctrl+B` toggles the sidebar.
+
+**Colorize** uses the built-in restoration prompt and preserves the source
+aspect at the current MP target. **Expand** uses the sidebar MP + ratio as the
+target size, so choose a larger MP or a different ratio before pressing it.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in

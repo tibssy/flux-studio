@@ -83,7 +83,7 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     row_box.append(&actions);
     row.set_child(Some(&row_box));
 
-    let tooltip = if entry.kind == "upscale" {
+    let tooltip = if kind_label(&entry.kind).is_some() {
         format!(
             "{}\n{} · {} × {} · {:.1}s{}",
             entry.prompt,
@@ -164,10 +164,19 @@ fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     set_size(ui, entry.width, entry.height);
 }
 
-fn status_label(entry: &Generation) -> String {
+pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
+    match kind {
+        "upscale" => Some("Upscaled"),
+        "colorize" => Some("Colorized"),
+        "expand" => Some("Expanded"),
+        _ => None,
+    }
+}
+
+pub(crate) fn status_label(entry: &Generation) -> String {
     let label = entry_model_label(entry);
-    if entry.kind == "upscale" {
-        format!("Upscaled · {label} · {} × {}", entry.width, entry.height)
+    if let Some(action) = kind_label(&entry.kind) {
+        format!("{action} · {label} · {} × {}", entry.width, entry.height)
     } else {
         format!("History · {label} · {} × {}", entry.width, entry.height)
     }
@@ -262,8 +271,12 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
             &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
         ));
         content.append(&kv("Created", &created_label(entry.created_at)));
-        if let Some(reference) = entry.reference_path.as_deref() {
-            content.append(&kv("Reference", reference));
+        if entry.kind == "generate" {
+            if let Some(reference) = entry.reference_path.as_deref() {
+                content.append(&kv("Reference", reference));
+            }
+        } else if let Some(source) = entry.source_path.as_deref() {
+            content.append(&kv("Source", source));
         }
         content.append(&kv("File", &entry.image_path));
     }
@@ -276,10 +289,11 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         .build();
 
     let dialog = adw::AlertDialog::builder()
-        .heading(if entry.kind == "upscale" {
-            "Upscale details"
-        } else {
-            "Image details"
+        .heading(match entry.kind.as_str() {
+            "upscale" => "Upscale details",
+            "colorize" => "Colorize details",
+            "expand" => "Expand details",
+            _ => "Image details",
         })
         .content_width(880)
         .extra_child(&scroller)

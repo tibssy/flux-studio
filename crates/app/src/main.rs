@@ -75,6 +75,9 @@ pub(crate) struct Ui {
     pub zooming: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub colorize_button: gtk::Button,
+    pub expand_button: gtk::Button,
+    pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
     pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
@@ -95,10 +98,11 @@ pub(crate) struct Ui {
     pub rebuilding_models: Cell<bool>,
     pub model_hint: gtk::Label,
     pub style_dropdown: gtk::DropDown,
-    pub width_scale: gtk::Scale,
-    pub height_scale: gtk::Scale,
-    pub width_value: gtk::Label,
-    pub height_value: gtk::Label,
+    pub mp_scale: gtk::Scale,
+    pub mp_value: gtk::Label,
+    pub ratio_dropdown: gtk::DropDown,
+    pub ratio_model: gtk::StringList,
+    pub custom_ratio: Rc<RefCell<Option<(u32, u32)>>>,
     pub ratio_area: gtk::DrawingArea,
     pub ratio_label: gtk::Label,
     pub mp_label: gtk::Label,
@@ -219,10 +223,7 @@ fn build_ui(app: &adw::Application) {
         }
     };
 
-    let size_cell = Rc::new(Cell::new((
-        size::snap(config.default_width),
-        size::snap(config.default_height),
-    )));
+    let size_cell = Rc::new(Cell::new(size::size_for_mp(config.mp(), config.ratio())));
 
     let view = main_view::build();
     view.improve_button
@@ -294,6 +295,9 @@ fn build_ui(app: &adw::Application) {
         zooming: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
+        colorize_button: view.colorize_button,
+        expand_button: view.expand_button,
+        back_button: view.back_button,
         nav_up_button: view.nav_up_button,
         nav_down_button: view.nav_down_button,
         crop_button: view.crop_button,
@@ -314,10 +318,11 @@ fn build_ui(app: &adw::Application) {
         rebuilding_models: Cell::new(false),
         model_hint: side.model_hint,
         style_dropdown: side.style_dropdown,
-        width_scale: side.width_scale,
-        height_scale: side.height_scale,
-        width_value: side.width_value,
-        height_value: side.height_value,
+        mp_scale: side.mp_scale,
+        mp_value: side.mp_value,
+        ratio_dropdown: side.ratio_dropdown,
+        ratio_model: side.ratio_model,
+        custom_ratio: side.custom_ratio,
         ratio_area: side.ratio_area,
         ratio_label: side.ratio_label,
         mp_label: side.mp_label,
@@ -450,13 +455,29 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
-        let scale = ui.width_scale.clone();
+        let scale = ui.mp_scale.clone();
         scale.connect_value_changed(move |_| update_size_ui(&ui));
     }
     {
         let ui = ui.clone();
-        let scale = ui.height_scale.clone();
-        scale.connect_value_changed(move |_| update_size_ui(&ui));
+        let dropdown = ui.ratio_dropdown.clone();
+        dropdown.connect_selected_notify(move |dropdown| {
+            if ui.size_guard.get() {
+                return;
+            }
+            // The custom entry is only a temporary mirror of the current
+            // reference/history ratio; drop it when a preset is picked.
+            let custom_position = size::RATIOS.len() as u32;
+            if (dropdown.selected() as usize) < size::RATIOS.len()
+                && ui.ratio_model.n_items() > custom_position
+            {
+                ui.size_guard.set(true);
+                ui.ratio_model.remove(custom_position);
+                ui.custom_ratio.replace(None);
+                ui.size_guard.set(false);
+            }
+            update_size_ui(&ui);
+        });
     }
     {
         let entry = ui.seed_entry.clone();
@@ -527,6 +548,21 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.upscale_button.clone();
         button.connect_clicked(move |_| upscale_dialog::show(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.colorize_button.clone();
+        button.connect_clicked(move |_| colorize_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.expand_button.clone();
+        button.connect_clicked(move |_| expand_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.back_button.clone();
+        button.connect_clicked(move |_| back_to_view(&ui));
     }
     {
         let ui = ui.clone();
@@ -758,61 +794,135 @@ pub(crate) fn refresh_prompt_helper(ui: &Rc<Ui>) {
     refresh_model(ui);
 }
 
+/// The ratio currently selected in the sidebar.
+pub(crate) fn selected_ratio(ui: &Rc<Ui>) -> (u32, u32) {
+    let index = ui.ratio_dropdown.selected() as usize;
+    if let Some(&ratio) = size::RATIOS.get(index) {
+        ratio
+    } else {
+        ui.custom_ratio.borrow().unwrap_or((1, 1))
+    }
+}
+
+/// Point the sidebar at a preset ratio, or add/update its custom entry.
+fn set_ratio_selection(ui: &Rc<Ui>, ratio: (u32, u32)) {
+    ui.size_guard.set(true);
+    match size::ratio_for_size(ratio.0, ratio.1) {
+        size::RatioMatch::Preset(index) => {
+            let custom_position = size::RATIOS.len() as u32;
+            if ui.ratio_model.n_items() > custom_position {
+                ui.ratio_model.remove(custom_position);
+            }
+            ui.custom_ratio.replace(None);
+            ui.ratio_dropdown.set_selected(index as u32);
+        }
+        size::RatioMatch::Custom(custom) => {
+            let custom_position = size::RATIOS.len() as u32;
+            if ui.ratio_model.n_items() > custom_position {
+                ui.ratio_model.remove(custom_position);
+            }
+            ui.ratio_model.append(&size::ratio_label(custom));
+            ui.custom_ratio.replace(Some(custom));
+            ui.ratio_dropdown.set_selected(custom_position);
+        }
+    }
+    ui.size_guard.set(false);
+}
+
+fn set_target(ui: &Rc<Ui>, mp: f64, ratio: (u32, u32)) {
+    set_ratio_selection(ui, ratio);
+    ui.size_guard.set(true);
+    ui.mp_scale.set_value(mp.clamp(size::MP_MIN, size::MP_MAX));
+    ui.size_guard.set(false);
+    update_size_ui(ui);
+}
+
+fn current_mp(ui: &Rc<Ui>) -> f64 {
+    ((ui.mp_scale.value().clamp(size::MP_MIN, size::MP_MAX) * 100.0).round()) / 100.0
+}
+
+fn target_size(ui: &Rc<Ui>) -> (u32, u32) {
+    size::size_for_mp(current_mp(ui), selected_ratio(ui))
+}
+
 pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
     if ui.size_guard.get() {
         return;
     }
-    let width = size::snap(ui.width_scale.value() as u32);
-    let height = size::snap(ui.height_scale.value() as u32);
+    let mp = current_mp(ui);
+    let ratio = selected_ratio(ui);
+    let (width, height) = size::size_for_mp(mp, ratio);
+    let megapixels = size::megapixels(width, height);
 
     ui.size_guard.set(true);
-    if (ui.width_scale.value() as u32) != width {
-        ui.width_scale.set_value(width as f64);
-    }
-    if (ui.height_scale.value() as u32) != height {
-        ui.height_scale.set_value(height as f64);
+    if (ui.mp_scale.value() - mp).abs() > 1e-9 {
+        ui.mp_scale.set_value(mp);
     }
     ui.size_guard.set(false);
 
-    ui.width_value.set_text(&width.to_string());
-    ui.height_value.set_text(&height.to_string());
-    ui.ratio_label.set_text(&size::aspect_label(width, height));
-    let megapixels = size::megapixels(width, height);
-    ui.mp_label.set_text(&format!("{megapixels:.2} MP"));
+    ui.mp_value.set_text(&format!("{mp:.2} MP"));
+    ui.ratio_label.set_text(&size::ratio_label(ratio));
+    ui.mp_label
+        .set_text(&format!("{megapixels:.2} MP · {width} × {height} px"));
+
+    let mut hint = String::new();
     if size::is_large(width, height) {
-        ui.size_hint
-            .set_text("Large size — slower and may exceed 8 GB VRAM");
-        ui.size_hint.add_css_class("warning");
-    } else {
+        hint.push_str("Large size — slower and may exceed 8 GB VRAM");
+    }
+    if (width == size::MAX_SIZE || height == size::MAX_SIZE) && megapixels + 0.005 < mp {
+        if !hint.is_empty() {
+            hint.push('\n');
+        }
+        hint.push_str(&format!(
+            "Capped at {} px — max {:.2} MP at this ratio",
+            size::MAX_SIZE,
+            megapixels
+        ));
+    } else if (width == size::MIN_SIZE || height == size::MIN_SIZE) && megapixels > mp + 0.005 {
+        if !hint.is_empty() {
+            hint.push('\n');
+        }
+        hint.push_str(&format!(
+            "Minimum side is {} px — minimum {:.2} MP at this ratio",
+            size::MIN_SIZE,
+            megapixels
+        ));
+    }
+
+    if hint.is_empty() {
         ui.size_hint.set_text("");
         ui.size_hint.remove_css_class("warning");
+    } else {
+        ui.size_hint.set_text(&hint);
+        ui.size_hint.add_css_class("warning");
     }
+
     ui.size_cell.set((width, height));
     ui.ratio_area.queue_draw();
 
     let mut config = ui.config.borrow_mut();
+    config.default_mp = Some(mp);
+    config.default_ratio_width = Some(ratio.0);
+    config.default_ratio_height = Some(ratio.1);
     config.default_width = width;
     config.default_height = height;
     let _ = config.save();
 }
 
 pub(crate) fn set_size(ui: &Rc<Ui>, width: u32, height: u32) {
-    ui.size_guard.set(true);
-    ui.width_scale.set_value(size::snap(width) as f64);
-    ui.height_scale.set_value(size::snap(height) as f64);
-    ui.size_guard.set(false);
-    update_size_ui(ui);
+    let width = width.max(1);
+    let height = height.max(1);
+    let mp = size::mp_for_size(width, height);
+    set_target(ui, mp, (width, height));
 }
 
-/// Match the size sliders to the reference image's aspect ratio.
+/// Match the target ratio to the reference image, keeping the current MP.
 fn fit_reference_size(ui: &Rc<Ui>) {
     let (width, height) = ui.image_size.get();
     if width == 0 || height == 0 {
         return;
     }
-    let target_area = ui.width_scale.value() * ui.height_scale.value();
-    let (width, height) = size::fit_aspect(width, height, target_area);
-    set_size(ui, width, height);
+    set_target(ui, current_mp(ui), (width, height));
 }
 
 /// Keep the sidebar selection in sync with the image on the canvas.
@@ -853,10 +963,6 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         }
     }
 
-    if reference.is_some() {
-        fit_reference_size(ui);
-    }
-
     match reference {
         Some(path) => {
             let name = path
@@ -888,29 +994,33 @@ pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
 }
 
 pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
-    let has_image = ui.state.borrow().display.is_some();
+    let (has_image, editing) = {
+        let state = ui.state.borrow();
+        (state.display.is_some(), state.reference.is_some())
+    };
     let composing = ui.composer.reveals_child();
     let generating = ui.generating.get();
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
+    let busy = generating || upscaling || zooming;
     let position = history_position(ui);
-    let navigation = has_image && !generating && !upscaling && !zooming;
+    let navigation = has_image && !busy && !editing;
+    let view = has_image && !composing && !busy && !editing;
 
     ui.nav_up_button
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
-    ui.upscale_button
-        .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
-    ui.edit_button
-        .set_visible(has_image && !composing && !generating && !upscaling && !zooming);
-    ui.crop_button
-        .set_visible(has_image && !generating && !upscaling && !zooming);
-    ui.undo_button.set_visible(
-        has_image && !generating && !upscaling && !zooming && ui.undo.borrow().can_undo(),
-    );
+    ui.colorize_button.set_visible(view);
+    ui.expand_button.set_visible(view);
+    ui.upscale_button.set_visible(view);
+    ui.edit_button.set_visible(view);
+    ui.crop_button.set_visible(view);
+    ui.back_button.set_visible(editing && !busy);
+    ui.undo_button
+        .set_visible(has_image && !busy && ui.undo.borrow().can_undo());
 
-    if !has_image || generating || upscaling || zooming {
+    if !view {
         ui.crop_button.set_active(false);
     }
 }
@@ -924,6 +1034,7 @@ fn edit_current_image(ui: &Rc<Ui>) {
     };
     ui.state.borrow_mut().reference = Some(path);
     update_image_view(ui);
+    fit_reference_size(ui);
     show_composer(ui, true);
     ui.status.set_text("Editing reference");
 }
@@ -962,6 +1073,9 @@ fn undo_crop(ui: &Rc<Ui>) {
 
     *ui.state.borrow_mut() = previous;
     update_image_view(ui);
+    let editing = ui.state.borrow().reference.is_some();
+    fit_reference_size(ui);
+    show_composer(ui, editing);
     ui.status.set_text("Crop undone");
 
     match load_zoom_surface(&path) {
@@ -1080,6 +1194,7 @@ fn apply_crop(ui: &Rc<Ui>, selection: CropRect) {
                 .push(&previous, (x as f64, y as f64, width as f64, height as f64));
             ui.state.borrow_mut().load(destination);
             update_image_view(ui);
+            fit_reference_size(ui);
             start_zoom(
                 ui,
                 surface,
@@ -1304,8 +1419,8 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
 fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.model_dropdown.set_sensitive(enabled);
     ui.style_dropdown.set_sensitive(enabled);
-    ui.width_scale.set_sensitive(enabled);
-    ui.height_scale.set_sensitive(enabled);
+    ui.mp_scale.set_sensitive(enabled);
+    ui.ratio_dropdown.set_sensitive(enabled);
     ui.seed_entry.set_sensitive(enabled);
     ui.random_button.set_sensitive(enabled);
     ui.offload_switch.set_sensitive(enabled);
@@ -1348,6 +1463,7 @@ fn choose_reference(ui: &Rc<Ui>) {
         ui.undo.borrow_mut().clear();
         ui.state.borrow_mut().load(path);
         update_image_view(&ui);
+        fit_reference_size(&ui);
         show_composer(&ui, true);
         ui.status.set_text(&format!("Editing reference · {name}"));
     });
@@ -1459,7 +1575,69 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
         .to_string()
 }
 
+const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GenerationMode {
+    Generate,
+    Edit,
+    Colorize,
+    Expand,
+}
+
+impl GenerationMode {
+    fn keeps_reference(self) -> bool {
+        self == Self::Edit
+    }
+
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Colorize => "colorize",
+            Self::Expand => "expand",
+            Self::Generate | Self::Edit => "generate",
+        }
+    }
+
+    fn done_message(self) -> &'static str {
+        match self {
+            Self::Colorize => "Image colorized.",
+            Self::Expand => "Image expanded.",
+            Self::Generate | Self::Edit => "Image generated.",
+        }
+    }
+}
+
+fn current_style_id(ui: &Rc<Ui>) -> &'static str {
+    STYLES
+        .get(ui.style_dropdown.selected() as usize)
+        .map(|style| style.id)
+        .unwrap_or("none")
+}
+
 fn start_generation(ui: &Rc<Ui>) {
+    let mode = if ui.state.borrow().reference.is_some() {
+        GenerationMode::Edit
+    } else {
+        GenerationMode::Generate
+    };
+    generate(
+        ui,
+        mode,
+        current_prompt(ui),
+        current_style_id(ui),
+        true,
+        None,
+    );
+}
+
+fn generate(
+    ui: &Rc<Ui>,
+    mode: GenerationMode,
+    base_prompt: String,
+    style_id: &str,
+    require_composer: bool,
+    source_path: Option<String>,
+) {
     if ui.backend_installing.get() {
         ui.toast
             .add_toast(adw::Toast::new("The backend is still installing."));
@@ -1469,16 +1647,12 @@ fn start_generation(ui: &Rc<Ui>) {
         || ui.upscaling.get()
         || ui.zooming.get()
         || !ui.generate.is_sensitive()
-        || !ui.composer.reveals_child()
+        || (require_composer && !ui.composer.reveals_child())
     {
         return;
     }
 
-    let buffer = ui.prompt.buffer();
-    let base_prompt = buffer
-        .text(&buffer.start_iter(), &buffer.end_iter(), false)
-        .trim()
-        .to_string();
+    let base_prompt = base_prompt.trim().to_string();
     if base_prompt.is_empty() {
         ui.toast.add_toast(adw::Toast::new("Enter a prompt first."));
         return;
@@ -1514,16 +1688,11 @@ fn start_generation(ui: &Rc<Ui>) {
         return;
     }
 
-    let style_id = STYLES
-        .get(ui.style_dropdown.selected() as usize)
-        .map(|style| style.id)
-        .unwrap_or("none");
     let effective_prompt = flux_core::style::compose_prompt(&base_prompt, style_id);
 
-    let width = size::snap(ui.width_scale.value() as u32);
-    let height = size::snap(ui.height_scale.value() as u32);
+    let (width, height) = target_size(ui);
     let reference = ui.state.borrow().reference.clone();
-    let was_edit = reference.is_some();
+    let keep_reference = mode.keeps_reference();
     let output_dir = ui.config.borrow().output_dir.clone();
     let offload = ui.config.borrow().offload;
 
@@ -1574,6 +1743,7 @@ fn start_generation(ui: &Rc<Ui>) {
     let reference_for_history = reference
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
+    let source_path_for_history = source_path;
     let started = Instant::now();
 
     glib::spawn_future_local(async move {
@@ -1593,7 +1763,7 @@ fn start_generation(ui: &Rc<Ui>) {
                 Progress::Cancelled => {
                     ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
                     finish(&ui, "Cancelled");
-                    show_composer(&ui, true);
+                    after_generation_stopped(&ui, mode);
                     break;
                 }
                 Progress::Done(path) => {
@@ -1602,7 +1772,9 @@ fn start_generation(ui: &Rc<Ui>) {
                     let created_at = unix_seconds();
 
                     ui.undo.borrow_mut().clear();
-                    ui.state.borrow_mut().on_result(path.clone(), was_edit);
+                    ui.state
+                        .borrow_mut()
+                        .on_result(path.clone(), keep_reference);
                     update_image_view(&ui);
 
                     let inserted = ui.history.borrow().insert(&NewGeneration {
@@ -1617,8 +1789,8 @@ fn start_generation(ui: &Rc<Ui>) {
                         duration_ms,
                         image_path: &image_path,
                         reference_path: reference_for_history.as_deref(),
-                        kind: "generate",
-                        source_path: None,
+                        kind: mode.kind(),
+                        source_path: source_path_for_history.as_deref(),
                     });
 
                     match inserted {
@@ -1639,8 +1811,8 @@ fn start_generation(ui: &Rc<Ui>) {
                                 duration_ms,
                                 image_path,
                                 reference_path: reference_for_history.clone(),
-                                kind: "generate".into(),
-                                source_path: None,
+                                kind: mode.kind().into(),
+                                source_path: source_path_for_history.clone(),
                             };
                             ui.entries.borrow_mut().insert(0, entry.clone());
                             history_view::add_row(&ui, &entry, true);
@@ -1654,7 +1826,7 @@ fn start_generation(ui: &Rc<Ui>) {
                     }
 
                     ui.seed_entry.set_text(&seed_for_history);
-                    ui.toast.add_toast(adw::Toast::new("Image generated."));
+                    ui.toast.add_toast(adw::Toast::new(mode.done_message()));
                     finish(
                         &ui,
                         &format!(
@@ -1662,6 +1834,9 @@ fn start_generation(ui: &Rc<Ui>) {
                             preset_label(&model_for_history)
                         ),
                     );
+                    if mode == GenerationMode::Edit {
+                        show_composer(&ui, true);
+                    }
                     break;
                 }
                 Progress::Failed(error) => {
@@ -1670,12 +1845,122 @@ fn start_generation(ui: &Rc<Ui>) {
                     ui.toast
                         .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
                     finish(&ui, "Generation failed");
-                    show_composer(&ui, true);
+                    after_generation_stopped(&ui, mode);
                     break;
                 }
             }
         }
     });
+}
+
+fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
+    match mode {
+        GenerationMode::Colorize | GenerationMode::Expand => {
+            ui.state.borrow_mut().reference = None;
+            update_image_view(ui);
+            show_composer(ui, false);
+        }
+        GenerationMode::Generate | GenerationMode::Edit => show_composer(ui, true),
+    }
+}
+
+fn can_start_image_action(ui: &Rc<Ui>) -> bool {
+    if ui.backend_installing.get() {
+        ui.toast
+            .add_toast(adw::Toast::new("The backend is still installing."));
+        return false;
+    }
+    if !ui.generate.is_sensitive() {
+        ui.toast
+            .add_toast(adw::Toast::new("Install a model in Preferences first."));
+        return false;
+    }
+    true
+}
+
+fn colorize_image(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+        return;
+    }
+    if !can_start_image_action(ui) {
+        return;
+    }
+    let Some(source) = ui.state.borrow().display.clone() else {
+        ui.toast.add_toast(adw::Toast::new("No image to colorize."));
+        return;
+    };
+
+    // Keep the source shape, but use the MP target from the sidebar.
+    fit_reference_size(ui);
+    ui.state.borrow_mut().reference = Some(source.clone());
+    update_image_view(ui);
+    ui.prompt.buffer().set_text(COLORIZE_PROMPT);
+    ui.seed_entry.set_text("");
+    generate(
+        ui,
+        GenerationMode::Colorize,
+        COLORIZE_PROMPT.to_string(),
+        "none",
+        false,
+        Some(source.to_string_lossy().into_owned()),
+    );
+}
+
+fn expand_image(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+        return;
+    }
+    if !can_start_image_action(ui) {
+        return;
+    }
+    let Some(source) = ui.state.borrow().display.clone() else {
+        ui.toast.add_toast(adw::Toast::new("No image to expand."));
+        return;
+    };
+    let (source_width, source_height) = ui.image_size.get();
+    let (target_width, target_height) = target_size(ui);
+    let same_ratio = size::ratio_for_size(source_width.max(1), source_height.max(1))
+        == size::ratio_for_size(target_width.max(1), target_height.max(1));
+    let source_area = source_width as u64 * source_height as u64;
+    let target_area = target_width as u64 * target_height as u64;
+    if (target_width == source_width && target_height == source_height)
+        || (same_ratio && target_area <= source_area)
+    {
+        ui.toast.add_toast(adw::Toast::new(
+            "Choose a larger MP or a different ratio to expand.",
+        ));
+        return;
+    }
+
+    let prompt = current_prompt(ui);
+    if prompt.trim().is_empty() {
+        ui.toast.add_toast(adw::Toast::new("Enter a prompt first."));
+        return;
+    }
+    let style_id = current_style_id(ui);
+    ui.state.borrow_mut().reference = Some(source.clone());
+    update_image_view(ui);
+    generate(
+        ui,
+        GenerationMode::Expand,
+        prompt,
+        style_id,
+        false,
+        Some(source.to_string_lossy().into_owned()),
+    );
+}
+
+fn back_to_view(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+        return;
+    }
+    cancel_zoom(ui);
+    set_crop_mode(ui, false);
+    ui.crop_button.set_active(false);
+    ui.state.borrow_mut().reference = None;
+    update_image_view(ui);
+    show_composer(ui, false);
+    ui.status.set_text("Viewing image");
 }
 
 /// Show an image with a crossfade from the currently visible canvas image.
@@ -1740,12 +2025,7 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
         return;
     }
 
-    let label = history_view::entry_model_label(&entry);
-    ui.status.set_text(&if entry.kind == "upscale" {
-        format!("Upscaled · {label} · {} × {}", entry.width, entry.height)
-    } else {
-        format!("History · {label} · {} × {}", entry.width, entry.height)
-    });
+    ui.status.set_text(&history_view::status_label(&entry));
 }
 
 /// Run one upscale on a worker thread and show the result like a generation.
