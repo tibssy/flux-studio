@@ -117,7 +117,7 @@ without leaving the app.
 | Action | Shortcut / control |
 |---|---|
 | Generate | `Ctrl+Enter` or **Generate** |
-| Cancel | **Cancel** (cancels the running server job) |
+| Cancel | stop button (cancels the running server job) |
 | Preferences | `Ctrl+,` or the header menu |
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |

@@ -86,16 +86,16 @@ pub(crate) fn build() -> MainView {
         .css_classes(["osd", "circular"])
         .build();
     let colorize_button = gtk::Button::builder()
-        .label("Colorize")
+        .icon_name("color-select-symbolic")
         .tooltip_text("Colorize this black-and-white image")
         .visible(false)
-        .css_classes(["osd", "pill"])
+        .css_classes(["osd", "circular"])
         .build();
     let expand_button = gtk::Button::builder()
-        .label("Expand")
+        .icon_name("zoom-fit-best-symbolic")
         .tooltip_text("Expand to the sidebar size and ratio")
         .visible(false)
-        .css_classes(["osd", "pill"])
+        .css_classes(["osd", "circular"])
         .build();
     let back_button = gtk::Button::builder()
         .icon_name("go-previous-symbolic")
@@ -249,9 +249,9 @@ pub(crate) fn build() -> MainView {
         .show_text(true)
         .build();
     let cancel = gtk::Button::builder()
-        .label("Cancel")
+        .icon_name("process-stop-symbolic")
         .tooltip_text("Cancel generation")
-        .css_classes(["pill"])
+        .css_classes(["destructive-action", "circular"])
         .build();
     let progress_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     progress_row.set_visible(false);
