@@ -21,7 +21,8 @@ pub(crate) struct MainView {
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
     pub colorize_button: gtk::Button,
-    pub relight_button: gtk::Button,
+    pub daylight_button: gtk::Button,
+    pub night_button: gtk::Button,
     pub expand_button: gtk::Button,
     pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
@@ -92,9 +93,15 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
-    let relight_button = gtk::Button::builder()
-        .icon_name("daytime-sunset-symbolic")
-        .tooltip_text("Toggle day/night lighting")
+    let daylight_button = gtk::Button::builder()
+        .icon_name("weather-clear-symbolic")
+        .tooltip_text("Convert to daylight")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let night_button = gtk::Button::builder()
+        .icon_name("weather-clear-night-symbolic")
+        .tooltip_text("Convert to night")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
@@ -140,7 +147,8 @@ pub(crate) fn build() -> MainView {
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
     image_actions.append(&colorize_button);
-    image_actions.append(&relight_button);
+    image_actions.append(&daylight_button);
+    image_actions.append(&night_button);
     image_actions.append(&expand_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
@@ -308,7 +316,8 @@ pub(crate) fn build() -> MainView {
         edit_button,
         upscale_button,
         colorize_button,
-        relight_button,
+        daylight_button,
+        night_button,
         expand_button,
         back_button,
         nav_up_button,
