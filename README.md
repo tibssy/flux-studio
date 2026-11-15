@@ -32,8 +32,8 @@ Milestone 3 (packaged desktop app):
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,
   with undo
-- **image actions** over the canvas: colorize, expand, upscale, edit,
-  crop-to-reference, undo, and back-to-view
+- **image actions** over the canvas: colorize, day/night, expand, upscale,
+  edit, crop-to-reference, undo, and back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
@@ -122,6 +122,7 @@ without leaving the app.
 | Toggle the sidebar | `Ctrl+B` or the header button |
 | Edit the image | pencil button at the top-right of the image |
 | Colorize the image | **Colorize** button (source aspect at the sidebar MP target) |
+| Convert day ↔ night | sunset button (auto-detects the current lighting) |
 | Expand the image | **Expand** button (sidebar MP + ratio target) |
 | Leave edit mode | **Back** button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
@@ -149,8 +150,10 @@ new reference, and opens the composer; undo plays the same zoom in reverse.
 `Ctrl+B` toggles the sidebar.
 
 **Colorize** uses the built-in restoration prompt and preserves the source
-aspect at the current MP target. **Expand** uses the sidebar MP + ratio as the
-target size, so choose a larger MP or a different ratio before pressing it.
+aspect at the current MP target. The **sunset** button samples the image
+lighting and applies the opposite prompt: daylight becomes night, and a night
+scene becomes daylight. **Expand** uses the sidebar MP + ratio as
+the target size, so choose a larger MP or a different ratio before pressing it.
 
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in

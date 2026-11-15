@@ -168,6 +168,8 @@ pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
     match kind {
         "upscale" => Some("Upscaled"),
         "colorize" => Some("Colorized"),
+        "night" => Some("Night"),
+        "day" => Some("Daylight"),
         "expand" => Some("Expanded"),
         _ => None,
     }
@@ -292,6 +294,8 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         .heading(match entry.kind.as_str() {
             "upscale" => "Upscale details",
             "colorize" => "Colorize details",
+            "night" => "Night details",
+            "day" => "Daylight details",
             "expand" => "Expand details",
             _ => "Image details",
         })

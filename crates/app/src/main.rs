@@ -76,6 +76,7 @@ pub(crate) struct Ui {
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
     pub colorize_button: gtk::Button,
+    pub relight_button: gtk::Button,
     pub expand_button: gtk::Button,
     pub back_button: gtk::Button,
     pub nav_up_button: gtk::Button,
@@ -296,6 +297,7 @@ fn build_ui(app: &adw::Application) {
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
         colorize_button: view.colorize_button,
+        relight_button: view.relight_button,
         expand_button: view.expand_button,
         back_button: view.back_button,
         nav_up_button: view.nav_up_button,
@@ -553,6 +555,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.colorize_button.clone();
         button.connect_clicked(move |_| colorize_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.relight_button.clone();
+        button.connect_clicked(move |_| toggle_day_night(&ui));
     }
     {
         let ui = ui.clone();
@@ -1012,6 +1019,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.colorize_button.set_visible(view);
+    ui.relight_button.set_visible(view);
     ui.expand_button.set_visible(view);
     ui.upscale_button.set_visible(view);
     ui.edit_button.set_visible(view);
@@ -1576,12 +1584,16 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
 }
 
 const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
+const NIGHT_PROMPT: &str = "transform this daytime scene into night, dark blue sky, moonlight, glowing windows and street lights, deep shadows, cinematic night photography, keep the same composition, subjects, and details";
+const DAY_PROMPT: &str = "transform this night scene into bright daylight, clear blue sky, warm sunlight, natural colors, soft shadows, keep the same composition, subjects, and details";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GenerationMode {
     Generate,
     Edit,
     Colorize,
+    Night,
+    Day,
     Expand,
 }
 
@@ -1593,6 +1605,8 @@ impl GenerationMode {
     fn kind(self) -> &'static str {
         match self {
             Self::Colorize => "colorize",
+            Self::Night => "night",
+            Self::Day => "day",
             Self::Expand => "expand",
             Self::Generate | Self::Edit => "generate",
         }
@@ -1601,6 +1615,8 @@ impl GenerationMode {
     fn done_message(self) -> &'static str {
         match self {
             Self::Colorize => "Image colorized.",
+            Self::Night => "Converted to night.",
+            Self::Day => "Converted to day.",
             Self::Expand => "Image expanded.",
             Self::Generate | Self::Edit => "Image generated.",
         }
@@ -1855,7 +1871,10 @@ fn generate(
 
 fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
     match mode {
-        GenerationMode::Colorize | GenerationMode::Expand => {
+        GenerationMode::Colorize
+        | GenerationMode::Night
+        | GenerationMode::Day
+        | GenerationMode::Expand => {
             ui.state.borrow_mut().reference = None;
             update_image_view(ui);
             show_composer(ui, false);
@@ -1900,6 +1919,83 @@ fn colorize_image(ui: &Rc<Ui>) {
         ui,
         GenerationMode::Colorize,
         COLORIZE_PROMPT.to_string(),
+        "none",
+        false,
+        Some(source.to_string_lossy().into_owned()),
+    );
+}
+
+/// A small sample of the image's lighting, used to pick the day/night direction.
+struct LightingStats {
+    luma: f64,
+    red: f64,
+    green: f64,
+    blue: f64,
+}
+
+fn lighting_stats(path: &Path) -> Option<LightingStats> {
+    let image = image::open(path).ok()?;
+    let thumbnail = image.thumbnail(64, 64).to_rgb8();
+    let count = thumbnail.len().max(1) as f64;
+    let mut red = 0.0;
+    let mut green = 0.0;
+    let mut blue = 0.0;
+    for pixel in thumbnail.pixels() {
+        red += pixel.0[0] as f64;
+        green += pixel.0[1] as f64;
+        blue += pixel.0[2] as f64;
+    }
+    Some(LightingStats {
+        luma: (0.2126 * red + 0.7152 * green + 0.0722 * blue) / count,
+        red: red / count,
+        green: green / count,
+        blue: blue / count,
+    })
+}
+
+/// Night scenes are very dark, blue-shifted, or almost colourless. Dim warm
+/// indoor scenes are deliberately treated as daylight.
+fn is_night(stats: &LightingStats) -> bool {
+    let max = stats.red.max(stats.green).max(stats.blue);
+    let min = stats.red.min(stats.green).min(stats.blue);
+    let saturation = if max > 0.0 { (max - min) / max } else { 0.0 };
+
+    stats.luma < 45.0 || (stats.luma < 95.0 && (stats.blue > stats.red + 4.0 || saturation < 0.12))
+}
+
+fn image_is_night(path: &Path) -> bool {
+    lighting_stats(path).is_some_and(|stats| is_night(&stats))
+}
+
+fn toggle_day_night(ui: &Rc<Ui>) {
+    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() {
+        return;
+    }
+    if !can_start_image_action(ui) {
+        return;
+    }
+    let Some(source) = ui.state.borrow().display.clone() else {
+        ui.toast.add_toast(adw::Toast::new("No image to convert."));
+        return;
+    };
+
+    let to_night = !image_is_night(&source);
+    let (mode, prompt) = if to_night {
+        (GenerationMode::Night, NIGHT_PROMPT)
+    } else {
+        (GenerationMode::Day, DAY_PROMPT)
+    };
+
+    // Keep the source shape, but use the MP target from the sidebar.
+    fit_reference_size(ui);
+    ui.state.borrow_mut().reference = Some(source.clone());
+    update_image_view(ui);
+    ui.prompt.buffer().set_text(prompt);
+    ui.seed_entry.set_text("");
+    generate(
+        ui,
+        mode,
+        prompt.to_string(),
         "none",
         false,
         Some(source.to_string_lossy().into_owned()),
@@ -2383,7 +2479,7 @@ fn slugify(prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{contain_rect, crop_rect_from_drag, lerp_rect, slugify};
+    use super::{LightingStats, contain_rect, crop_rect_from_drag, is_night, lerp_rect, slugify};
 
     #[test]
     fn slugifies_prompts() {
@@ -2460,5 +2556,23 @@ mod tests {
             crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (250.0, 0.0, 256.0, 6.0)),
             None
         );
+    }
+
+    #[test]
+    fn classifies_day_and_night_lighting() {
+        let stats = |luma, red, green, blue| LightingStats {
+            luma,
+            red,
+            green,
+            blue,
+        };
+        // Bright daylight, dim warm indoor, and dusk.
+        assert!(!is_night(&stats(150.0, 160.0, 150.0, 140.0)));
+        assert!(!is_night(&stats(83.0, 91.0, 83.0, 75.0)));
+        assert!(!is_night(&stats(79.0, 95.0, 76.0, 67.0)));
+        // Dark forest, blue night, and foggy night.
+        assert!(is_night(&stats(29.0, 18.0, 32.0, 39.0)));
+        assert!(is_night(&stats(40.0, 25.0, 30.0, 65.0)));
+        assert!(is_night(&stats(80.0, 79.0, 80.0, 81.0)));
     }
 }
