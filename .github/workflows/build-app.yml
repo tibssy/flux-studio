@@ -30,6 +30,10 @@ jobs:
     # libadwaita 1.7 and glibc 2.41.
     container:
       image: debian:trixie
+    defaults:
+      run:
+        # Container jobs default to `sh`; the steps rely on bash.
+        shell: bash
     steps:
       - name: Install system dependencies
         run: |
