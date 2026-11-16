@@ -72,6 +72,7 @@ fn role_label(role: ModelRole) -> &'static str {
         ModelRole::Diffusion => "diffusion model",
         ModelRole::Vae => "VAE",
         ModelRole::TextEncoder => "text encoder",
+        ModelRole::ClipEncoder => "CLIP-L encoder",
         ModelRole::VisionEncoder => "vision encoder",
         ModelRole::Upscaler => "upscaler",
     }
@@ -98,6 +99,9 @@ impl Backend for SdCpp {
 
         for role in [ModelRole::Diffusion, ModelRole::Vae, ModelRole::TextEncoder] {
             self.require_file(preset, role)?;
+        }
+        if preset.file(ModelRole::ClipEncoder).is_some() {
+            self.require_file(preset, ModelRole::ClipEncoder)?;
         }
         if preset.file(ModelRole::VisionEncoder).is_some() {
             self.require_file(preset, ModelRole::VisionEncoder)?;
@@ -233,9 +237,17 @@ pub fn build_args(
         path(ModelRole::Diffusion),
         "--vae".into(),
         path(ModelRole::Vae),
-        "--llm".into(),
-        path(ModelRole::TextEncoder),
     ];
+
+    if preset.uses_clip_encoders() {
+        args.push("--t5xxl".into());
+        args.push(path(ModelRole::TextEncoder));
+        args.push("--clip_l".into());
+        args.push(path(ModelRole::ClipEncoder));
+    } else {
+        args.push("--llm".into());
+        args.push(path(ModelRole::TextEncoder));
+    }
 
     if preset.file(ModelRole::VisionEncoder).is_some() {
         args.push("--llm_vision".into());
@@ -269,7 +281,11 @@ pub fn build_args(
         args.push(reference.clone().into_os_string());
     }
 
-    args.extend(["-o".into(), request.output.clone().into_os_string(), "-v".into()]);
+    args.extend([
+        "-o".into(),
+        request.output.clone().into_os_string(),
+        "-v".into(),
+    ]);
 
     if request.offload {
         args.push("--offload-to-cpu".into());
@@ -392,10 +408,44 @@ mod tests {
         assert!(args.contains(&"--offload-to-cpu".to_string()));
         assert!(args.windows(2).any(|w| w == ["-r", "/tmp/ref.png"]));
         assert!(args.windows(2).any(|w| w == ["-o", "/tmp/out.png"]));
-        assert!(args.windows(2).any(|w| w == [
-            "--diffusion-model",
-            "/models/diffusion/flux-2-klein-4b-Q4_K_M.gguf"
-        ]));
+        assert!(args.windows(2).any(|w| w
+            == [
+                "--diffusion-model",
+                "/models/diffusion/flux-2-klein-4b-Q4_K_M.gguf"
+            ]));
+    }
+
+    #[test]
+    fn flux1_uses_t5_and_clip_l_instead_of_llm() {
+        let preset = &flux_core::preset::FLUX1_SCHNELL;
+        let request = GenerateRequest {
+            preset_id: preset.id.into(),
+            prompt: "a cat".into(),
+            width: 768,
+            height: 768,
+            steps: preset.steps,
+            cfg: preset.cfg,
+            seed: 1,
+            sampler: preset.sampler,
+            offload: true,
+            reference_images: Vec::new(),
+            output: "/tmp/out.png".into(),
+        };
+        let args: Vec<String> = build_args(Path::new("/models"), preset, &request)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--llm".to_string()));
+        assert!(args.windows(2).any(|w| w
+            == [
+                "--t5xxl",
+                "/models/text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf"
+            ]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--clip_l", "/models/text_encoders/clip_l.safetensors"])
+        );
+        assert!(args.contains(&"--clip-on-cpu".to_string()));
     }
 
     #[test]
@@ -420,7 +470,13 @@ mod tests {
             .collect();
         assert!(args.windows(2).any(|w| w == ["--steps", "16"]));
         assert!(args.windows(2).any(|w| w == ["--seed", "7"]));
-        assert!(args.iter().any(|a| a.ends_with("Qwen3VL-4B-Instruct-Q4_K_M.gguf")));
-        assert!(args.iter().any(|a| a.ends_with("flux3-image-klein-Q4_K.gguf")));
+        assert!(
+            args.iter()
+                .any(|a| a.ends_with("Qwen3VL-4B-Instruct-Q4_K_M.gguf"))
+        );
+        assert!(
+            args.iter()
+                .any(|a| a.ends_with("flux3-image-klein-Q4_K.gguf"))
+        );
     }
 }

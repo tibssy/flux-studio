@@ -4,8 +4,9 @@ A GTK4 / libadwaita desktop app for **local image generation and editing**,
 driven by [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 No Python, no PyTorch, no cloud.
 
-Ships with two FLUX presets and uses FLUX's native reference-image support for
-editing, so text-to-image and image-to-image share the same weights.
+Ships with four presets — FLUX.2 klein 4B, FLUX.3 Image klein, Fibo 2.0 Edit
+Turbo and FLUX.1 schnell — and uses each model's native reference-image support
+for editing, so text-to-image and image-to-image share the same weights.
 
 ## Status
 
@@ -48,7 +49,8 @@ Milestone 3 (packaged desktop app):
 - **preferences dialog**: output folder, CPU offload, models folder
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
 - **model downloader** with resume, progress and per-preset install status,
-  plus a delete action that keeps files shared with other presets
+  license confirmation for non-commercial weights, and a delete action that
+  keeps files shared with other presets
 - first run opens the Models page when the active preset is missing
 - PKGBUILD, `.desktop` entry and scalable icon
 
@@ -58,9 +60,13 @@ Milestone 3 (packaged desktop app):
 |---|---|---|---|---|
 | **FLUX.2 klein 4B** (default) | 5.4 GB | 4 | **78–85 s** | 4.7 GB |
 | **FLUX.3 Image klein** | 6.3 GB | 16 | **254 s** | 5.0 GB |
+| **Fibo 2.0 Edit Turbo** | 9.2 GB | 4 | — | — |
+| **FLUX.1 schnell** | 10.1 GB | 4 | — | — |
 
 FLUX.3 is the quality option (~3× slower on Maxwell); klein 4B is the fastest
-4-step model that fits this GPU. Both support reference-image editing.
+4-step model that fits this GPU. Fibo and FLUX.3 support reference-image
+editing; FLUX.1 schnell is text-to-image only. Fibo needs a vision projector
+(`--llm_vision`) and is slower than klein 4B.
 
 Measured on a Quadro M4000 (Maxwell, sm_52, 8 GB), CUDA 12.9,
 `GGML_CUDA_NCCL=OFF`, with `--offload-to-cpu --vae-tiling`.
@@ -221,7 +227,18 @@ Data locations:
   allows commercial use below the revenue threshold defined in that license;
   review the [model card](https://huggingface.co/black-forest-labs/flux-3-image-klein)
   before commercial use. The weights are gated on Hugging Face.
-- **Qwen3-4B** and **Qwen3-VL-4B-Instruct** text encoders are **Apache-2.0**.
+- **Fibo 2.0 Edit Turbo** is **CC BY-NC 4.0** (© BRIA AI) and is usable for
+  **non-commercial purposes only**; commercial use needs a separate agreement
+  with BRIA. The preset shows the license in **Models** and requires an explicit
+  in-app confirmation before downloading. The GGUF is
+  [molbal's quantization](https://huggingface.co/molbal/fibo-2.0-GGUF), which
+  inherits the same license.
+- **FLUX.1 schnell** is **Apache-2.0**. The preset uses the
+  [unsloth GGUF](https://huggingface.co/unsloth/FLUX.1-schnell-GGUF) for the
+  transformer, a Q4_K_M T5-XXL encoder and the Apache-2.0 FLUX VAE.
+- **Qwen3-4B**, **Qwen3-VL-4B-Instruct**, **T5-XXL** and **CLIP-L** text
+  encoders are **Apache-2.0** (CLIP-L is MIT). The FLUX VAE is Apache-2.0,
+  repacked by Meituan LongCat.
 - **LFM2.5-VL-450M** is released under the **LFM Open License v1.0**; commercial
   use is allowed below the revenue threshold defined in that license. The
   weights are downloaded at runtime from Liquid AI's Hugging Face repository.

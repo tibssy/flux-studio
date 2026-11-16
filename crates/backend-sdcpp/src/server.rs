@@ -366,8 +366,15 @@ impl Inner {
         };
         let diffusion = path(ModelRole::Diffusion)?;
         let vae = path(ModelRole::Vae)?;
-        let llm = path(ModelRole::TextEncoder)?;
-        for file in [&diffusion, &vae, &llm] {
+        let text_encoder = path(ModelRole::TextEncoder)?;
+        let clip = if model.uses_clip_encoders() {
+            Some(path(ModelRole::ClipEncoder)?)
+        } else {
+            None
+        };
+        let mut required = vec![&diffusion, &vae, &text_encoder];
+        required.extend(clip.iter());
+        for file in required {
             if !file.exists() {
                 bail!("model file not found at {}", file.display());
             }
@@ -378,14 +385,24 @@ impl Inner {
             .arg("--diffusion-model")
             .arg(diffusion)
             .arg("--vae")
-            .arg(vae)
-            .arg("--llm")
-            .arg(llm);
+            .arg(vae);
+        if let Some(clip) = clip {
+            command
+                .arg("--t5xxl")
+                .arg(text_encoder)
+                .arg("--clip_l")
+                .arg(clip);
+        } else {
+            command.arg("--llm").arg(text_encoder);
+        }
         if let Some(vision) = model.path(ModelRole::VisionEncoder, &self.config.models_dir) {
             if !vision.exists() {
                 bail!("model file not found at {}", vision.display());
             }
             command.arg("--llm_vision").arg(vision);
+        }
+        for arg in model.extra_args {
+            command.arg(arg);
         }
         if let Some(backend) = &self.config.backend {
             command.arg("--backend").arg(backend);

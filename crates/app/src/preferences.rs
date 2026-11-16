@@ -24,6 +24,14 @@ const SDCPP_URL: &str = "https://github.com/leejet/stable-diffusion.cpp";
 const LLAMA_CPP_URL: &str = "https://github.com/ggml-org/llama.cpp";
 const FLUX2_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF";
 const FLUX3_GGUF_URL: &str = "https://huggingface.co/leejet/flux-3-image-klein-GGUF";
+const FIBO_URL: &str = "https://huggingface.co/briaai/Fibo-2.0-edit-turbo";
+const FIBO_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-nc/4.0/";
+const FIBO_GGUF_URL: &str = "https://huggingface.co/molbal/fibo-2.0-GGUF";
+const FLUX1_SCHNELL_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.1-schnell";
+const SCHNELL_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.1-schnell-GGUF";
+const T5_XXL_URL: &str = "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf";
+const CLIP_L_URL: &str = "https://huggingface.co/comfyanonymous/flux_text_encoders";
+const FLUX_VAE_URL: &str = "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo";
 const REALESRGAN_URL: &str = "https://github.com/xinntao/Real-ESRGAN";
 const PHIPS_URL: &str = "https://huggingface.co/Phips";
 
@@ -52,15 +60,19 @@ fn format_bytes(bytes: u64) -> String {
 
 fn preset_status(preset: &ModelPreset, models_dir: &Path) -> String {
     let missing = preset.missing(models_dir);
+    let license = preset
+        .license
+        .map(|license| format!(" · {}", license.name))
+        .unwrap_or_default();
     if missing.is_empty() {
         format!(
-            "Installed · {} steps · {}",
+            "Installed · {} steps · {}{license}",
             preset.steps,
             format_bytes(preset.total_bytes())
         )
     } else {
         format!(
-            "Missing {} file(s) · {} · {} steps",
+            "Missing {} file(s) · {} · {} steps{license}",
             missing.len(),
             format_bytes(preset.total_bytes()),
             preset.steps
@@ -218,16 +230,6 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         .description("Each preset downloads into the models folder above.")
         .build();
     let rows: Rc<RefCell<Vec<PresetRow>>> = Rc::new(RefCell::new(Vec::new()));
-    let progress = gtk::ProgressBar::builder()
-        .show_text(true)
-        .visible(false)
-        .build();
-    let download_status = gtk::Label::builder()
-        .label("")
-        .xalign(0.0)
-        .wrap(true)
-        .css_classes(["dim-label"])
-        .build();
 
     for preset in PRESETS {
         let row = adw::ActionRow::builder()
@@ -327,13 +329,6 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     vision_group.add(&vision_row);
     models_page.add(&vision_group);
 
-    let download_group = adw::PreferencesGroup::builder().title("Downloads").build();
-    let download_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    download_box.append(&progress);
-    download_box.append(&download_status);
-    download_group.add(&download_box);
-    models_page.add(&download_group);
-
     let refresh: Rc<dyn Fn()> = {
         let rows = rows.clone();
         let models_dir = ui.models_dir.clone();
@@ -402,12 +397,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     }
     {
         let ui = ui.clone();
-        let progress = progress.clone();
-        let download_status = download_status.clone();
         let refresh = refresh_vision.clone();
         let buttons = vec![vision_button.clone(), vision_delete.clone()];
+        let row = vision_row.clone();
         vision_button.connect_clicked(move |_| {
-            start_vision_download(&ui, &progress, &download_status, &buttons, refresh.clone());
+            start_vision_download(&ui, &row, &buttons, refresh.clone());
         });
     }
 
@@ -430,19 +424,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     for entry in upscaler_rows.borrow().iter() {
         let ui = ui.clone();
         let preset = entry.preset;
-        let progress = progress.clone();
-        let download_status = download_status.clone();
         let buttons = upscaler_buttons.clone();
         let refresh = refresh_upscalers.clone();
+        let row = entry.row.clone();
         entry.button.connect_clicked(move |_| {
-            start_upscaler_download(
-                &ui,
-                preset,
-                &progress,
-                &download_status,
-                &buttons,
-                refresh.clone(),
-            );
+            start_upscaler_download(&ui, preset, &row, &buttons, refresh.clone());
         });
     }
 
@@ -465,19 +451,37 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     for entry in rows.borrow().iter() {
         let ui = ui.clone();
         let preset = entry.preset;
-        let progress = progress.clone();
-        let download_status = download_status.clone();
         let buttons = buttons.clone();
         let refresh = refresh.clone();
+        let row = entry.row.clone();
+        let dialog_ref = dialog.downgrade();
         entry.button.connect_clicked(move |_| {
-            start_download(
-                &ui,
-                preset,
-                &progress,
-                &download_status,
-                &buttons,
-                refresh.clone(),
-            );
+            let start: Rc<dyn Fn()> = {
+                let ui = ui.clone();
+                let buttons = buttons.clone();
+                let refresh = refresh.clone();
+                let row = row.clone();
+                Rc::new(move || {
+                    start_download(&ui, preset, &row, &buttons, refresh.clone());
+                })
+            };
+
+            let needs_acceptance = preset
+                .license
+                .is_some_and(|license| license.requires_acceptance)
+                && !ui
+                    .config
+                    .borrow()
+                    .accepted_licenses
+                    .iter()
+                    .any(|id| id == preset.id);
+            if needs_acceptance {
+                if let (Some(dialog), Some(license)) = (dialog_ref.upgrade(), preset.license) {
+                    confirm_license(&ui, preset, license, &dialog, start);
+                }
+                return;
+            }
+            start();
         });
     }
 
@@ -571,6 +575,37 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         QWEN3_VL_URL,
     ));
     credits_group.add(&link_row(
+        "FLUX.1 schnell",
+        "Black Forest Labs · Apache-2.0",
+        FLUX1_SCHNELL_URL,
+    ));
+    credits_group.add(&link_row(
+        "Fibo 2.0 Edit Turbo",
+        "BRIA AI · CC BY-NC 4.0 (non-commercial)",
+        FIBO_URL,
+    ));
+    credits_group.add(&link_row(
+        "Fibo 2.0 GGUF quantization",
+        "molbal · follows the Fibo license",
+        FIBO_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
+        "FLUX.1 schnell GGUF quantization",
+        "unsloth · Apache-2.0",
+        SCHNELL_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
+        "T5-XXL text encoder",
+        "Google · Apache-2.0",
+        T5_XXL_URL,
+    ));
+    credits_group.add(&link_row("CLIP-L text encoder", "OpenAI · MIT", CLIP_L_URL));
+    credits_group.add(&link_row(
+        "FLUX VAE",
+        "Black Forest Labs · Apache-2.0 (repacked by Meituan LongCat)",
+        FLUX_VAE_URL,
+    ));
+    credits_group.add(&link_row(
         "LFM2.5-VL-450M vision helper",
         "Liquid AI · LFM Open License v1.0",
         LFM25_VL_URL,
@@ -615,7 +650,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let legal_group = adw::PreferencesGroup::builder()
         .title("Licenses")
         .description(
-            "Model weights are downloaded separately and remain under their authors' licenses. Flux Studio is not affiliated with Black Forest Labs.",
+            "Model weights are downloaded separately and remain under their authors' licenses. Non-commercial models are marked in Models and require confirmation before download. Flux Studio is not affiliated with Black Forest Labs.",
         )
         .build();
     legal_group.add(&link_row("Flux Studio", "GPL-3.0-or-later", LICENSE_URL));
@@ -644,6 +679,22 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "Apache-2.0",
         QWEN3_URL,
     ));
+    legal_group.add(&link_row(
+        "FLUX.1 schnell weights",
+        "Apache-2.0",
+        FLUX1_SCHNELL_URL,
+    ));
+    legal_group.add(&link_row(
+        "Fibo 2.0 Edit Turbo weights",
+        "CC BY-NC 4.0 · non-commercial, © BRIA AI",
+        FIBO_LICENSE_URL,
+    ));
+    legal_group.add(&link_row(
+        "T5-XXL and CLIP-L text encoders",
+        "Apache-2.0 / MIT",
+        T5_XXL_URL,
+    ));
+    legal_group.add(&link_row("FLUX VAE", "Apache-2.0", FLUX_VAE_URL));
     legal_group.add(&link_row(
         "Real-ESRGAN upscaler weights",
         "BSD-3-Clause",
@@ -935,11 +986,66 @@ fn open_uri(uri: &str) {
     );
 }
 
+fn confirm_license(
+    ui: &Rc<Ui>,
+    preset: &'static ModelPreset,
+    license: flux_core::preset::ModelLicense,
+    parent: &adw::PreferencesDialog,
+    on_accept: Rc<dyn Fn()>,
+) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Download {}?", preset.label))
+        .body(format!(
+            "{} weights are licensed under {} ({}).\n\n{}\n\nBy continuing you confirm that you accept these terms.",
+            preset.label, license.name, license.holder, license.summary
+        ))
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("accept", "I accept");
+    dialog.set_response_appearance("accept", adw::ResponseAppearance::Suggested);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    let link = gtk::LinkButton::with_label(license.url, "Read the license");
+    link.set_halign(gtk::Align::Start);
+    dialog.set_extra_child(Some(&link));
+
+    let ui = ui.clone();
+    dialog.connect_response(None, move |_, response| {
+        if response != "accept" {
+            return;
+        }
+        {
+            let mut config = ui.config.borrow_mut();
+            if !config.accepted_licenses.iter().any(|id| id == preset.id) {
+                config.accepted_licenses.push(preset.id.to_string());
+            }
+            if let Err(error) = config.save() {
+                tracing::warn!(%error, "failed to save accepted license");
+            }
+        }
+        on_accept();
+    });
+    dialog.present(Some(parent));
+}
+
+fn download_row_subtitle(done: u64, total: u64) -> String {
+    let percent = if total > 0 {
+        (done as f64 / total as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    format!(
+        "Downloading · {percent:.0}% · {} / {}",
+        format_bytes(done),
+        format_bytes(total)
+    )
+}
+
 fn start_download(
     ui: &Rc<Ui>,
     preset: &'static ModelPreset,
-    progress: &gtk::ProgressBar,
-    status: &gtk::Label,
+    row: &adw::ActionRow,
     buttons: &[gtk::Button],
     refresh: Rc<dyn Fn()>,
 ) {
@@ -958,10 +1064,7 @@ fn start_download(
     for button in buttons {
         button.set_sensitive(false);
     }
-    progress.set_visible(true);
-    progress.set_fraction(0.0);
-    progress.set_text(Some("Starting…"));
-    status.set_text(&format!("Downloading {}…", preset.label));
+    row.set_subtitle("Downloading…");
 
     let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
@@ -982,29 +1085,16 @@ fn start_download(
     });
 
     {
-        let progress = progress.clone();
-        let status = status.clone();
-        let sizes = sizes.clone();
+        let row = row.clone();
         glib::spawn_future_local(async move {
             while let Ok(event) = progress_rx.recv().await {
                 let before: u64 = sizes
                     .get(..event.file_index.min(sizes.len()))
                     .map(|slice| slice.iter().sum())
                     .unwrap_or(0);
-                let fraction = if total_bytes > 0 {
-                    (before + event.downloaded) as f64 / total_bytes as f64
-                } else {
-                    0.0
-                };
-                progress.set_fraction(fraction.min(1.0));
-                progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
-                status.set_text(&format!(
-                    "{} · {:.1} / {:.1} GB (file {} of {})",
-                    event.file,
-                    event.downloaded as f64 / 1e9,
-                    event.total as f64 / 1e9,
-                    event.file_index + 1,
-                    event.file_count
+                row.set_subtitle(&download_row_subtitle(
+                    before + event.downloaded,
+                    total_bytes,
                 ));
             }
         });
@@ -1012,21 +1102,18 @@ fn start_download(
 
     {
         let ui = ui.clone();
-        let progress = progress.clone();
-        let status = status.clone();
+        let row = row.clone();
         glib::spawn_future_local(async move {
             let result = done_rx.recv().await;
-            progress.set_visible(false);
             match result {
                 Ok(Ok(())) => {
-                    status.set_text(&format!("{} is ready.", preset.label));
+                    row.set_subtitle(&format!("{} · installed", preset.label));
                     ui.toast.add_toast(adw::Toast::new(&format!(
                         "{} models downloaded.",
                         preset.label
                     )));
                 }
                 Ok(Err(error)) => {
-                    status.set_text(&format!("Download failed: {error}"));
                     ui.toast
                         .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
                 }
@@ -1041,8 +1128,7 @@ fn start_download(
 fn start_upscaler_download(
     ui: &Rc<Ui>,
     preset: &'static UpscalerPreset,
-    progress: &gtk::ProgressBar,
-    status: &gtk::Label,
+    row: &adw::ActionRow,
     buttons: &[gtk::Button],
     refresh: Rc<dyn Fn()>,
 ) {
@@ -1052,10 +1138,7 @@ fn start_upscaler_download(
     for button in buttons {
         button.set_sensitive(false);
     }
-    progress.set_visible(true);
-    progress.set_fraction(0.0);
-    progress.set_text(Some("Starting…"));
-    status.set_text(&format!("Downloading {}…", preset.label));
+    row.set_subtitle("Downloading…");
 
     let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
@@ -1075,35 +1158,19 @@ fn start_upscaler_download(
         let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
     });
 
-    let progress = progress.clone();
-    let status = status.clone();
+    let row = row.clone();
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         while let Ok(event) = progress_rx.recv().await {
-            let fraction = if event.total > 0 {
-                event.downloaded as f64 / event.total as f64
-            } else {
-                0.0
-            };
-            progress.set_fraction(fraction.min(1.0));
-            progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
-            status.set_text(&format!(
-                "{} · {} / {}",
-                event.file,
-                format_bytes(event.downloaded),
-                format_bytes(event.total)
-            ));
+            row.set_subtitle(&download_row_subtitle(event.downloaded, event.total));
         }
         let result = done_rx.recv().await;
-        progress.set_visible(false);
         match result {
             Ok(Ok(())) => {
-                status.set_text(&format!("{} is ready.", preset.label));
                 ui.toast
                     .add_toast(adw::Toast::new(&format!("{} downloaded.", preset.label)));
             }
             Ok(Err(error)) => {
-                status.set_text(&format!("Download failed: {error}"));
                 ui.toast
                     .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
             }
@@ -1115,8 +1182,7 @@ fn start_upscaler_download(
 
 fn start_vision_download(
     ui: &Rc<Ui>,
-    progress: &gtk::ProgressBar,
-    status: &gtk::Label,
+    row: &adw::ActionRow,
     buttons: &[gtk::Button],
     refresh: Rc<dyn Fn()>,
 ) {
@@ -1128,16 +1194,13 @@ fn start_vision_download(
     if missing.is_empty() {
         return;
     }
+    let sizes: Vec<u64> = missing.iter().map(|file| file.approx_bytes).collect();
+    let total_bytes: u64 = sizes.iter().sum();
     for button in buttons {
         button.set_sensitive(false);
     }
-    progress.set_visible(true);
-    progress.set_fraction(0.0);
-    progress.set_text(Some("Starting…"));
-    status.set_text(&format!("Downloading {}…", VISION_HELPER.label));
+    row.set_subtitle("Downloading…");
 
-    let sizes: Vec<u64> = missing.iter().map(|file| file.approx_bytes).collect();
-    let total_bytes: u64 = sizes.iter().sum();
     let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
     let models_dir = ui.models_dir.clone();
@@ -1156,8 +1219,7 @@ fn start_vision_download(
         let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
     });
 
-    let progress = progress.clone();
-    let status = status.clone();
+    let row = row.clone();
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         while let Ok(event) = progress_rx.recv().await {
@@ -1165,32 +1227,20 @@ fn start_vision_download(
                 .get(..event.file_index.min(sizes.len()))
                 .map(|slice| slice.iter().sum())
                 .unwrap_or(0);
-            let fraction = if total_bytes > 0 {
-                (before + event.downloaded) as f64 / total_bytes as f64
-            } else {
-                0.0
-            };
-            progress.set_fraction(fraction.min(1.0));
-            progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
-            status.set_text(&format!(
-                "{} · {} / {}",
-                event.file,
-                format_bytes(event.downloaded),
-                format_bytes(event.total)
+            row.set_subtitle(&download_row_subtitle(
+                before + event.downloaded,
+                total_bytes,
             ));
         }
         let result = done_rx.recv().await;
-        progress.set_visible(false);
         match result {
             Ok(Ok(())) => {
-                status.set_text(&format!("{} is ready.", VISION_HELPER.label));
                 ui.toast.add_toast(adw::Toast::new(&format!(
                     "{} downloaded.",
                     VISION_HELPER.label
                 )));
             }
             Ok(Err(error)) => {
-                status.set_text(&format!("Download failed: {error}"));
                 ui.toast
                     .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
             }

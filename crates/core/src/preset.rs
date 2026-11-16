@@ -7,7 +7,10 @@ use crate::request::Sampler;
 pub enum ModelRole {
     Diffusion,
     Vae,
+    /// LLM text encoder (`--llm`) for FLUX.2/3, or T5-XXL (`--t5xxl`) for FLUX.1.
     TextEncoder,
+    /// CLIP-L text encoder (`--clip_l`), used by FLUX.1 alongside T5.
+    ClipEncoder,
     VisionEncoder,
     Upscaler,
 }
@@ -20,6 +23,21 @@ pub struct ModelFileSpec {
     pub rel_path: &'static str,
     pub url: &'static str,
     pub approx_bytes: u64,
+}
+
+/// Licensing information for a preset's weights.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelLicense {
+    /// Short license name, e.g. "Apache-2.0".
+    pub name: &'static str,
+    /// Copyright holder.
+    pub holder: &'static str,
+    /// Link to the license text or model card.
+    pub url: &'static str,
+    /// One-sentence summary shown next to the download button.
+    pub summary: &'static str,
+    /// Require an explicit in-app confirmation before downloading.
+    pub requires_acceptance: bool,
 }
 
 /// Everything the backend needs to run one model family.
@@ -39,6 +57,8 @@ pub struct ModelPreset {
     pub default_height: u32,
     /// Whether the model accepts `-r <image>` reference images.
     pub supports_edit: bool,
+    /// Licensing for the weights, shown in Preferences and Credits.
+    pub license: Option<ModelLicense>,
     /// Extra backend flags specific to this family.
     pub extra_args: &'static [&'static str],
 }
@@ -66,6 +86,24 @@ impl ModelPreset {
 
     pub fn is_installed(&self, models_dir: &Path) -> bool {
         self.missing(models_dir).is_empty()
+    }
+
+    /// The text encoder as a causal LLM, when the preset uses one.
+    ///
+    /// FLUX.2/FLUX.3 and MOSS feed a Qwen/Mistral model through `--llm`, which
+    /// llama.cpp can also reuse for prompt improvement. FLUX.1 instead pairs
+    /// T5-XXL with CLIP-L, neither of which is a chat model.
+    pub fn llm_encoder(&self) -> Option<&'static ModelFileSpec> {
+        if self.file(ModelRole::ClipEncoder).is_some() {
+            None
+        } else {
+            self.file(ModelRole::TextEncoder)
+        }
+    }
+
+    /// Whether the text encoders are T5-XXL + CLIP-L (`--t5xxl`/`--clip_l`).
+    pub fn uses_clip_encoders(&self) -> bool {
+        self.file(ModelRole::ClipEncoder).is_some()
     }
 }
 
@@ -99,6 +137,13 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    license: Some(ModelLicense {
+        name: "Apache-2.0",
+        holder: "Black Forest Labs",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+        summary: "Apache-2.0; commercial use allowed.",
+        requires_acceptance: false,
+    }),
     extra_args: &[],
 };
 
@@ -132,10 +177,115 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    license: Some(ModelLicense {
+        name: "FLUX Community License",
+        holder: "Black Forest Labs",
+        url: "https://huggingface.co/black-forest-labs/flux-3-image-klein",
+        summary: "Commercial use allowed below the license revenue threshold.",
+        requires_acceptance: false,
+    }),
     extra_args: &[],
 };
 
-pub const PRESETS: &[ModelPreset] = &[FLUX2_KLEIN_4B, FLUX3_KLEIN];
+/// Fibo 2.0 Edit Turbo, distilled for reference-image editing in 4 steps.
+///
+/// Weights are **CC BY-NC 4.0** (non-commercial), © BRIA AI. The preset gates
+/// the download behind an in-app license confirmation.
+pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
+    id: "fibo2-edit-turbo",
+    label: "Fibo 2.0 Edit Turbo",
+    description: "4-step edit · 8B · non-commercial licence",
+    files: &[
+        ModelFileSpec {
+            role: ModelRole::Diffusion,
+            rel_path: "diffusion/fibo2_edit_turbo-Q4_K_M.gguf",
+            url: "https://huggingface.co/molbal/fibo-2.0-GGUF/resolve/main/fibo2-edit-turbo-Q4_K_M.gguf",
+            approx_bytes: 5_540_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::Vae,
+            rel_path: "vae/flux2-vae.safetensors",
+            url: "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
+            approx_bytes: 336_211_292,
+        },
+        ModelFileSpec {
+            role: ModelRole::TextEncoder,
+            rel_path: "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            approx_bytes: 2_497_281_664,
+        },
+        ModelFileSpec {
+            role: ModelRole::VisionEncoder,
+            rel_path: "text_encoders/mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+            approx_bytes: 840_000_000,
+        },
+    ],
+    steps: 4,
+    cfg: 1.0,
+    sampler: Sampler::Euler,
+    default_width: 768,
+    default_height: 768,
+    supports_edit: true,
+    license: Some(ModelLicense {
+        name: "CC BY-NC 4.0",
+        holder: "BRIA AI",
+        url: "https://creativecommons.org/licenses/by-nc/4.0/",
+        summary: "Non-commercial use only. Commercial use requires an agreement with BRIA.",
+        requires_acceptance: true,
+    }),
+    extra_args: &[],
+};
+
+/// FLUX.1 schnell: 4-step 12B text-to-image. Uses T5-XXL + CLIP-L instead of
+/// an LLM encoder, and has no reference-image support.
+pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
+    id: "flux1-schnell",
+    label: "FLUX.1 schnell",
+    description: "4-step · 12B · text-to-image only",
+    files: &[
+        ModelFileSpec {
+            role: ModelRole::Diffusion,
+            rel_path: "diffusion/flux1-schnell-Q4_K_S.gguf",
+            url: "https://huggingface.co/unsloth/FLUX.1-schnell-GGUF/resolve/main/flux1-schnell-Q4_K_S.gguf",
+            approx_bytes: 6_780_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::Vae,
+            rel_path: "vae/flux1-vae-bf16.safetensors",
+            url: "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo/resolve/main/vae/diffusion_pytorch_model.safetensors",
+            approx_bytes: 167_666_902,
+        },
+        ModelFileSpec {
+            role: ModelRole::TextEncoder,
+            rel_path: "text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+            url: "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+            approx_bytes: 2_900_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::ClipEncoder,
+            rel_path: "text_encoders/clip_l.safetensors",
+            url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+            approx_bytes: 246_000_000,
+        },
+    ],
+    steps: 4,
+    cfg: 1.0,
+    sampler: Sampler::Euler,
+    default_width: 768,
+    default_height: 768,
+    supports_edit: false,
+    license: Some(ModelLicense {
+        name: "Apache-2.0",
+        holder: "Black Forest Labs",
+        url: "https://huggingface.co/black-forest-labs/FLUX.1-schnell",
+        summary: "Apache-2.0; commercial use allowed.",
+        requires_acceptance: false,
+    }),
+    extra_args: &["--clip-on-cpu"],
+};
+
+pub const PRESETS: &[ModelPreset] = &[FLUX1_SCHNELL, FLUX2_KLEIN_4B, FLUX3_KLEIN, FIBO2_EDIT_TURBO];
 
 pub fn preset(id: &str) -> Option<&'static ModelPreset> {
     PRESETS.iter().find(|preset| preset.id == id)
@@ -174,6 +324,34 @@ mod tests {
             );
             assert!(preset.total_bytes() > 0);
         }
+    }
+
+    #[test]
+    fn only_llm_presets_expose_a_prompt_encoder() {
+        assert!(FLUX2_KLEIN_4B.llm_encoder().is_some());
+        assert!(FLUX3_KLEIN.llm_encoder().is_some());
+        assert!(FIBO2_EDIT_TURBO.llm_encoder().is_some());
+        assert!(FLUX1_SCHNELL.llm_encoder().is_none());
+        assert!(FLUX1_SCHNELL.file(ModelRole::ClipEncoder).is_some());
+    }
+
+    #[test]
+    fn only_restricted_licenses_require_acceptance() {
+        let fibo = FIBO2_EDIT_TURBO.license.expect("fibo has a license");
+        assert!(fibo.requires_acceptance);
+        assert_eq!(fibo.name, "CC BY-NC 4.0");
+        assert!(
+            !FLUX2_KLEIN_4B
+                .license
+                .expect("klein has a license")
+                .requires_acceptance
+        );
+        assert!(
+            !FLUX1_SCHNELL
+                .license
+                .expect("schnell has a license")
+                .requires_acceptance
+        );
     }
 
     #[test]

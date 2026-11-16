@@ -51,6 +51,8 @@ pub struct Config {
     pub llama_manifest_url: Option<String>,
     /// Custom `llama-cli` selected in Preferences but not necessarily active.
     pub llama_custom_cli: Option<PathBuf>,
+    /// Preset ids whose license the user explicitly accepted in Preferences.
+    pub accepted_licenses: Vec<String>,
 }
 
 impl Default for Config {
@@ -81,6 +83,7 @@ impl Default for Config {
             llama_backend_id: None,
             llama_manifest_url: None,
             llama_custom_cli: None,
+            accepted_licenses: Vec::new(),
         }
     }
 }

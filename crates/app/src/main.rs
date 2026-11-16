@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use flux_backend_sdcpp::{SdServer, SdServerConfig};
-use flux_core::preset::{ModelPreset, ModelRole, PRESETS, default_preset, preset};
+use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
 use flux_core::upscaler::{self, UpscaleRequest, UpscalerPreset};
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
@@ -806,6 +806,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
             .set_text("No models installed — download in Preferences");
         ui.model_hint.add_css_class("error");
         ui.generate.set_sensitive(false);
+        ui.reference_button.set_visible(false);
         if prompt_helper.is_some() {
             ui.improve_button
                 .set_tooltip_text(Some("No model installed"));
@@ -818,6 +819,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
     let missing = model.missing(&ui.models_dir);
 
     ui.model_dropdown.set_tooltip_text(Some(model.description));
+    ui.reference_button.set_visible(model.supports_edit);
 
     if missing.is_empty() {
         ui.model_hint.set_text(&format!(
@@ -840,7 +842,9 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
     }
 
     if prompt_helper.is_some() {
-        let encoder = model.path(ModelRole::TextEncoder, &ui.models_dir);
+        let encoder = model
+            .llm_encoder()
+            .map(|file| ui.models_dir.join(file.rel_path));
         let encoder_ready = encoder.as_ref().map(|path| path.exists()).unwrap_or(false);
         if !ui.generating.get() && !ui.improving.get() {
             ui.improve_button.set_sensitive(encoder_ready);
@@ -852,7 +856,8 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string())
             ),
-            _ => "Text encoder not installed".to_string(),
+            Some(_) => "Text encoder not installed".to_string(),
+            None => "This model has no language text encoder".to_string(),
         };
         ui.improve_button.set_tooltip_text(Some(&tooltip));
     }
@@ -1083,6 +1088,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let busy = generating || upscaling || zooming || classifying;
     let position = history_position(ui);
     let actions = has_image && !busy;
+    let editable = actions && active_preset(ui).supports_edit;
     let navigation = actions && !editing;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
@@ -1090,27 +1096,34 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
-    ui.effects_button.set_visible(actions);
+    ui.effects_button.set_visible(editable);
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
     ui.upscale_button.set_visible(actions);
-    ui.edit_button.set_visible(actions && !composing);
-    ui.crop_button.set_visible(actions);
+    ui.edit_button.set_visible(editable && !composing);
+    ui.crop_button.set_visible(editable);
     ui.back_button.set_visible(editing && !busy);
     ui.undo_button
-        .set_visible(actions && ui.undo.borrow().can_undo());
+        .set_visible(editable && ui.undo.borrow().can_undo());
 
-    if composing || !actions {
+    if composing || !editable {
         ui.effects_popover.popdown();
     }
-    if !actions {
+    if !editable {
         ui.crop_button.set_active(false);
     }
 }
 
 fn edit_current_image(ui: &Rc<Ui>) {
     if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+        return;
+    }
+    if !active_preset(ui).supports_edit {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot edit images.",
+            active_preset(ui).label
+        )));
         return;
     }
     let Some(path) = ui.state.borrow().display.clone() else {
@@ -1568,15 +1581,14 @@ fn improve_prompt(ui: &Rc<Ui>) {
     let Some(cli) = prompt_ai::find_cli(&ui.config.borrow()) else {
         return;
     };
-    let encoder = ui
-        .config
-        .borrow()
-        .prompt_helper_model
-        .clone()
-        .or_else(|| active_preset(ui).path(ModelRole::TextEncoder, &ui.models_dir));
+    let encoder = ui.config.borrow().prompt_helper_model.clone().or_else(|| {
+        active_preset(ui)
+            .llm_encoder()
+            .map(|file| ui.models_dir.join(file.rel_path))
+    });
     let Some(encoder) = encoder else {
         ui.toast
-            .add_toast(adw::Toast::new("This model has no text encoder."));
+            .add_toast(adw::Toast::new("This model has no language text encoder."));
         return;
     };
     if !encoder.exists() {
@@ -2003,6 +2015,13 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
 
 fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
     if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+        return;
+    }
+    if !active_preset(ui).supports_edit {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot edit images.",
+            active_preset(ui).label
+        )));
         return;
     }
     if !can_start_image_action(ui) {
