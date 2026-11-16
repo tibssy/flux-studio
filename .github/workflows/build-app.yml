@@ -1,0 +1,109 @@
+name: Build app release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (leave empty for v0.1.0-alpha.<run>)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*-alpha*"
+      - "v*-test*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # Ubuntu 24.04 ships GTK 4.14 / libadwaita 1.5, which is too old for the
+    # app (GTK 4.16+, libadwaita 1.6+). Debian 13 trixie provides GTK 4.18,
+    # libadwaita 1.7 and glibc 2.41.
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install system dependencies
+        run: |
+          set -eux
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git pkg-config \
+            libgtk-4-dev libadwaita-1-dev libgdk-pixbuf-2.0-dev \
+            libglib2.0-dev libssl-dev
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          set -eux
+          cargo build --release --locked
+
+      - name: Report library requirements
+        run: |
+          set -eux
+          echo "--- max GLIBC requirement ---"
+          objdump -T target/release/flux-studio \
+            | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -5
+          echo "--- missing shared libraries ---"
+          ldd target/release/flux-studio | grep "not found" || echo "none"
+
+      - name: Resolve release tag
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG_INPUT" ]; then
+            tag="$TAG_INPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "Building release $tag"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/flux-studio dist/
+          cp README.md LICENSE dist/
+          cp packaging/io.github.tibssy.FluxStudio.desktop dist/
+          cp packaging/io.github.tibssy.FluxStudio.svg dist/
+          tar -C dist -czf flux-studio-linux-x86_64.tar.gz .
+          (cd dist && sha256sum flux-studio > flux-studio.sha256)
+          ls -lh flux-studio-linux-x86_64.tar.gz dist/flux-studio.sha256
+          cat dist/flux-studio.sha256
+
+      - name: Publish alpha release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "Flux Studio ${{ env.RELEASE_TAG }} (alpha test)"
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            **Alpha test build** of Flux Studio. Expect rough edges.
+
+            - Built on Debian 13 (trixie) with GTK 4.18 and libadwaita 1.7.
+            - The app binary is dynamically linked: it needs a host with
+              GTK 4.16+, libadwaita 1.6+ and glibc 2.41+.
+            - `flux-studio-linux-x86_64.tar.gz` contains the binary, README,
+              LICENSE, desktop entry and icon.
+            - Verify the binary with the `flux-studio.sha256` asset.
+          files: |
+            flux-studio-linux-x86_64.tar.gz
+            dist/flux-studio.sha256
