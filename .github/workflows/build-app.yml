@@ -83,10 +83,14 @@ jobs:
           cp README.md LICENSE dist/
           cp packaging/io.github.tibssy.FluxStudio.desktop dist/
           cp packaging/io.github.tibssy.FluxStudio.svg dist/
-          tar -C dist -czf flux-studio-linux-x86_64.tar.gz .
+          # Checksum of the binary, shipped inside the archive.
           (cd dist && sha256sum flux-studio > flux-studio.sha256)
-          ls -lh flux-studio-linux-x86_64.tar.gz dist/flux-studio.sha256
-          cat dist/flux-studio.sha256
+          tar -C dist -czf flux-studio-linux-x86_64.tar.gz .
+          # Checksum of the archive itself, published as a release asset.
+          sha256sum flux-studio-linux-x86_64.tar.gz \
+            > flux-studio-linux-x86_64.tar.gz.sha256
+          ls -lh flux-studio-linux-x86_64.tar.gz ./*.sha256
+          cat flux-studio-linux-x86_64.tar.gz.sha256
 
       - name: Publish alpha release
         uses: softprops/action-gh-release@v2
@@ -100,10 +104,13 @@ jobs:
 
             - Built on Debian 13 (trixie) with GTK 4.18 and libadwaita 1.7.
             - The app binary is dynamically linked: it needs a host with
-              GTK 4.16+, libadwaita 1.6+ and glibc 2.41+.
+              GTK 4.16+, libadwaita 1.6+ and glibc 2.39+ (Debian 13,
+              Ubuntu 24.04 or newer).
             - `flux-studio-linux-x86_64.tar.gz` contains the binary, README,
               LICENSE, desktop entry and icon.
-            - Verify the binary with the `flux-studio.sha256` asset.
+            - Verify the download with
+              `sha256sum -c flux-studio-linux-x86_64.tar.gz.sha256`, or the
+              extracted binary with `sha256sum -c flux-studio.sha256`.
           files: |
             flux-studio-linux-x86_64.tar.gz
-            dist/flux-studio.sha256
+            flux-studio-linux-x86_64.tar.gz.sha256

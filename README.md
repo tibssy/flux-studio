@@ -371,9 +371,14 @@ next.
 
 ## Portability
 
-The GitHub binary is built on Arch Linux and expects that distribution's GTK,
-libadwaita and gdk-pixbuf sonames. The backend archives are self-contained, but
-the app binary is not. If a distro reports a missing library, check:
+The GitHub alpha binaries are built on Debian 13 (trixie) in CI with GTK 4.18
+and libadwaita 1.7. The app binary is not bundled with its toolkit: it needs a
+host with **GTK 4.16+, libadwaita 1.6+ and glibc 2.39+** (Debian 13, Ubuntu
+24.04 or newer). A local `cargo build --release` instead matches your own
+distro's GTK stack, so it will not run on older releases than that distro.
+
+The backend archives are self-contained; the app binary is not. If a distro
+reports a missing library, check:
 
 ```bash
 ldd ./flux-studio | grep "not found"
@@ -384,7 +389,7 @@ gdk-pixbuf), not from Flux Studio. Install it with
 `rpm-ostree install bzip2-libs` and reboot, then check for further missing
 sonames such as `liblzma`, `libzstd` or `libxml2`. For a distro-independent
 install, a Flatpak/AppImage build is the correct long-term solution; a raw
-Arch-built binary will always depend on the host GTK stack.
+binary will always depend on the host GTK stack.
 
 ## Notes for Maxwell / 8 GB cards
 
