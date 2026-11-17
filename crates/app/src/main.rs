@@ -1,3 +1,4 @@
+mod adjust;
 mod backends;
 mod effects;
 mod history;
@@ -81,6 +82,15 @@ pub(crate) struct Ui {
     pub classifying: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub adjust_button: gtk::Button,
+    /// View zoom factor, 1.0 being fit-to-window.
+    pub zoom: Cell<f64>,
+    pub zoom_scroller: gtk::ScrolledWindow,
+    pub zoom_controls: gtk::Box,
+    pub zoom_out_button: gtk::Button,
+    pub zoom_label: gtk::Label,
+    pub zoom_in_button: gtk::Button,
+    pub zoom_fit_button: gtk::Button,
     pub effects_button: gtk::MenuButton,
     pub effects_popover: gtk::Popover,
     pub save_effect_button: gtk::Button,
@@ -239,6 +249,16 @@ fn install_styles() {
          popover.effects-popover > arrow {
              background-color: @window_bg_color;
          }
+         popover.adjust-popover > contents {
+             background-color: @window_bg_color;
+         }
+         popover.adjust-popover > arrow {
+             background-color: @window_bg_color;
+         }
+         .zoom-controls {
+             padding: 2px 4px;
+             border-radius: 12px;
+         }
          button.active-backend-icon,
          button.active-backend-icon:disabled {
              color: @accent_bg_color;
@@ -360,6 +380,14 @@ fn build_ui(app: &adw::Application) {
         classifying: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
+        adjust_button: view.adjust_button,
+        zoom: Cell::new(1.0),
+        zoom_scroller: view.zoom_scroller,
+        zoom_controls: view.zoom_controls,
+        zoom_out_button: view.zoom_out_button,
+        zoom_label: view.zoom_label,
+        zoom_in_button: view.zoom_in_button,
+        zoom_fit_button: view.zoom_fit_button,
         effects_button: view.effects_button,
         effects_popover: view.effects_popover,
         save_effect_button: view.save_effect_button,
@@ -618,6 +646,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        let button = ui.adjust_button.clone();
+        button.connect_clicked(move |_| adjust::show(&ui));
+    }
+    {
+        let ui = ui.clone();
         let button = ui.save_effect_button.clone();
         button.connect_clicked(move |_| effects::show_save_dialog(&ui));
     }
@@ -718,6 +751,73 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        let button = ui.zoom_in_button.clone();
+        button.connect_clicked(move |_| zoom_by(&ui, ZOOM_STEP));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.zoom_out_button.clone();
+        button.connect_clicked(move |_| zoom_by(&ui, 1.0 / ZOOM_STEP));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.zoom_fit_button.clone();
+        button.connect_clicked(move |_| reset_zoom(&ui));
+    }
+    for property in ["width", "height"] {
+        let ui = ui.clone();
+        let scroller = ui.zoom_scroller.clone();
+        scroller.connect_notify_local(Some(property), move |_, _| {
+            apply_zoom(&ui);
+            update_zoom_controls(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        let gesture = gtk::GestureDrag::new();
+        gesture.set_button(gdk::BUTTON_PRIMARY);
+        let start = Rc::new(Cell::new((0.0, 0.0)));
+        {
+            let ui = ui.clone();
+            let start = start.clone();
+            gesture.connect_drag_begin(move |_, _, _| {
+                if ui.zoom.get() <= 1.0 {
+                    return;
+                }
+                start.set((
+                    ui.zoom_scroller.hadjustment().value(),
+                    ui.zoom_scroller.vadjustment().value(),
+                ));
+                ui.stack.set_cursor_from_name(Some("grabbing"));
+            });
+        }
+        {
+            let ui = ui.clone();
+            gesture.connect_drag_update(move |_, dx, dy| {
+                if ui.zoom.get() <= 1.0 {
+                    return;
+                }
+                let (start_x, start_y) = start.get();
+                let horizontal = ui.zoom_scroller.hadjustment();
+                let vertical = ui.zoom_scroller.vadjustment();
+                let max_x = (horizontal.upper() - horizontal.page_size()).max(horizontal.lower());
+                let max_y = (vertical.upper() - vertical.page_size()).max(vertical.lower());
+                horizontal.set_value((start_x - dx).clamp(horizontal.lower(), max_x));
+                vertical.set_value((start_y - dy).clamp(vertical.lower(), max_y));
+            });
+        }
+        {
+            let ui = ui.clone();
+            gesture.connect_drag_end(move |_, _, _| {
+                if ui.zoom.get() > 1.0 {
+                    ui.stack.set_cursor_from_name(Some("grab"));
+                }
+            });
+        }
+        ui.stack.add_controller(gesture);
+    }
+    {
+        let ui = ui.clone();
         let stack = ui.stack.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll(move |_, _dx, dy| {
@@ -727,6 +827,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 || ui.zooming.get()
                 || ui.classifying.get()
             {
+                return glib::Propagation::Proceed;
+            }
+            // While zoomed the wheel pans the viewport instead of walking history.
+            if ui.zoom.get() > 1.0 {
                 return glib::Propagation::Proceed;
             }
             if ui
@@ -776,6 +880,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 ui.crop_button.set_active(false);
                 return glib::Propagation::Stop;
             }
+            if key == gdk::Key::Escape && ui.zoom.get() > 1.0 {
+                reset_zoom(&ui);
+                return glib::Propagation::Stop;
+            }
             if !state.contains(gdk::ModifierType::CONTROL_MASK) {
                 return glib::Propagation::Proceed;
             }
@@ -808,6 +916,18 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::Down => {
                     navigate_history(&ui, 1);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::plus | gdk::Key::equal => {
+                    zoom_by(&ui, ZOOM_STEP);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::minus => {
+                    zoom_by(&ui, 1.0 / ZOOM_STEP);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::_0 => {
+                    reset_zoom(&ui);
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -1088,6 +1208,117 @@ fn sync_history_selection(ui: &Rc<Ui>) {
     }
 }
 
+const ZOOM_STEP: f64 = 1.25;
+const MAX_ZOOM_SCALE: f64 = 8.0;
+const MAX_ZOOM_EDGE: f64 = 16384.0;
+
+/// Screen pixels per image pixel when the image is fitted to the canvas.
+fn fit_scale_for(view: (f64, f64), image: (u32, u32)) -> Option<f64> {
+    let (view_w, view_h) = view;
+    let (image_w, image_h) = image;
+    if view_w <= 0.0 || view_h <= 0.0 || image_w == 0 || image_h == 0 {
+        return None;
+    }
+    Some((view_w / f64::from(image_w)).min(view_h / f64::from(image_h)))
+}
+
+fn fit_scale(ui: &Ui) -> Option<f64> {
+    fit_scale_for(
+        (
+            f64::from(ui.zoom_scroller.width()),
+            f64::from(ui.zoom_scroller.height()),
+        ),
+        ui.image_size.get(),
+    )
+}
+
+/// Largest zoom multiplier that keeps the image at 800% of its own pixels.
+fn max_zoom_for(fit: f64, image: (u32, u32)) -> f64 {
+    let longest = f64::from(image.0.max(image.1));
+    let by_scale = MAX_ZOOM_SCALE / fit;
+    let by_edge = MAX_ZOOM_EDGE / (longest * fit).max(1.0);
+    by_scale.min(by_edge).max(1.0)
+}
+
+fn zoom_percent(fit: f64, zoom: f64) -> String {
+    format!("{:.0}%", fit * zoom * 100.0)
+}
+
+/// Resize the picture stack inside the scroller for the current zoom factor.
+fn apply_zoom(ui: &Ui) {
+    let Some(fit) = fit_scale(ui) else {
+        ui.stack.set_size_request(-1, -1);
+        return;
+    };
+    let image = ui.image_size.get();
+    let zoom = ui.zoom.get().clamp(1.0, max_zoom_for(fit, image));
+    ui.zoom.set(zoom);
+    // Pad the axis that still fits to the viewport so the image stays centred;
+    // the other axis keeps the exact zoomed size and scrolls.
+    let view_w = f64::from(ui.zoom_scroller.width()).max(1.0);
+    let view_h = f64::from(ui.zoom_scroller.height()).max(1.0);
+    let scaled_w = (f64::from(image.0) * fit * zoom).ceil().max(1.0);
+    let scaled_h = (f64::from(image.1) * fit * zoom).ceil().max(1.0);
+    ui.stack
+        .set_size_request(scaled_w.max(view_w) as i32, scaled_h.max(view_h) as i32);
+    if zoom <= 1.0 {
+        ui.zoom_scroller.hadjustment().set_value(0.0);
+        ui.zoom_scroller.vadjustment().set_value(0.0);
+    }
+    ui.stack
+        .set_cursor_from_name(if zoom > 1.0 { Some("grab") } else { None });
+}
+
+fn update_zoom_controls(ui: &Ui) {
+    let has_image = ui.state.borrow().display.is_some();
+    let busy =
+        ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get();
+    let visible = has_image && !busy && !ui.crop_mode.get();
+    ui.zoom_controls.set_visible(visible);
+    // Hiding the box is not enough: GTK keeps focusable children in the tab
+    // chain when only an ancestor is invisible.
+    ui.zoom_out_button.set_visible(visible);
+    ui.zoom_label.set_visible(visible);
+    ui.zoom_in_button.set_visible(visible);
+    ui.zoom_fit_button.set_visible(visible);
+    if !visible {
+        return;
+    }
+    let zoom = ui.zoom.get();
+    match fit_scale(ui) {
+        Some(fit) => {
+            ui.zoom_label.set_text(&zoom_percent(fit, zoom));
+            ui.zoom_in_button
+                .set_sensitive(zoom < max_zoom_for(fit, ui.image_size.get()) - 1e-6);
+        }
+        None => {
+            ui.zoom_label.set_text("100%");
+            ui.zoom_in_button.set_sensitive(false);
+        }
+    }
+    ui.zoom_out_button.set_sensitive(zoom > 1.0 + 1e-6);
+}
+
+fn zoom_by(ui: &Rc<Ui>, factor: f64) {
+    if ui.state.borrow().display.is_none() {
+        return;
+    }
+    let Some(fit) = fit_scale(ui) else {
+        return;
+    };
+    let next = (ui.zoom.get() * factor).clamp(1.0, max_zoom_for(fit, ui.image_size.get()));
+    ui.zoom.set(if next < 1.0 + 1e-6 { 1.0 } else { next });
+    apply_zoom(ui);
+    update_zoom_controls(ui);
+}
+
+/// Return to fit-to-window without touching the image.
+fn reset_zoom(ui: &Ui) {
+    ui.zoom.set(1.0);
+    apply_zoom(ui);
+    update_zoom_controls(ui);
+}
+
 /// Paint `texture` on the canvas, crossfading from whichever frame is visible.
 ///
 /// The stack has two picture children so consecutive updates animate instead
@@ -1132,6 +1363,7 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
 
     ui.ratio_area.queue_draw();
     sync_history_selection(ui);
+    reset_zoom(ui);
     update_image_actions(ui);
 }
 
@@ -1259,11 +1491,13 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
     ui.upscale_button.set_visible(actions);
+    ui.adjust_button.set_visible(actions);
     ui.edit_button.set_visible(editable && !composing);
     ui.crop_button.set_visible(editable);
     ui.back_button.set_visible(editing && !busy);
     ui.undo_button
         .set_visible(editable && ui.undo.borrow().can_undo());
+    update_zoom_controls(ui);
 
     if composing || !editable {
         ui.effects_popover.popdown();
@@ -1314,6 +1548,8 @@ fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
     ui.crop_overlay.set_visible(active);
     *ui.crop_rect.borrow_mut() = None;
     if active {
+        // Selection coordinates assume a letterboxed fit.
+        reset_zoom(ui);
         ui.crop_overlay.set_cursor_from_name(Some("crosshair"));
         ui.crop_overlay.grab_focus();
         ui.status.set_text("Drag to select an area · Esc to cancel");
@@ -1321,6 +1557,7 @@ fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
         ui.crop_overlay.set_cursor_from_name(None);
         ui.crop_overlay.queue_draw();
     }
+    update_image_actions(ui);
 }
 
 fn undo_crop(ui: &Rc<Ui>) {
@@ -2170,6 +2407,7 @@ fn generate(
     ui.progress.set_fraction(0.0);
     ui.progress.set_text(Some("Loading models…"));
     ui.status.set_text("Loading models…");
+    reset_zoom(ui);
     update_image_actions(ui);
 
     let (sender, receiver) = async_channel::unbounded();
@@ -2606,7 +2844,7 @@ fn back_to_view(ui: &Rc<Ui>) {
 }
 
 /// Show an image with a crossfade from the currently visible canvas image.
-fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
+pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     let texture = match gdk::Texture::from_filename(path) {
         Ok(texture) => texture,
         Err(error) => {
@@ -2622,6 +2860,7 @@ fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     render_reference_strip(ui);
     crossfade_to_texture(ui, &texture);
     sync_history_selection(ui);
+    reset_zoom(ui);
     update_image_actions(ui);
     true
 }
@@ -2868,7 +3107,7 @@ fn finish(ui: &Rc<Ui>, message: &str) {
     ui.status.set_text(message);
 }
 
-fn trim_history(ui: &Rc<Ui>) {
+pub(crate) fn trim_history(ui: &Rc<Ui>) {
     let mut entries = ui.entries.borrow_mut();
     while entries.len() > HISTORY_LIMIT {
         entries.pop();
@@ -2953,14 +3192,14 @@ fn sibling_server(cli: &Path) -> Option<PathBuf> {
     server.exists().then_some(server)
 }
 
-fn now_millis() -> u128 {
+pub(crate) fn now_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
 }
 
-fn unix_seconds() -> i64 {
+pub(crate) fn unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -2978,7 +3217,7 @@ fn upscaler_label(id: &str) -> &str {
 }
 
 /// Build a short, filesystem-friendly name from the prompt.
-fn slugify(prompt: &str) -> String {
+pub(crate) fn slugify(prompt: &str) -> String {
     const MAX_WORDS: usize = 5;
     const MAX_CHARS: usize = 48;
 
@@ -3015,7 +3254,10 @@ fn slugify(prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{contain_rect, crop_rect_from_drag, lerp_rect, slugify};
+    use super::{
+        contain_rect, crop_rect_from_drag, fit_scale_for, lerp_rect, max_zoom_for, slugify,
+        zoom_percent,
+    };
 
     #[test]
     fn slugifies_prompts() {
@@ -3092,5 +3334,43 @@ mod tests {
             crop_rect_from_drag((1000.0, 500.0), (1000, 1000), (250.0, 0.0, 256.0, 6.0)),
             None
         );
+    }
+
+    #[test]
+    fn fits_images_into_the_viewport() {
+        // Landscape viewport, square image: height is the limiting side.
+        assert_eq!(
+            fit_scale_for((800.0, 600.0), (768, 768)),
+            Some(600.0 / 768.0)
+        );
+        // Portrait image in the same viewport is limited by height too.
+        assert_eq!(
+            fit_scale_for((800.0, 600.0), (600, 900)),
+            Some(600.0 / 900.0)
+        );
+        // Wide image in a portrait viewport is limited by width.
+        assert_eq!(fit_scale_for((600.0, 800.0), (1200, 600)), Some(0.5));
+        assert_eq!(fit_scale_for((0.0, 600.0), (768, 768)), None);
+        assert_eq!(fit_scale_for((800.0, 600.0), (0, 768)), None);
+    }
+
+    #[test]
+    fn clamps_zoom_to_eight_times_the_image_pixels() {
+        // A 0.5 fit can grow 16x before one image pixel covers eight screen pixels.
+        assert_eq!(max_zoom_for(0.5, (768, 768)), 16.0);
+        // An image already enlarged by fit grows less.
+        assert_eq!(max_zoom_for(2.0, (448, 448)), 4.0);
+        // Tiny images still allow fit itself.
+        assert_eq!(max_zoom_for(20.0, (128, 128)), 1.0);
+        // Extremely large images are capped by the maximum edge.
+        assert!((max_zoom_for(0.2, (4096, 4096)) - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reports_the_real_pixel_scale() {
+        assert_eq!(zoom_percent(1.0, 1.0), "100%");
+        assert_eq!(zoom_percent(0.5, 1.0), "50%");
+        assert_eq!(zoom_percent(0.5, 2.0), "100%");
+        assert_eq!(zoom_percent(0.625, 1.0), "62%");
     }
 }

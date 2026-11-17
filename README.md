@@ -47,8 +47,14 @@ Milestone 3 (packaged desktop app):
   and night entries are used
 - **image actions** over the canvas: an effects menu (colorize, recover,
   enhance, denoise, photoreal, replace background, day/night, expand),
-  save-prompt-as-effect, upscale, edit, crop-to-reference, undo, and
-  back-to-view
+  save-prompt-as-effect, adjust colors, upscale, edit, crop-to-reference,
+  undo, and back-to-view
+- **manual adjustments** with brightness, contrast and saturation sliders and
+  a live canvas preview; saving writes a new PNG that joins the history chain
+  without re-running the model
+- **view-only zoom** with a bottom-right pill: zoom in/out, real-pixel scale
+  readout, fit, drag-to-pan and wheel-to-pan while zoomed. It never modifies
+  the image
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the

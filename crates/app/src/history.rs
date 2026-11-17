@@ -381,6 +381,26 @@ mod tests {
     }
 
     #[test]
+    fn records_an_adjustment_under_its_source() {
+        let history = History::open_in_memory().unwrap();
+        let root_id = history.insert(&sample("root", "flux2-klein-4b")).unwrap().0;
+
+        let mut adjust = sample("brightness +15", "flux2-klein-4b");
+        adjust.created_at = 101;
+        adjust.kind = "adjust";
+        adjust.image_path = "/tmp/adjusted.png";
+        adjust.source_path = Some("/tmp/a.png");
+        adjust.steps = 0;
+        adjust.seed = "";
+        let (_, parent) = history.insert(&adjust).unwrap();
+        assert_eq!(parent, Some(root_id));
+
+        let recent = history.recent(1).unwrap();
+        assert_eq!(recent[0].kind, "adjust");
+        assert_eq!(recent[0].source_path.as_deref(), Some("/tmp/a.png"));
+    }
+
+    #[test]
     fn resolves_parent_for_reference_and_source() {
         let history = History::open_in_memory().unwrap();
         let root = sample("root", "flux2-klein-4b");

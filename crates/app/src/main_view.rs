@@ -21,6 +21,13 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub adjust_button: gtk::Button,
+    pub zoom_scroller: gtk::ScrolledWindow,
+    pub zoom_controls: gtk::Box,
+    pub zoom_out_button: gtk::Button,
+    pub zoom_label: gtk::Label,
+    pub zoom_in_button: gtk::Button,
+    pub zoom_fit_button: gtk::Button,
     pub effects_button: gtk::MenuButton,
     pub effects_popover: gtk::Popover,
     pub save_effect_button: gtk::Button,
@@ -74,6 +81,17 @@ pub(crate) fn build() -> MainView {
     stack.add_named(&picture, Some("image"));
     stack.set_visible_child_name("empty");
 
+    // Zoom is a view-only scale: the stack grows inside this scroller, while
+    // every overlay above it keeps working in screen coordinates.
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&stack)
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .overlay_scrolling(true)
+        .build();
+
     let crop_overlay = gtk::DrawingArea::builder()
         .hexpand(true)
         .vexpand(true)
@@ -96,6 +114,12 @@ pub(crate) fn build() -> MainView {
     let upscale_button = gtk::Button::builder()
         .icon_name("zoom-in-symbolic")
         .tooltip_text("Upscale this image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let adjust_button = gtk::Button::builder()
+        .icon_name("preferences-color-symbolic")
+        .tooltip_text("Adjust colors")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
@@ -240,6 +264,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_margin_end(12);
     image_actions.append(&effects_button);
     image_actions.append(&save_effect_button);
+    image_actions.append(&adjust_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
@@ -247,7 +272,7 @@ pub(crate) fn build() -> MainView {
     image_actions.append(&back_button);
 
     let image_overlay = gtk::Overlay::builder()
-        .child(&stack)
+        .child(&scroller)
         .hexpand(true)
         .vexpand(true)
         .margin_top(12)
@@ -262,10 +287,44 @@ pub(crate) fn build() -> MainView {
     nav_actions.append(&nav_up_button);
     nav_actions.append(&nav_down_button);
 
+    let zoom_out_button = gtk::Button::builder()
+        .icon_name("zoom-out-symbolic")
+        .tooltip_text("Zoom out")
+        .css_classes(["flat", "circular"])
+        .build();
+    let zoom_label = gtk::Label::builder()
+        .label("100%")
+        .width_chars(5)
+        .css_classes(["caption", "numeric"])
+        .build();
+    let zoom_in_button = gtk::Button::builder()
+        .icon_name("zoom-in-symbolic")
+        .tooltip_text("Zoom in")
+        .css_classes(["flat", "circular"])
+        .build();
+    let zoom_fit_button = gtk::Button::builder()
+        .icon_name("zoom-fit-best-symbolic")
+        .tooltip_text("Fit to window")
+        .css_classes(["flat", "circular"])
+        .build();
+    let zoom_controls = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    zoom_controls.add_css_class("osd");
+    zoom_controls.add_css_class("zoom-controls");
+    zoom_controls.set_halign(gtk::Align::End);
+    zoom_controls.set_valign(gtk::Align::End);
+    zoom_controls.set_margin_bottom(12);
+    zoom_controls.set_margin_end(12);
+    zoom_controls.set_visible(false);
+    zoom_controls.append(&zoom_out_button);
+    zoom_controls.append(&zoom_label);
+    zoom_controls.append(&zoom_in_button);
+    zoom_controls.append(&zoom_fit_button);
+
     image_overlay.add_overlay(&crop_overlay);
     image_overlay.add_overlay(&zoom_overlay);
     image_overlay.add_overlay(&image_actions);
     image_overlay.add_overlay(&nav_actions);
+    image_overlay.add_overlay(&zoom_controls);
 
     let reference_thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     reference_thumbs.set_valign(gtk::Align::Center);
@@ -409,6 +468,13 @@ pub(crate) fn build() -> MainView {
         status,
         crop_overlay,
         zoom_overlay,
+        adjust_button,
+        zoom_scroller: scroller,
+        zoom_controls,
+        zoom_out_button,
+        zoom_label,
+        zoom_in_button,
+        zoom_fit_button,
         edit_button,
         upscale_button,
         effects_button,

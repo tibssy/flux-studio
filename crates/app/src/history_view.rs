@@ -387,7 +387,7 @@ pub(crate) fn add_row(
 
 /// Restore the prompt, model, style, size and seed recorded with an entry.
 fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
-    if entry.kind == "upscale" {
+    if entry.kind == "upscale" || entry.kind == "adjust" {
         return;
     }
 
@@ -417,6 +417,7 @@ fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
 pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
     match kind {
         "upscale" => Some("Upscaled"),
+        "adjust" => Some("Adjusted"),
         "custom" => Some("Effect"),
         "colorize" => Some("Colorized"),
         "recover" => Some("Recovered"),
@@ -503,6 +504,22 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
             content.append(&kv("Source", source));
         }
         content.append(&kv("File", &entry.image_path));
+    } else if entry.kind == "adjust" {
+        content.append(&kv("Adjustments", &entry.prompt));
+        content.append(&kv("Model", model_label(&entry.model)));
+        content.append(&kv(
+            "Size",
+            &format!("{} × {} px", entry.width, entry.height),
+        ));
+        content.append(&kv(
+            "Duration",
+            &format!("{:.1} s", entry.duration_ms as f64 / 1000.0),
+        ));
+        content.append(&kv("Created", &created_label(entry.created_at)));
+        if let Some(source) = entry.source_path.as_deref() {
+            content.append(&kv("Source", source));
+        }
+        content.append(&kv("File", &entry.image_path));
     } else {
         content.append(&kv("Prompt", &entry.prompt));
         content.append(&kv("Model", model_label(&entry.model)));
@@ -554,6 +571,7 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
     let dialog = adw::AlertDialog::builder()
         .heading(match entry.kind.as_str() {
             "upscale" => "Upscale details",
+            "adjust" => "Adjustment details",
             "colorize" => "Colorize details",
             "night" => "Night details",
             "day" => "Daylight details",
@@ -564,7 +582,7 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         .extra_child(&scroller)
         .build();
     dialog.add_response("close", "Close");
-    if entry.kind != "upscale" {
+    if entry.kind != "upscale" && entry.kind != "adjust" {
         dialog.add_response("copy", "Copy prompt");
     }
     dialog.add_response("use", "Use as reference");
