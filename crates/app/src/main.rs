@@ -6,6 +6,7 @@ mod history_view;
 mod main_view;
 mod preferences;
 mod prompt_ai;
+mod rounded_clip;
 mod rounded_paintable;
 mod sidebar;
 mod state;
@@ -85,6 +86,8 @@ pub(crate) struct Ui {
     pub adjust_button: gtk::Button,
     /// View zoom factor, 1.0 being fit-to-window.
     pub zoom: Cell<f64>,
+    /// Running zoom animation, if any.
+    pub zoom_animation: RefCell<Option<glib::SourceId>>,
     pub zoom_scroller: gtk::ScrolledWindow,
     pub zoom_controls: gtk::Box,
     pub zoom_out_button: gtk::Button,
@@ -382,6 +385,7 @@ fn build_ui(app: &adw::Application) {
         upscale_button: view.upscale_button,
         adjust_button: view.adjust_button,
         zoom: Cell::new(1.0),
+        zoom_animation: RefCell::new(None),
         zoom_scroller: view.zoom_scroller,
         zoom_controls: view.zoom_controls,
         zoom_out_button: view.zoom_out_button,
@@ -784,6 +788,8 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 if ui.zoom.get() <= 1.0 {
                     return;
                 }
+                // A running animation would fight the pointer.
+                stop_zoom_animation(&ui);
                 start.set((
                     ui.zoom_scroller.hadjustment().value(),
                     ui.zoom_scroller.vadjustment().value(),
@@ -814,7 +820,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
             });
         }
-        ui.stack.add_controller(gesture);
+        // The gesture lives on the scroller: the stack itself moves while
+        // panning, and a moving widget turns drag offsets into feedback.
+        ui.zoom_scroller.add_controller(gesture);
     }
     {
         let ui = ui.clone();
@@ -1299,6 +1307,50 @@ fn update_zoom_controls(ui: &Ui) {
     ui.zoom_out_button.set_sensitive(zoom > 1.0 + 1e-6);
 }
 
+fn stop_zoom_animation(ui: &Ui) {
+    if let Some(source) = ui.zoom_animation.borrow_mut().take() {
+        source.remove();
+    }
+}
+
+/// Ease the view to `target` instead of snapping.
+fn animate_zoom(ui: &Rc<Ui>, target: f64) {
+    stop_zoom_animation(ui);
+    let Some(fit) = fit_scale(ui) else {
+        return;
+    };
+    let target = target.clamp(1.0, max_zoom_for(fit, ui.image_size.get()));
+    let start = ui.zoom.get();
+    if (target - start).abs() < 1e-4 {
+        ui.zoom.set(target);
+        apply_zoom(ui);
+        update_zoom_controls(ui);
+        return;
+    }
+
+    let started = Instant::now();
+    let duration = 0.18;
+    let ui_callback = ui.clone();
+    let source = glib::timeout_add_local(Duration::from_millis(16), move || {
+        let progress = (started.elapsed().as_secs_f64() / duration).min(1.0);
+        ui_callback
+            .zoom
+            .set(start + (target - start) * ease(progress));
+        apply_zoom(&ui_callback);
+        update_zoom_controls(&ui_callback);
+        if progress >= 1.0 {
+            ui_callback.zoom.set(target);
+            apply_zoom(&ui_callback);
+            update_zoom_controls(&ui_callback);
+            *ui_callback.zoom_animation.borrow_mut() = None;
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+    *ui.zoom_animation.borrow_mut() = Some(source);
+}
+
 fn zoom_by(ui: &Rc<Ui>, factor: f64) {
     if ui.state.borrow().display.is_none() {
         return;
@@ -1306,14 +1358,14 @@ fn zoom_by(ui: &Rc<Ui>, factor: f64) {
     let Some(fit) = fit_scale(ui) else {
         return;
     };
-    let next = (ui.zoom.get() * factor).clamp(1.0, max_zoom_for(fit, ui.image_size.get()));
-    ui.zoom.set(if next < 1.0 + 1e-6 { 1.0 } else { next });
-    apply_zoom(ui);
-    update_zoom_controls(ui);
+    let max = max_zoom_for(fit, ui.image_size.get());
+    let next = (ui.zoom.get() * factor).clamp(1.0, max);
+    animate_zoom(ui, if next < 1.0 + 1e-6 { 1.0 } else { next });
 }
 
 /// Return to fit-to-window without touching the image.
 fn reset_zoom(ui: &Ui) {
+    stop_zoom_animation(ui);
     ui.zoom.set(1.0);
     apply_zoom(ui);
     update_zoom_controls(ui);

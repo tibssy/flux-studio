@@ -91,6 +91,7 @@ pub(crate) fn build() -> MainView {
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .overlay_scrolling(true)
         .build();
+    let scroller_clip = crate::rounded_clip::RoundedClip::new(&scroller);
 
     let crop_overlay = gtk::DrawingArea::builder()
         .hexpand(true)
@@ -272,7 +273,7 @@ pub(crate) fn build() -> MainView {
     image_actions.append(&back_button);
 
     let image_overlay = gtk::Overlay::builder()
-        .child(&scroller)
+        .child(&scroller_clip)
         .hexpand(true)
         .vexpand(true)
         .margin_top(12)
