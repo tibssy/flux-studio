@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Debug, Clone)]
 pub struct Generation {
@@ -21,6 +21,8 @@ pub struct Generation {
     pub kind: String,
     /// Original image for an upscale entry.
     pub source_path: Option<String>,
+    /// Entry whose result was used as the input image, when there is one.
+    pub parent_id: Option<i64>,
 }
 
 pub struct NewGeneration<'a> {
@@ -99,15 +101,46 @@ impl History {
             "TEXT NOT NULL DEFAULT 'generate'",
         )?;
         ensure_column(&conn, "generations", "source_path", "TEXT")?;
+        let added_parent = ensure_column(&conn, "generations", "parent_id", "INTEGER")?;
+        if added_parent {
+            // Older rows only kept the input path; resolve it to the entry that
+            // produced that image so existing history groups retroactively.
+            conn.execute(
+                "UPDATE generations
+                 SET parent_id = (
+                     SELECT p.id FROM generations p
+                     WHERE p.image_path = COALESCE(generations.reference_path,
+                                                  generations.source_path)
+                       AND p.id != generations.id
+                     ORDER BY p.id DESC
+                     LIMIT 1
+                 )
+                 WHERE COALESCE(reference_path, source_path) IS NOT NULL",
+                [],
+            )?;
+        }
         Ok(Self { conn })
     }
 
-    pub fn insert(&self, generation: &NewGeneration<'_>) -> Result<i64> {
+    pub fn insert(&self, generation: &NewGeneration<'_>) -> Result<(i64, Option<i64>)> {
+        let parent_id = match generation.reference_path.or(generation.source_path) {
+            Some(path) => self
+                .conn
+                .query_row(
+                    "SELECT id FROM generations WHERE image_path = ?1
+                     ORDER BY id DESC LIMIT 1",
+                    [path],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?,
+            None => None,
+        };
         self.conn.execute(
             "INSERT INTO generations
                  (prompt, model, style, width, height, steps, seed, created_at,
-                  duration_ms, image_path, reference_path, kind, source_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  duration_ms, image_path, reference_path, kind, source_path,
+                  parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 generation.prompt,
                 generation.model,
@@ -122,16 +155,17 @@ impl History {
                 generation.reference_path,
                 generation.kind,
                 generation.source_path,
+                parent_id,
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok((self.conn.last_insert_rowid(), parent_id))
     }
 
     pub fn recent(&self, limit: usize) -> Result<Vec<Generation>> {
         let mut statement = self.conn.prepare(
             "SELECT id, prompt, model, style, width, height, steps, seed,
                     created_at, duration_ms, image_path, reference_path, kind,
-                    source_path
+                    source_path, parent_id
              FROM generations
              ORDER BY created_at DESC, id DESC
              LIMIT ?1",
@@ -152,6 +186,7 @@ impl History {
                 reference_path: row.get(11)?,
                 kind: row.get(12)?,
                 source_path: row.get(13)?,
+                parent_id: row.get(14)?,
             })
         })?;
 
@@ -163,14 +198,23 @@ impl History {
     }
 
     /// Remove one entry from the database.
+    ///
+    /// Children are re-parented to the deleted entry's parent so a chain keeps
+    /// its shape when a middle step is removed.
     pub fn delete(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE generations
+             SET parent_id = (SELECT parent_id FROM generations WHERE id = ?1)
+             WHERE parent_id = ?1",
+            [id],
+        )?;
         self.conn
             .execute("DELETE FROM generations WHERE id = ?1", [id])?;
         Ok(())
     }
 }
 
-fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<bool> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let mut exists = false;
     let mut rows = statement.query([])?;
@@ -189,7 +233,7 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
             [],
         )?;
     }
-    Ok(())
+    Ok(!exists)
 }
 
 #[cfg(test)]
@@ -262,10 +306,13 @@ mod tests {
     #[test]
     fn deletes_one_entry() {
         let history = History::open_in_memory().unwrap();
-        let first = history.insert(&sample("first", "flux2-klein-4b")).unwrap();
+        let first = history
+            .insert(&sample("first", "flux2-klein-4b"))
+            .unwrap()
+            .0;
         let mut second = sample("second", "flux2-klein-4b");
         second.created_at = 101;
-        let second_id = history.insert(&second).unwrap();
+        let second_id = history.insert(&second).unwrap().0;
 
         history.delete(first).unwrap();
         let recent = history.recent(10).unwrap();
@@ -287,6 +334,97 @@ mod tests {
         assert_eq!(recent[0].kind, "upscale");
         assert_eq!(recent[0].source_path.as_deref(), Some("/tmp/source.png"));
         assert_eq!(recent[0].model, "mosr-4x");
+    }
+
+    #[test]
+    fn resolves_parent_for_reference_and_source() {
+        let history = History::open_in_memory().unwrap();
+        let root = sample("root", "flux2-klein-4b");
+        let root_id = history.insert(&root).unwrap().0;
+
+        let mut edit = sample("edit", "flux2-klein-4b");
+        edit.created_at = 101;
+        edit.image_path = "/tmp/edit.png";
+        edit.reference_path = Some("/tmp/a.png");
+        let (edit_id, parent) = history.insert(&edit).unwrap();
+        assert_eq!(parent, Some(root_id));
+
+        let mut upscale = sample("upscale", "mosr-4x");
+        upscale.created_at = 102;
+        upscale.kind = "upscale";
+        upscale.image_path = "/tmp/upscaled.png";
+        upscale.source_path = Some("/tmp/edit.png");
+        let (_, upscale_parent) = history.insert(&upscale).unwrap();
+        assert_eq!(upscale_parent, Some(edit_id));
+
+        // A reference that is not in the history starts a new chain.
+        let mut external = sample("external", "flux2-klein-4b");
+        external.created_at = 103;
+        external.image_path = "/tmp/external.png";
+        external.reference_path = Some("/tmp/elsewhere.png");
+        assert_eq!(history.insert(&external).unwrap().1, None);
+    }
+
+    #[test]
+    fn delete_reparents_children() {
+        let history = History::open_in_memory().unwrap();
+        let root_id = history.insert(&sample("root", "flux2-klein-4b")).unwrap().0;
+
+        let mut middle = sample("middle", "flux2-klein-4b");
+        middle.created_at = 101;
+        middle.image_path = "/tmp/middle.png";
+        middle.reference_path = Some("/tmp/a.png");
+        let middle_id = history.insert(&middle).unwrap().0;
+
+        let mut leaf = sample("leaf", "flux2-klein-4b");
+        leaf.created_at = 102;
+        leaf.image_path = "/tmp/leaf.png";
+        leaf.reference_path = Some("/tmp/middle.png");
+        let leaf_id = history.insert(&leaf).unwrap().0;
+
+        history.delete(middle_id).unwrap();
+        let recent = history.recent(10).unwrap();
+        let leaf = recent.iter().find(|entry| entry.id == leaf_id).unwrap();
+        assert_eq!(leaf.parent_id, Some(root_id));
+    }
+
+    #[test]
+    fn backfills_parent_ids_for_existing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE generations (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 prompt      TEXT    NOT NULL,
+                 model       TEXT    NOT NULL DEFAULT 'flux2-klein-4b',
+                 style       TEXT    NOT NULL DEFAULT 'none',
+                 width       INTEGER NOT NULL,
+                 height      INTEGER NOT NULL,
+                 steps       INTEGER NOT NULL,
+                 seed        TEXT    NOT NULL,
+                 created_at  INTEGER NOT NULL,
+                 duration_ms INTEGER NOT NULL,
+                 image_path  TEXT    NOT NULL,
+                 reference_path TEXT,
+                 kind        TEXT    NOT NULL DEFAULT 'generate',
+                 source_path TEXT
+             );
+             INSERT INTO generations
+                 (prompt, width, height, steps, seed, created_at, duration_ms,
+                  image_path)
+             VALUES ('root', 768, 768, 4, '1', 100, 1000, '/tmp/a.png');
+             INSERT INTO generations
+                 (prompt, width, height, steps, seed, created_at, duration_ms,
+                  image_path, reference_path)
+             VALUES ('edit', 768, 768, 4, '2', 101, 1000, '/tmp/b.png',
+                     '/tmp/a.png');",
+        )
+        .unwrap();
+
+        let history = History::from_connection(conn).unwrap();
+        let recent = history.recent(10).unwrap();
+        let edit = recent.iter().find(|entry| entry.prompt == "edit").unwrap();
+        let root = recent.iter().find(|entry| entry.prompt == "root").unwrap();
+        assert_eq!(edit.parent_id, Some(root.id));
     }
 
     #[test]

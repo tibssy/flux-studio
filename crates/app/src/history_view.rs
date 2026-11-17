@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -14,7 +15,208 @@ use crate::{
     update_image_view,
 };
 
-pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
+struct OrderedHistory {
+    entries: Vec<Generation>,
+    roots: HashMap<i64, i64>,
+    group_sizes: HashMap<i64, usize>,
+}
+
+/// Order entries so each chain is contiguous: groups by newest activity, and
+/// inside a group the root first followed by its descendants oldest-to-newest.
+fn order_entries(entries: Vec<Generation>) -> OrderedHistory {
+    let by_id: HashMap<i64, Generation> = entries
+        .iter()
+        .cloned()
+        .map(|entry| (entry.id, entry))
+        .collect();
+
+    // The top-most entry reachable through `parent_id` is the chain root.
+    let mut roots: HashMap<i64, i64> = HashMap::with_capacity(entries.len());
+    for entry in &entries {
+        let mut root = entry.id;
+        let mut current = entry;
+        let mut guard = 0;
+        while let Some(parent_id) = current.parent_id {
+            let Some(parent) = by_id.get(&parent_id) else {
+                break;
+            };
+            root = parent.id;
+            current = parent;
+            guard += 1;
+            if guard > entries.len() {
+                break;
+            }
+        }
+        roots.insert(entry.id, root);
+    }
+
+    let mut groups: HashMap<i64, Vec<Generation>> = HashMap::new();
+    for entry in &entries {
+        if let Some(root) = roots.get(&entry.id) {
+            groups.entry(*root).or_default().push(entry.clone());
+        }
+    }
+
+    let mut group_list: Vec<(i64, i64, Vec<Generation>)> = groups
+        .into_iter()
+        .map(|(root, mut members)| {
+            members.sort_by_key(|entry| (entry.created_at, entry.id));
+            if let Some(position) = members.iter().position(|entry| entry.id == root) {
+                let root_entry = members.remove(position);
+                members.insert(0, root_entry);
+            }
+            let newest = members
+                .iter()
+                .map(|entry| entry.created_at)
+                .max()
+                .unwrap_or(0);
+            (root, newest, members)
+        })
+        .collect();
+    group_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+
+    let mut ordered = Vec::with_capacity(entries.len());
+    let mut group_sizes: HashMap<i64, usize> = HashMap::new();
+    for (root, _, members) in group_list {
+        group_sizes.insert(root, members.len());
+        ordered.extend(members);
+    }
+
+    OrderedHistory {
+        entries: ordered,
+        roots,
+        group_sizes,
+    }
+}
+
+/// Rebuild the sidebar list in chain order.
+///
+/// `ui.entries` is reordered so navigation and rendering agree. Descendants of
+/// collapsed chain roots are skipped.
+pub(crate) fn rebuild(ui: &Rc<Ui>) {
+    rebuild_inner(ui, false);
+}
+
+/// Rebuild without jumping the sidebar back to the top.
+pub(crate) fn rebuild_preserving_scroll(ui: &Rc<Ui>) {
+    rebuild_inner(ui, true);
+}
+
+/// Collapse every chain that has more than one image. Used once at startup.
+pub(crate) fn collapse_all_groups(ui: &Rc<Ui>) {
+    let ordered = order_entries(ui.entries.borrow().clone());
+    let mut collapsed = ui.collapsed_groups.borrow_mut();
+    for (root, size) in &ordered.group_sizes {
+        if *size > 1 {
+            collapsed.insert(*root);
+        }
+    }
+}
+
+fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
+    let adjustment = if preserve_scroll {
+        ui.history_list
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+            .map(|scroller| scroller.vadjustment())
+    } else {
+        None
+    };
+    let offset = adjustment
+        .as_ref()
+        .map(|adjustment| adjustment.value())
+        .unwrap_or(0.0);
+
+    while let Some(child) = ui.history_list.first_child() {
+        ui.history_list.remove(&child);
+    }
+
+    let ordered = order_entries(ui.entries.borrow().clone());
+    *ui.entries.borrow_mut() = ordered.entries;
+
+    let by_id: HashMap<i64, Generation> = ui
+        .entries
+        .borrow()
+        .iter()
+        .cloned()
+        .map(|entry| (entry.id, entry))
+        .collect();
+    {
+        let mut collapsed = ui.collapsed_groups.borrow_mut();
+        collapsed.retain(|id| by_id.contains_key(id));
+    }
+    let collapsed = ui.collapsed_groups.borrow().clone();
+    for entry in ui.entries.borrow().iter() {
+        if hidden_by_collapse(entry, &by_id, &collapsed) {
+            continue;
+        }
+        let depth = depth_of(entry, &by_id);
+        let group_size = ordered
+            .roots
+            .get(&entry.id)
+            .and_then(|root| ordered.group_sizes.get(root))
+            .copied()
+            .unwrap_or(1);
+        let is_collapsed = depth == 0 && collapsed.contains(&entry.id);
+        add_row(ui, entry, depth.min(3), group_size, is_collapsed);
+    }
+
+    if let Some(adjustment) = adjustment {
+        // Restore immediately and again after the new rows have been laid out.
+        adjustment.set_value(offset);
+        glib::idle_add_local_once(move || {
+            let max = (adjustment.upper() - adjustment.page_size()).max(0.0);
+            adjustment.set_value(offset.min(max));
+        });
+    }
+}
+
+fn hidden_by_collapse(
+    entry: &Generation,
+    by_id: &HashMap<i64, Generation>,
+    collapsed: &HashSet<i64>,
+) -> bool {
+    let mut current = entry;
+    let mut guard = 0;
+    while let Some(parent_id) = current.parent_id {
+        if collapsed.contains(&parent_id) {
+            return true;
+        }
+        let Some(parent) = by_id.get(&parent_id) else {
+            break;
+        };
+        current = parent;
+        guard += 1;
+        if guard > by_id.len() {
+            break;
+        }
+    }
+    false
+}
+
+fn depth_of(entry: &Generation, by_id: &HashMap<i64, Generation>) -> usize {
+    let mut depth = 0;
+    let mut current = entry;
+    while let Some(parent_id) = current.parent_id {
+        let Some(parent) = by_id.get(&parent_id) else {
+            break;
+        };
+        depth += 1;
+        current = parent;
+        if depth > 8 {
+            break;
+        }
+    }
+    depth
+}
+
+pub(crate) fn add_row(
+    ui: &Rc<Ui>,
+    entry: &Generation,
+    depth: usize,
+    group_size: usize,
+    collapsed: bool,
+) {
     let row = gtk::ListBoxRow::new();
     // Row activation resolves entries by id, never by position.
     row.set_widget_name(&entry.id.to_string());
@@ -22,12 +224,22 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row_box.set_margin_top(6);
     row_box.set_margin_bottom(6);
-    row_box.set_margin_start(8);
+    row_box.set_margin_start(8 + depth as i32 * 16);
     row_box.set_margin_end(8);
 
+    if depth > 0 {
+        // Thin guide that makes a chain read as one block in the sidebar.
+        let guide = gtk::Separator::new(gtk::Orientation::Vertical);
+        guide.set_width_request(2);
+        guide.set_margin_top(4);
+        guide.set_margin_bottom(4);
+        guide.add_css_class("history-guide");
+        row_box.append(&guide);
+    }
+
     let thumbnail = gtk::Picture::builder()
-        .width_request(56)
-        .height_request(56)
+        .width_request(if depth > 0 { 44 } else { 56 })
+        .height_request(if depth > 0 { 44 } else { 56 })
         .can_shrink(true)
         .content_fit(gtk::ContentFit::Cover)
         .build();
@@ -80,6 +292,48 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
 
     row_box.append(&thumbnail);
     row_box.append(&text);
+    if depth == 0 && group_size > 1 {
+        let toggle = gtk::Button::builder()
+            .tooltip_text(if collapsed {
+                "Expand chain"
+            } else {
+                "Collapse chain"
+            })
+            .valign(gtk::Align::Center)
+            .css_classes(["history-toggle"])
+            .build();
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+        let icon = gtk::Image::from_icon_name(if collapsed {
+            "pan-end-symbolic"
+        } else {
+            "pan-down-symbolic"
+        });
+        icon.set_pixel_size(11);
+        let count = gtk::Label::builder()
+            .label(group_size.to_string())
+            .css_classes(["caption"])
+            .build();
+        content.append(&icon);
+        content.append(&count);
+        toggle.set_child(Some(&content));
+        {
+            let ui = ui.clone();
+            let root = entry.id;
+            toggle.connect_clicked(move |_| {
+                {
+                    let mut collapsed = ui.collapsed_groups.borrow_mut();
+                    if !collapsed.remove(&root) {
+                        collapsed.insert(root);
+                    }
+                }
+                // Rebuilding from inside the button's own signal is avoided by
+                // deferring to the next idle iteration.
+                let ui = ui.clone();
+                glib::idle_add_local_once(move || rebuild_preserving_scroll(&ui));
+            });
+        }
+        row_box.append(&toggle);
+    }
     row_box.append(&actions);
     row.set_child(Some(&row_box));
 
@@ -128,11 +382,7 @@ pub(crate) fn add_row(ui: &Rc<Ui>, entry: &Generation, prepend: bool) {
         delete_button.connect_clicked(move |_| confirm_delete(&ui, &entry));
     }
 
-    if prepend {
-        ui.history_list.prepend(&row);
-    } else {
-        ui.history_list.append(&row);
-    }
+    ui.history_list.append(&row);
 }
 
 /// Restore the prompt, model, style, size and seed recorded with an entry.
@@ -377,9 +627,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let _ = std::fs::remove_file(thumb_path(entry.id));
 
     ui.entries.borrow_mut().retain(|item| item.id != entry.id);
-    if let Some(row) = row_by_id(&ui.history_list, entry.id) {
-        ui.history_list.remove(&row);
-    }
+    rebuild(ui);
 
     let path = PathBuf::from(&entry.image_path);
     let is_active = {
@@ -392,6 +640,9 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
         update_image_view(ui);
         ui.status.set_text("Image deleted");
     } else {
+        if let Some(display) = ui.state.borrow().display.clone() {
+            highlight(ui, &display);
+        }
         update_image_actions(ui);
     }
 
@@ -425,6 +676,32 @@ pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
         ui.history_list.unselect_all();
         return;
     };
+
+    // A hidden row cannot be selected: expand any collapsed ancestor first.
+    let mut expanded = false;
+    {
+        let entries = ui.entries.borrow();
+        let mut collapsed = ui.collapsed_groups.borrow_mut();
+        let mut current = entries.iter().find(|entry| entry.id == id);
+        let mut guard = 0;
+        while let Some(entry) = current {
+            let Some(parent_id) = entry.parent_id else {
+                break;
+            };
+            if collapsed.remove(&parent_id) {
+                expanded = true;
+            }
+            current = entries.iter().find(|entry| entry.id == parent_id);
+            guard += 1;
+            if guard > entries.len() {
+                break;
+            }
+        }
+    }
+    if expanded {
+        rebuild(ui);
+    }
+
     let Some(row) = row_by_id(&ui.history_list, id) else {
         return;
     };
@@ -508,4 +785,106 @@ pub(crate) fn entry_model_label(entry: &Generation) -> &str {
 
 fn style_label(id: &str) -> &str {
     flux_core::style::label(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: i64, parent: Option<i64>, created_at: i64) -> Generation {
+        Generation {
+            id,
+            prompt: format!("entry {id}"),
+            model: "flux2-klein-4b".into(),
+            style: "none".into(),
+            width: 512,
+            height: 512,
+            steps: 4,
+            seed: "1".into(),
+            created_at,
+            duration_ms: 1000,
+            image_path: format!("/tmp/{id}.png"),
+            reference_path: None,
+            kind: "generate".into(),
+            source_path: None,
+            parent_id: parent,
+        }
+    }
+
+    fn ids(entries: &[Generation]) -> Vec<i64> {
+        entries.iter().map(|entry| entry.id).collect()
+    }
+
+    #[test]
+    fn groups_chains_and_keeps_root_first() {
+        let ordered = order_entries(vec![
+            entry(3, Some(2), 300),
+            entry(2, Some(1), 200),
+            entry(1, None, 100),
+            entry(4, None, 250),
+        ]);
+        assert_eq!(ids(&ordered.entries), vec![1, 2, 3, 4]);
+        assert_eq!(ordered.group_sizes.get(&1), Some(&3));
+        assert_eq!(ordered.group_sizes.get(&4), Some(&1));
+    }
+
+    #[test]
+    fn newest_activity_moves_a_chain_up() {
+        let ordered = order_entries(vec![
+            entry(1, None, 100),
+            entry(2, Some(1), 400),
+            entry(3, None, 300),
+        ]);
+        assert_eq!(ids(&ordered.entries), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn missing_parent_starts_a_new_chain() {
+        let ordered = order_entries(vec![entry(1, None, 100), entry(2, Some(99), 200)]);
+        assert_eq!(ids(&ordered.entries), vec![2, 1]);
+        assert_eq!(ordered.group_sizes.get(&2), Some(&1));
+    }
+
+    #[test]
+    fn branches_stay_under_their_root() {
+        let ordered = order_entries(vec![
+            entry(4, Some(1), 400),
+            entry(1, None, 100),
+            entry(3, Some(1), 300),
+            entry(2, Some(1), 200),
+        ]);
+        assert_eq!(ids(&ordered.entries), vec![1, 2, 3, 4]);
+        assert_eq!(ordered.group_sizes.get(&1), Some(&4));
+    }
+
+    #[test]
+    fn collapsed_root_hides_descendants() {
+        let entries = [
+            entry(1, None, 100),
+            entry(2, Some(1), 200),
+            entry(3, Some(2), 300),
+            entry(4, None, 400),
+        ];
+        let by_id: HashMap<_, _> = entries
+            .iter()
+            .cloned()
+            .map(|entry| (entry.id, entry))
+            .collect();
+
+        let collapsed: HashSet<i64> = [1].into_iter().collect();
+        let visible: Vec<i64> = entries
+            .iter()
+            .filter(|entry| !hidden_by_collapse(entry, &by_id, &collapsed))
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(visible, vec![1, 4]);
+
+        let collapsed: HashSet<i64> = [2].into_iter().collect();
+        let visible: Vec<i64> = entries
+            .iter()
+            .filter(|entry| !hidden_by_collapse(entry, &by_id, &collapsed))
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(visible, vec![1, 2, 4]);
+    }
 }

@@ -32,6 +32,7 @@ const SCHNELL_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.1-schnell-GG
 const T5_XXL_URL: &str = "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf";
 const CLIP_L_URL: &str = "https://huggingface.co/comfyanonymous/flux_text_encoders";
 const FLUX_VAE_URL: &str = "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo";
+const TAE_URL: &str = "https://huggingface.co/madebyollin/taef2";
 const REALESRGAN_URL: &str = "https://github.com/xinntao/Real-ESRGAN";
 const PHIPS_URL: &str = "https://huggingface.co/Phips";
 
@@ -64,18 +65,26 @@ fn preset_status(preset: &ModelPreset, models_dir: &Path) -> String {
         .license
         .map(|license| format!(" · {}", license.name))
         .unwrap_or_default();
-    if missing.is_empty() {
-        format!(
-            "Installed · {} steps · {}{license}",
-            preset.steps,
-            format_bytes(preset.total_bytes())
-        )
-    } else {
+    if !preset.is_installed(models_dir) {
         format!(
             "Missing {} file(s) · {} · {} steps{license}",
             missing.len(),
             format_bytes(preset.total_bytes()),
             preset.steps
+        )
+    } else if !missing.is_empty() {
+        // Only optional files (preview weights) are missing.
+        let bytes: u64 = missing.iter().map(|file| file.approx_bytes).sum();
+        format!(
+            "Installed · {} steps · preview weights missing ({}){license}",
+            preset.steps,
+            format_bytes(bytes)
+        )
+    } else {
+        format!(
+            "Installed · {} steps · {}{license}",
+            preset.steps,
+            format_bytes(preset.total_bytes())
         )
     }
 }
@@ -208,6 +217,35 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         });
     }
     performance_group.add(&offload_row);
+
+    let previews_row = adw::SwitchRow::builder()
+        .title("Live previews")
+        .subtitle("Show each sampling step on the canvas (needs ~11 MB preview weights)")
+        .build();
+    previews_row.set_active(ui.config.borrow().show_previews);
+    {
+        let ui = ui.clone();
+        previews_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            {
+                let mut config = ui.config.borrow_mut();
+                if config.show_previews == active {
+                    return;
+                }
+                config.show_previews = active;
+                let _ = config.save();
+            }
+            if active {
+                let preset = crate::active_preset(&ui);
+                if preset.preview_weights(&ui.models_dir).is_none() {
+                    ui.toast.add_toast(adw::Toast::new(
+                        "Preview weights are not installed; previews will be blocky. Download them under Models.",
+                    ));
+                }
+            }
+        });
+    }
+    performance_group.add(&previews_row);
     general.add(&performance_group);
 
     dialog.add(&general);
@@ -242,7 +280,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
-        button.set_sensitive(!preset.is_installed(&ui.models_dir));
+        button.set_sensitive(!preset.missing(&ui.models_dir).is_empty());
         let delete_button = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
             .tooltip_text("Delete this model's files from disk")
@@ -337,9 +375,9 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
                 entry
                     .row
                     .set_subtitle(&preset_status(entry.preset, &models_dir));
-                let installed = entry.preset.is_installed(&models_dir);
-                entry.button.set_visible(!installed);
-                entry.button.set_sensitive(!installed);
+                let complete = entry.preset.missing(&models_dir).is_empty();
+                entry.button.set_visible(!complete);
+                entry.button.set_sensitive(!complete);
 
                 let deletable = deletable_files(entry.preset, &models_dir);
                 entry.delete_button.set_visible(!deletable.is_empty());
@@ -606,6 +644,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX_VAE_URL,
     ));
     credits_group.add(&link_row(
+        "TAEF1/TAEF2 preview decoders",
+        "madebyollin · MIT",
+        TAE_URL,
+    ));
+    credits_group.add(&link_row(
         "LFM2.5-VL-450M vision helper",
         "Liquid AI · LFM Open License v1.0",
         LFM25_VL_URL,
@@ -695,6 +738,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         T5_XXL_URL,
     ));
     legal_group.add(&link_row("FLUX VAE", "Apache-2.0", FLUX_VAE_URL));
+    legal_group.add(&link_row("TAEF1/TAEF2 preview decoders", "MIT", TAE_URL));
     legal_group.add(&link_row(
         "Real-ESRGAN upscaler weights",
         "BSD-3-Clause",
@@ -1112,6 +1156,10 @@ fn start_download(
                         "{} models downloaded.",
                         preset.label
                     )));
+                    // Preview weights are loaded at server start-up.
+                    if crate::active_preset(&ui).id == preset.id {
+                        ui.backend.unload();
+                    }
                 }
                 Ok(Err(error)) => {
                     ui.toast

@@ -13,6 +13,11 @@ pub enum ModelRole {
     ClipEncoder,
     VisionEncoder,
     Upscaler,
+    /// Tiny AutoEncoder used only for live step previews (`--taesd`).
+    ///
+    /// Optional: generation works without it, falling back to a rough latent
+    /// projection for previews.
+    Preview,
 }
 
 /// A single downloadable file belonging to a preset.
@@ -84,8 +89,24 @@ impl ModelPreset {
             .collect()
     }
 
+    /// Missing files needed to run the model, ignoring optional preview weights.
+    pub fn missing_required(&self, models_dir: &Path) -> Vec<&'static ModelFileSpec> {
+        self.files
+            .iter()
+            .filter(|file| file.role != ModelRole::Preview)
+            .filter(|file| !models_dir.join(file.rel_path).exists())
+            .collect()
+    }
+
+    /// Whether the model can generate. Preview weights are optional.
     pub fn is_installed(&self, models_dir: &Path) -> bool {
-        self.missing(models_dir).is_empty()
+        self.missing_required(models_dir).is_empty()
+    }
+
+    /// The optional Tiny AutoEncoder used for live step previews.
+    pub fn preview_weights(&self, models_dir: &Path) -> Option<PathBuf> {
+        self.path(ModelRole::Preview, models_dir)
+            .filter(|path| path.exists())
     }
 
     /// The text encoder as a causal LLM, when the preset uses one.
@@ -130,6 +151,12 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
             url: "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
             approx_bytes: 2_497_281_312,
         },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef2.safetensors",
+            url: "https://huggingface.co/madebyollin/taef2/resolve/main/taef2.safetensors",
+            approx_bytes: 10_700_000,
+        },
     ],
     steps: 4,
     cfg: 1.0,
@@ -169,6 +196,12 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
             rel_path: "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
             url: "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
             approx_bytes: 2_497_281_664,
+        },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef2.safetensors",
+            url: "https://huggingface.co/madebyollin/taef2/resolve/main/taef2.safetensors",
+            approx_bytes: 10_700_000,
         },
     ],
     steps: 16,
@@ -220,6 +253,12 @@ pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
             url: "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf",
             approx_bytes: 840_000_000,
         },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef2.safetensors",
+            url: "https://huggingface.co/madebyollin/taef2/resolve/main/taef2.safetensors",
+            approx_bytes: 10_700_000,
+        },
     ],
     steps: 4,
     cfg: 1.0,
@@ -267,6 +306,12 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
             rel_path: "text_encoders/clip_l.safetensors",
             url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
             approx_bytes: 246_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef1.safetensors",
+            url: "https://huggingface.co/madebyollin/taef1/resolve/main/diffusion_pytorch_model.safetensors",
+            approx_bytes: 9_800_000,
         },
     ],
     steps: 4,
@@ -324,6 +369,41 @@ mod tests {
             );
             assert!(preset.total_bytes() > 0);
         }
+    }
+
+    #[test]
+    fn preview_weights_are_optional() {
+        let dir = std::env::temp_dir().join(format!("flux-preset-preview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let preset = &FLUX2_KLEIN_4B;
+        assert!(preset.file(ModelRole::Preview).is_some());
+        assert!(!preset.is_installed(&dir));
+        assert!(preset.preview_weights(&dir).is_none());
+
+        // Pretend the required weights are present but the preview weights are not.
+        for file in preset
+            .files
+            .iter()
+            .filter(|file| file.role != ModelRole::Preview)
+        {
+            let path = dir.join(file.rel_path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"x").unwrap();
+        }
+        assert!(preset.is_installed(&dir));
+        assert_eq!(preset.missing(&dir).len(), 1);
+        assert!(preset.missing_required(&dir).is_empty());
+
+        let preview = preset.file(ModelRole::Preview).unwrap();
+        let path = dir.join(preview.rel_path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"x").unwrap();
+        assert_eq!(preset.preview_weights(&dir), Some(path));
+        assert!(preset.missing(&dir).is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

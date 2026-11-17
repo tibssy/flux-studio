@@ -33,6 +33,8 @@ pub struct GenerateRequest {
     pub offload: bool,
     /// Reference images for editing (`-r`). Empty for text-to-image.
     pub reference_images: Vec<PathBuf>,
+    /// Whether the backend should stream per-step previews.
+    pub previews: bool,
     pub output: PathBuf,
 }
 
@@ -50,6 +52,7 @@ impl GenerateRequest {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            previews: true,
             output: output.into(),
         }
     }
@@ -101,7 +104,16 @@ mod tests {
 pub enum Progress {
     /// Weights are being loaded (no step information yet).
     Loading,
-    Step { current: u32, total: u32 },
+    Step {
+        current: u32,
+        total: u32,
+    },
+    /// An encoded preview frame for the given sampling step.
+    Preview {
+        step: u32,
+        total: u32,
+        png: Vec<u8>,
+    },
     Done(PathBuf),
     Cancelled,
     Failed(String),

@@ -53,6 +53,8 @@ pub struct Config {
     pub llama_custom_cli: Option<PathBuf>,
     /// Preset ids whose license the user explicitly accepted in Preferences.
     pub accepted_licenses: Vec<String>,
+    /// Show live step previews on the canvas while sampling.
+    pub show_previews: bool,
 }
 
 impl Default for Config {
@@ -84,6 +86,7 @@ impl Default for Config {
             llama_manifest_url: None,
             llama_custom_cli: None,
             accepted_licenses: Vec::new(),
+            show_previews: true,
         }
     }
 }
@@ -157,6 +160,7 @@ mod tests {
         assert!(config.llama_backend_id.is_none());
         assert!(config.llama_manifest_url.is_none());
         assert!(config.llama_custom_cli.is_none());
+        assert!(config.show_previews);
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
         assert!((config.mp() - 0.589824).abs() < 1e-6);

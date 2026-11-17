@@ -48,6 +48,8 @@ struct Inner {
     child: Option<Child>,
     port: u16,
     loaded: Option<&'static str>,
+    /// Whether the running server was started with `--taesd`.
+    preview_loaded: bool,
     offload: bool,
     busy: bool,
     last_used: Instant,
@@ -66,6 +68,7 @@ impl SdServer {
             child: None,
             port: 0,
             loaded: None,
+            preview_loaded: false,
             offload: true,
             busy: false,
             last_used: Instant::now(),
@@ -208,6 +211,18 @@ impl SdServer {
             std::fs::create_dir_all(parent)?;
         }
 
+        let (client, preview_loaded) = {
+            let inner = self.inner.lock().expect("server mutex");
+            (inner.client.clone(), inner.preview_loaded)
+        };
+        // `tae` is only valid when the server loaded the preview weights;
+        // otherwise it would decode every step with the full VAE.
+        let preview_mode = match (request.previews, preview_loaded) {
+            (false, _) => "none",
+            (true, true) => "tae",
+            (true, false) => "proj",
+        };
+
         let mut payload = json!({
             "prompt": request.prompt,
             "width": request.width,
@@ -215,7 +230,8 @@ impl SdServer {
             "seed": request.seed,
             "batch_count": 1,
             "output_format": "png",
-            "preview": "none",
+            "preview": preview_mode,
+            "preview_interval": 1,
             "sample_params": {
                 "sample_method": request.sampler.as_str(),
                 "sample_steps": request.steps,
@@ -232,7 +248,6 @@ impl SdServer {
             payload["ref_images"] = json!(images);
         }
 
-        let client = self.inner.lock().expect("server mutex").client.clone();
         let submit_url = format!("http://127.0.0.1:{port}/sdcpp/v1/img_gen");
         let response = client
             .post(&submit_url)
@@ -260,6 +275,7 @@ impl SdServer {
 
         let started = Instant::now();
         let mut last_step = None;
+        let mut last_preview = None;
         loop {
             if started.elapsed() > JOB_TIMEOUT {
                 let message = "generation timed out".to_string();
@@ -286,6 +302,20 @@ impl SdServer {
                     current: step.0,
                     total: step.1,
                 });
+            }
+
+            if let Some(preview) = &job.preview
+                && last_preview != Some(preview.step)
+            {
+                last_preview = Some(preview.step);
+                if let Ok(png) = base64::engine::general_purpose::STANDARD.decode(&preview.b64_json)
+                {
+                    let _ = progress.send_blocking(Progress::Preview {
+                        step: preview.step,
+                        total: preview.total_steps,
+                        png,
+                    });
+                }
             }
 
             match job.status.as_str() {
@@ -401,6 +431,14 @@ impl Inner {
             }
             command.arg("--llm_vision").arg(vision);
         }
+        let preview_weights = model.preview_weights(&self.config.models_dir);
+        if let Some(weights) = &preview_weights {
+            // Preview-only: the full VAE still decodes the final image.
+            command
+                .arg("--taesd")
+                .arg(weights)
+                .arg("--taesd-preview-only");
+        }
         for arg in model.extra_args {
             command.arg(arg);
         }
@@ -437,6 +475,7 @@ impl Inner {
         self.port = port;
         self.offload = offload;
         self.loaded = Some(model.id);
+        self.preview_loaded = preview_weights.is_some();
         self.wait_ready(model)
     }
 
@@ -449,6 +488,7 @@ impl Inner {
             {
                 self.child = None;
                 self.loaded = None;
+                self.preview_loaded = false;
                 bail!(
                     "sd-server exited with {status} while loading {} (see {})",
                     model.label,
@@ -488,6 +528,7 @@ impl Inner {
             let _ = child.wait();
         }
         self.loaded = None;
+        self.preview_loaded = false;
     }
 }
 
@@ -525,6 +566,7 @@ struct JobSubmitted {
 struct Job {
     status: String,
     progress: Option<JobProgress>,
+    preview: Option<JobPreview>,
     result: Option<JobResult>,
     error: Option<JobError>,
 }
@@ -550,6 +592,13 @@ struct JobProgress {
     completed: Option<u32>,
     total: Option<u32>,
     unit: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JobPreview {
+    step: u32,
+    total_steps: u32,
+    b64_json: String,
 }
 
 #[derive(Deserialize)]

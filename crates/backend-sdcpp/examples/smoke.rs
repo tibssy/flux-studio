@@ -24,6 +24,7 @@ fn request(prompt: &str, output: &str, references: Vec<PathBuf>) -> GenerateRequ
         sampler: Sampler::Euler,
         offload: true,
         reference_images: references,
+        previews: true,
         output: PathBuf::from(output),
     }
 }
@@ -38,6 +39,7 @@ fn run(backend: &SdServer, request: &GenerateRequest) -> anyhow::Result<()> {
                 Progress::Failed(error) => print!(" failed: {error}"),
                 Progress::Cancelled => print!(" cancelled"),
                 Progress::Done(_) => {}
+                Progress::Preview { .. } => {}
                 Progress::Log(_) => {}
             }
             use std::io::Write;

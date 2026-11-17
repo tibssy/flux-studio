@@ -26,10 +26,15 @@ Milestone 3 (packaged desktop app):
   reference, while text-to-image runs stay text-to-image. Loading a reference
   or crop adopts its aspect ratio at the current MP target
 - **history** with details and delete actions per row; delete removes the PNG,
-  thumbnail and database entry
+  thumbnail and database entry. Images derived from another result (edits,
+  effects and upscales) are grouped under their source with an indent and a
+  collapsible chain counter; chains start collapsed
 - clicking a history image shows it on the canvas with the effects menu,
   upscale, edit and crop actions and restores its prompt, model, style, size
   and seed
+- **live step previews** on the canvas: `sd-server` streams a TAE-decoded frame
+  for each sampling step and the canvas crossfades between them, with a
+  Preferences toggle and ~11 MB optional preview weights per model family
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,

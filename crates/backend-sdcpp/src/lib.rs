@@ -75,6 +75,7 @@ fn role_label(role: ModelRole) -> &'static str {
         ModelRole::ClipEncoder => "CLIP-L encoder",
         ModelRole::VisionEncoder => "vision encoder",
         ModelRole::Upscaler => "upscaler",
+        ModelRole::Preview => "preview weights",
     }
 }
 
@@ -396,6 +397,7 @@ mod tests {
             sampler: flux_core::Sampler::Euler,
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
+            previews: false,
             output: "/tmp/out.png".into(),
         };
         let args = build_args(Path::new("/models"), preset, &request);
@@ -429,6 +431,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            previews: false,
             output: "/tmp/out.png".into(),
         };
         let args: Vec<String> = build_args(Path::new("/models"), preset, &request)
@@ -462,6 +465,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            previews: false,
             output: "/tmp/out.png".into(),
         };
         let args: Vec<String> = build_args(Path::new("/models"), preset, &request)

@@ -104,6 +104,8 @@ pub(crate) struct Ui {
     pub history_list: gtk::ListBox,
     pub new_button: gtk::Button,
     pub entries: RefCell<Vec<Generation>>,
+    /// Chain roots whose descendants are hidden in the sidebar.
+    pub collapsed_groups: RefCell<std::collections::HashSet<i64>>,
     pub model_dropdown: gtk::DropDown,
     pub models: RefCell<Vec<&'static ModelPreset>>,
     pub rebuilding_models: Cell<bool>,
@@ -183,6 +185,21 @@ fn install_styles() {
              color: @accent_fg_color;
              border-radius: 6px;
              padding: 4px 10px;
+         }
+         .history-guide {
+             background-color: alpha(@accent_bg_color, 0.45);
+             border-radius: 1px;
+         }
+         .history-toggle {
+             background-color: alpha(@accent_bg_color, 0.22);
+             color: @accent_color;
+             border-radius: 8px;
+             padding: 1px 5px;
+             min-width: 0;
+             min-height: 0;
+         }
+         .history-toggle:hover {
+             background-color: alpha(@accent_bg_color, 0.35);
          }
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
@@ -334,6 +351,7 @@ fn build_ui(app: &adw::Application) {
         history_list: side.history_list,
         new_button: side.new_button,
         entries: RefCell::new(Vec::new()),
+        collapsed_groups: RefCell::new(std::collections::HashSet::new()),
         model_dropdown: side.model_dropdown,
         models: RefCell::new(Vec::new()),
         rebuilding_models: Cell::new(false),
@@ -373,10 +391,9 @@ fn build_ui(app: &adw::Application) {
     setup_zoom_overlay(&ui);
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
-        for entry in &entries {
-            history_view::add_row(&ui, entry, false);
-        }
         *ui.entries.borrow_mut() = entries;
+        history_view::collapse_all_groups(&ui);
+        history_view::rebuild(&ui);
     }
 
     if let Err(error) = ui.config.borrow().save() {
@@ -757,6 +774,7 @@ pub(crate) fn refresh_model_list(ui: &Rc<Ui>) {
     let labels: Vec<&str> = installed.iter().map(|preset| preset.label).collect();
     let list = gtk::StringList::new(&labels);
     *ui.models.borrow_mut() = installed;
+    ui.rebuilding_models.set(true);
     ui.model_dropdown.set_model(Some(&list));
 
     let is_empty = ui.models.borrow().is_empty();
@@ -765,6 +783,7 @@ pub(crate) fn refresh_model_list(ui: &Rc<Ui>) {
 
     if is_empty {
         ui.model_dropdown.set_selected(gtk::INVALID_LIST_POSITION);
+        ui.rebuilding_models.set(false);
         refresh_model(ui);
         return;
     }
@@ -777,6 +796,7 @@ pub(crate) fn refresh_model_list(ui: &Rc<Ui>) {
         .position(|preset| preset.id == active)
         .unwrap_or(0);
     ui.model_dropdown.set_selected(index as u32);
+    ui.rebuilding_models.set(false);
 
     let selected_id = ui.models.borrow()[index].id.to_string();
     {
@@ -816,7 +836,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
     }
 
     let model = active_preset(ui);
-    let missing = model.missing(&ui.models_dir);
+    let missing = model.missing_required(&ui.models_dir);
 
     ui.model_dropdown.set_tooltip_text(Some(model.description));
     ui.reference_button.set_visible(model.supports_edit);
@@ -1009,6 +1029,21 @@ fn sync_history_selection(ui: &Rc<Ui>) {
     }
 }
 
+/// Paint `texture` on the canvas, crossfading from whichever frame is visible.
+///
+/// The stack has two picture children so consecutive updates animate instead
+/// of snapping, which makes step previews and history navigation feel smooth.
+fn crossfade_to_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
+    let rounded = rounded_paintable::RoundedPaintable::new(texture);
+    let (target, picture) = match ui.stack.visible_child_name().as_deref() {
+        Some("image") => ("back", &ui.picture_back),
+        Some("back") => ("image", &ui.picture),
+        _ => ("image", &ui.picture),
+    };
+    picture.set_paintable(Some(&rounded));
+    ui.stack.set_visible_child_name(target);
+}
+
 pub(crate) fn update_image_view(ui: &Rc<Ui>) {
     let (display, reference) = {
         let state = ui.state.borrow();
@@ -1020,9 +1055,7 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
             Ok(texture) => {
                 ui.image_size
                     .set((texture.width() as u32, texture.height() as u32));
-                let rounded = rounded_paintable::RoundedPaintable::new(&texture);
-                ui.picture.set_paintable(Some(&rounded));
-                ui.stack.set_visible_child_name("image");
+                crossfade_to_texture(ui, &texture);
             }
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "failed to load image");
@@ -1821,7 +1854,10 @@ fn generate(
     let reference = ui.state.borrow().reference.clone();
     let keep_reference = mode.keeps_reference();
     let output_dir = ui.config.borrow().output_dir.clone();
-    let offload = ui.config.borrow().offload;
+    let (offload, previews) = {
+        let config = ui.config.borrow();
+        (config.offload, config.show_previews)
+    };
 
     let output = output_dir.join(format!("{}-{}.png", slugify(&base_prompt), now_millis()));
 
@@ -1834,6 +1870,7 @@ fn generate(
     request.seed = seed;
     request.sampler = model.sampler;
     request.offload = offload;
+    request.previews = previews;
     request.reference_images = reference.iter().cloned().collect();
 
     ui.generating.set(true);
@@ -1886,6 +1923,16 @@ fn generate(
                         .set_text(Some(&format!("Step {current}/{total}")));
                     ui.status.set_text(&format!("Step {current}/{total}"));
                 }
+                Progress::Preview { step, total, png } => {
+                    let bytes = glib::Bytes::from(&png);
+                    match gdk::Texture::from_bytes(&bytes) {
+                        Ok(texture) => crossfade_to_texture(&ui, &texture),
+                        Err(error) => tracing::warn!(%error, "invalid preview frame"),
+                    }
+                    ui.progress.set_fraction(step as f64 / total.max(1) as f64);
+                    ui.progress.set_text(Some(&format!("Step {step}/{total}")));
+                    ui.status.set_text(&format!("Step {step}/{total}"));
+                }
                 Progress::Log(line) => tracing::debug!(target: "sd-cli", "{line}"),
                 Progress::Cancelled => {
                     ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
@@ -1921,7 +1968,7 @@ fn generate(
                     });
 
                     match inserted {
-                        Ok(id) => {
+                        Ok((id, parent_id)) => {
                             if let Err(error) = write_thumbnail(&path, id) {
                                 tracing::warn!(%error, "failed to write thumbnail");
                             }
@@ -1940,10 +1987,11 @@ fn generate(
                                 reference_path: reference_for_history.clone(),
                                 kind: mode.kind().into(),
                                 source_path: source_path_for_history.clone(),
+                                parent_id,
                             };
                             ui.entries.borrow_mut().insert(0, entry.clone());
-                            history_view::add_row(&ui, &entry, true);
                             trim_history(&ui);
+                            history_view::rebuild(&ui);
                             history_view::highlight(&ui, Path::new(&entry.image_path));
                             update_image_actions(&ui);
                         }
@@ -1981,6 +2029,8 @@ fn generate(
 }
 
 fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
+    // Replace any live preview frame with the state's current image again.
+    update_image_view(ui);
     match mode {
         GenerationMode::Colorize
         | GenerationMode::Recover
@@ -2271,20 +2321,13 @@ fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     };
 
     // Alternate between the two picture children so the stack can crossfade.
-    let (target, back) = if ui.stack.visible_child_name().as_deref() == Some("image") {
-        ("back", &ui.picture_back)
-    } else {
-        ("image", &ui.picture)
-    };
-    let rounded = rounded_paintable::RoundedPaintable::new(&texture);
-    back.set_paintable(Some(&rounded));
     ui.image_size
         .set((texture.width() as u32, texture.height() as u32));
     ui.state.borrow_mut().preview(path.to_path_buf());
     ui.reference_name.set_text("");
     ui.reference_name.set_tooltip_text(None);
     ui.reference_bar.set_visible(false);
-    ui.stack.set_visible_child_name(target);
+    crossfade_to_texture(ui, &texture);
     sync_history_selection(ui);
     update_image_actions(ui);
     true
@@ -2453,7 +2496,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                 });
 
                 match inserted {
-                    Ok(id) => {
+                    Ok((id, parent_id)) => {
                         if let Err(error) = write_thumbnail(&image.path, id) {
                             tracing::warn!(%error, "failed to write thumbnail");
                         }
@@ -2472,10 +2515,12 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                             reference_path: None,
                             kind: "upscale".into(),
                             source_path: Some(source_path),
+                            parent_id,
                         };
                         ui.entries.borrow_mut().insert(0, entry.clone());
-                        history_view::add_row(&ui, &entry, true);
                         trim_history(&ui);
+                        history_view::rebuild(&ui);
+                        history_view::highlight(&ui, Path::new(&entry.image_path));
                     }
                     Err(error) => {
                         tracing::error!(%error, "failed to record upscale");
@@ -2529,14 +2574,9 @@ fn finish(ui: &Rc<Ui>, message: &str) {
 }
 
 fn trim_history(ui: &Rc<Ui>) {
-    loop {
-        if ui.entries.borrow().len() <= HISTORY_LIMIT {
-            break;
-        }
-        ui.entries.borrow_mut().pop();
-        if let Some(row) = ui.history_list.last_child() {
-            ui.history_list.remove(&row);
-        }
+    let mut entries = ui.entries.borrow_mut();
+    while entries.len() > HISTORY_LIMIT {
+        entries.pop();
     }
 }
 
