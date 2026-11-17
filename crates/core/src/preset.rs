@@ -177,6 +177,58 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
     extra_args: &[],
 };
 
+/// FLUX.2 klein 9B: the larger sibling of klein 4B, with the same 4-step
+/// distillation and multi-reference editing.
+///
+/// Weights are under the **FLUX Non-Commercial License**, so the download sits
+/// behind the in-app license confirmation.
+pub const FLUX2_KLEIN_9B: ModelPreset = ModelPreset {
+    id: "flux2-klein-9b",
+    label: "FLUX.2 klein 9B",
+    description: "4-step distilled · 9B · needs ~10 GB of RAM",
+    files: &[
+        ModelFileSpec {
+            role: ModelRole::Diffusion,
+            rel_path: "diffusion/flux-2-klein-9b-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q4_K_M.gguf",
+            approx_bytes: 5_673_900_320,
+        },
+        ModelFileSpec {
+            role: ModelRole::Vae,
+            rel_path: "vae/flux2-vae.safetensors",
+            url: "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
+            approx_bytes: 336_211_292,
+        },
+        ModelFileSpec {
+            role: ModelRole::TextEncoder,
+            rel_path: "text_encoders/Qwen3-8B-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+            approx_bytes: 5_027_784_512,
+        },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef2.safetensors",
+            url: "https://huggingface.co/madebyollin/taef2/resolve/main/taef2.safetensors",
+            approx_bytes: 10_700_000,
+        },
+    ],
+    steps: 4,
+    cfg: 1.0,
+    sampler: Sampler::Euler,
+    default_width: 768,
+    default_height: 768,
+    supports_edit: true,
+    max_references: 10,
+    license: Some(ModelLicense {
+        name: "FLUX Non-Commercial License",
+        holder: "Black Forest Labs",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/blob/main/LICENSE.txt",
+        summary: "Non-commercial use only. Commercial use requires a license from Black Forest Labs.",
+        requires_acceptance: true,
+    }),
+    extra_args: &[],
+};
+
 pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
     id: "flux3-klein",
     label: "FLUX.3 Image klein",
@@ -336,7 +388,13 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     extra_args: &["--clip-on-cpu"],
 };
 
-pub const PRESETS: &[ModelPreset] = &[FLUX1_SCHNELL, FLUX2_KLEIN_4B, FLUX3_KLEIN, FIBO2_EDIT_TURBO];
+pub const PRESETS: &[ModelPreset] = &[
+    FLUX1_SCHNELL,
+    FLUX2_KLEIN_4B,
+    FLUX2_KLEIN_9B,
+    FLUX3_KLEIN,
+    FIBO2_EDIT_TURBO,
+];
 
 pub fn preset(id: &str) -> Option<&'static ModelPreset> {
     PRESETS.iter().find(|preset| preset.id == id)
@@ -415,6 +473,7 @@ mod tests {
     #[test]
     fn only_llm_presets_expose_a_prompt_encoder() {
         assert!(FLUX2_KLEIN_4B.llm_encoder().is_some());
+        assert!(FLUX2_KLEIN_9B.llm_encoder().is_some());
         assert!(FLUX3_KLEIN.llm_encoder().is_some());
         assert!(FIBO2_EDIT_TURBO.llm_encoder().is_some());
         assert!(FLUX1_SCHNELL.llm_encoder().is_none());
@@ -426,6 +485,9 @@ mod tests {
         let fibo = FIBO2_EDIT_TURBO.license.expect("fibo has a license");
         assert!(fibo.requires_acceptance);
         assert_eq!(fibo.name, "CC BY-NC 4.0");
+        let klein9b = FLUX2_KLEIN_9B.license.expect("klein 9B has a license");
+        assert!(klein9b.requires_acceptance);
+        assert_eq!(klein9b.name, "FLUX Non-Commercial License");
         assert!(
             !FLUX2_KLEIN_4B
                 .license
@@ -458,6 +520,7 @@ mod tests {
             }
         }
         assert_eq!(FLUX3_KLEIN.max_references, 10);
+        assert_eq!(FLUX2_KLEIN_9B.max_references, 10);
         assert_eq!(FLUX1_SCHNELL.max_references, 0);
     }
 

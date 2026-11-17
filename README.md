@@ -4,9 +4,10 @@ A GTK4 / libadwaita desktop app for **local image generation and editing**,
 driven by [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 No Python, no PyTorch, no cloud.
 
-Ships with four presets — FLUX.2 klein 4B, FLUX.3 Image klein, Fibo 2.0 Edit
-Turbo and FLUX.1 schnell — and uses each model's native reference-image support
-for editing, so text-to-image and image-to-image share the same weights.
+Ships with five presets — FLUX.2 klein 4B, FLUX.2 klein 9B, FLUX.3 Image klein,
+Fibo 2.0 Edit Turbo and FLUX.1 schnell — and uses each model's native
+reference-image support for editing, so text-to-image and image-to-image share
+the same weights.
 
 ## Status
 
@@ -67,14 +68,18 @@ Milestone 3 (packaged desktop app):
 | Preset | Files | Steps | Measured @768² | Peak VRAM |
 |---|---|---|---|---|
 | **FLUX.2 klein 4B** (default) | 5.4 GB | 4 | **78–85 s** | 4.7 GB |
+| **FLUX.2 klein 9B** | 11.0 GB | 4 | **148–158 s** | 7.8 GB |
 | **FLUX.3 Image klein** | 6.3 GB | 16 | **254 s** | 5.0 GB |
 | **Fibo 2.0 Edit Turbo** | 9.2 GB | 4 | — | — |
 | **FLUX.1 schnell** | 10.1 GB | 4 | — | — |
 
 FLUX.3 is the quality option (~3× slower on Maxwell); klein 4B is the fastest
-4-step model that fits this GPU. Fibo and FLUX.3 support reference-image
-editing; FLUX.1 schnell is text-to-image only. Fibo needs a vision projector
-(`--llm_vision`) and is slower than klein 4B.
+4-step model that fits this GPU. Klein 9B is the same 4-step distillation with
+a larger transformer and an 8B text encoder, so it needs ~9.5 GB of RAM
+alongside the GPU (it peaks at ~7.8 GB of VRAM with CPU offload) and runs about
+twice as slowly as klein 4B here. Fibo, klein 9B and FLUX.3 support
+reference-image editing; FLUX.1 schnell is text-to-image only. Fibo needs a
+vision projector (`--llm_vision`) and is slower than klein 4B.
 
 Measured on a Quadro M4000 (Maxwell, sm_52, 8 GB), CUDA 12.9,
 `GGML_CUDA_NCCL=OFF`, with `--offload-to-cpu --vae-tiling`.
@@ -187,12 +192,13 @@ leaves the composer closed; press **Edit** when you want to type a prompt.
 The reference strip above the canvas is the multi-image workspace: add images
 with the `+` tile or the image button, click a thumbnail to show it on the
 canvas, and remove one with its ×. Add order defines the prompt indices:
-refer to the inputs as `<image_1>`, `<image_2>`, and so on (Fibo 2.0 and
-FLUX.3 klein both accept multi-image instructions). With several references the
-sidebar MP and ratio set the output size; a single reference still matches its
-aspect ratio. FLUX.1 schnell cannot edit images, and the strip caps at the
-model's reference limit. History chains follow `<image_1>`, so a result is
-grouped under the history entry that produced the first reference.
+refer to the inputs as `<image_1>`, `<image_2>`, and so on (Fibo 2.0, FLUX.2
+klein 9B and FLUX.3 klein all accept multi-image instructions). With several
+references the sidebar MP and ratio set the output size; a single reference
+still matches its aspect ratio. FLUX.1 schnell cannot edit images, and the
+strip caps at the model's reference limit. History chains follow `<image_1>`,
+so a result is grouped under the history entry that produced the first
+reference.
 
 **Colorize**, **Recover**, **Enhance**, **Denoise**, **Photoreal** and
 **Replace background** use built-in prompts and preserve the source aspect at
@@ -252,6 +258,12 @@ Data locations:
 - **FLUX.2 klein 4B** and the FLUX.2 VAE from the Apache-2.0
   [Comfy-Org Klein repository](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B)
   are **Apache-2.0**; commercial use is allowed.
+- **FLUX.2 klein 9B** weights use the **FLUX Non-Commercial License** from Black
+  Forest Labs and are for **non-commercial use only**; commercial use needs a
+  license from BFL ([license text](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/blob/main/LICENSE.txt)).
+  The preset requires an explicit in-app confirmation before downloading. The
+  GGUF is [unsloth's quantization](https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF),
+  which inherits the same license.
 - **FLUX.3 Image klein** weights use the **FLUX Community License**, which
   allows commercial use below the revenue threshold defined in that license;
   review the [model card](https://huggingface.co/black-forest-labs/flux-3-image-klein)
@@ -265,9 +277,9 @@ Data locations:
 - **FLUX.1 schnell** is **Apache-2.0**. The preset uses the
   [unsloth GGUF](https://huggingface.co/unsloth/FLUX.1-schnell-GGUF) for the
   transformer, a Q4_K_M T5-XXL encoder and the Apache-2.0 FLUX VAE.
-- **Qwen3-4B**, **Qwen3-VL-4B-Instruct**, **T5-XXL** and **CLIP-L** text
-  encoders are **Apache-2.0** (CLIP-L is MIT). The FLUX VAE is Apache-2.0,
-  repacked by Meituan LongCat.
+- **Qwen3-4B**, **Qwen3-8B**, **Qwen3-VL-4B-Instruct**, **T5-XXL** and
+  **CLIP-L** text encoders are **Apache-2.0** (CLIP-L is MIT). The FLUX VAE is
+  Apache-2.0, repacked by Meituan LongCat.
 - **LFM2.5-VL-450M** is released under the **LFM Open License v1.0**; commercial
   use is allowed below the revenue threshold defined in that license. The
   weights are downloaded at runtime from Liquid AI's Hugging Face repository.
@@ -290,7 +302,7 @@ Data locations:
 # 1. backend binaries, sd-cli + sd-server (~5 min; needs /opt/cuda and gcc-14)
 ./scripts/build-sdcpp.sh
 
-# 2. model weights (5.4 GB, or pass flux3-klein / all)
+# 2. model weights (5.4 GB, or pass flux2-klein-9b / flux3-klein / all)
 ./scripts/fetch-models.sh
 
 # 2b. optional upscaler weights (~150 MB)

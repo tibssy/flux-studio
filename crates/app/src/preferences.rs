@@ -14,8 +14,12 @@ const REPO_URL: &str = "https://github.com/tibssy/flux-studio";
 const ISSUES_URL: &str = "https://github.com/tibssy/flux-studio/issues";
 const LICENSE_URL: &str = "https://github.com/tibssy/flux-studio/blob/main/LICENSE";
 const FLUX2_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B";
+const FLUX2_KLEIN_9B_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B";
+const FLUX2_KLEIN_9B_LICENSE_URL: &str =
+    "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/blob/main/LICENSE.txt";
 const FLUX3_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/flux-3-image-klein";
 const QWEN3_URL: &str = "https://huggingface.co/Qwen/Qwen3-4B";
+const QWEN3_8B_URL: &str = "https://huggingface.co/Qwen/Qwen3-8B";
 const QWEN3_VL_URL: &str = "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct";
 const LFM25_VL_URL: &str = "https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF";
 const LFM25_VL_LICENSE_URL: &str =
@@ -23,6 +27,7 @@ const LFM25_VL_LICENSE_URL: &str =
 const SDCPP_URL: &str = "https://github.com/leejet/stable-diffusion.cpp";
 const LLAMA_CPP_URL: &str = "https://github.com/ggml-org/llama.cpp";
 const FLUX2_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF";
+const FLUX2_9B_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF";
 const FLUX3_GGUF_URL: &str = "https://huggingface.co/leejet/flux-3-image-klein-GGUF";
 const FIBO_URL: &str = "https://huggingface.co/briaai/Fibo-2.0-edit-turbo";
 const FIBO_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-nc/4.0/";
@@ -598,6 +603,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX2_KLEIN_URL,
     ));
     credits_group.add(&link_row(
+        "FLUX.2 klein 9B",
+        "Black Forest Labs · FLUX Non-Commercial License",
+        FLUX2_KLEIN_9B_URL,
+    ));
+    credits_group.add(&link_row(
         "FLUX.3 Image klein",
         "Black Forest Labs",
         FLUX3_KLEIN_URL,
@@ -606,6 +616,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "Qwen3-4B text encoder",
         "Alibaba Qwen · Apache-2.0",
         QWEN3_URL,
+    ));
+    credits_group.add(&link_row(
+        "Qwen3-8B text encoder",
+        "Alibaba Qwen · Apache-2.0",
+        QWEN3_8B_URL,
     ));
     credits_group.add(&link_row(
         "Qwen3-VL-4B-Instruct text encoder",
@@ -669,6 +684,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX2_GGUF_URL,
     ));
     credits_group.add(&link_row(
+        "FLUX.2 klein 9B GGUF quantization",
+        "unsloth · follows the FLUX Non-Commercial License",
+        FLUX2_9B_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
         "FLUX.3 GGUF quantization",
         "leejet · follows the FLUX.3 license",
         FLUX3_GGUF_URL,
@@ -701,6 +721,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "FLUX.2 klein 4B weights",
         "Apache-2.0",
         FLUX2_KLEIN_URL,
+    ));
+    legal_group.add(&link_row(
+        "FLUX.2 klein 9B weights",
+        "FLUX Non-Commercial License · non-commercial use only",
+        FLUX2_KLEIN_9B_LICENSE_URL,
     ));
     legal_group.add(&link_row(
         "FLUX.2 VAE",
