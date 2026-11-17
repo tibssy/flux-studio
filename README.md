@@ -22,9 +22,11 @@ Milestone 3 (packaged desktop app):
 - **model dropdown restricted to installed presets** and seed control in the
   sidebar
 - focused composer: prompt, Generate/Cancel and a reference-image button
-- **reference-image editing** (`-r`); edits promote their result to the next
-  reference, while text-to-image runs stay text-to-image. Loading a reference
-  or crop adopts its aspect ratio at the current MP target
+- **reference-image editing** (`-r`) with up to 10 reference images per model;
+  numbered thumbnails above the canvas add, preview and remove references.
+  Edits promote their result to the next reference, while text-to-image runs
+  stay text-to-image. Loading a reference or crop adopts its aspect ratio at
+  the current MP target
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry. Images derived from another result (edits,
   effects and upscales) are grouped under their source with an indent and a
@@ -160,24 +162,37 @@ without leaving the app.
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
-| Edit an image | pick a reference with the image button, or open a history row and press Edit |
+| Add reference images | image button in the prompt field, or `+` in the reference strip (multi-select) |
+| Preview / remove a reference | click its thumbnail / click the × on the thumbnail |
+| Edit an image | pick references with the image button, or open a history row and press Edit |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
 
-Editing is iterative: the first edit uses the selected reference, and each
+Editing is iterative: the first edit uses the selected references, and each
 following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
 leave edit mode and generate from text alone; the prompt is kept.
 
 After a generation the prompt field slides away. Use the pencil button on the
-image (or `New`) to bring it back; the pencil makes the current image the edit
-reference. **Back** leaves edit mode without clearing the image. The selection
-button crops a region of the image with an animated zoom and uses the crop as
-the new reference; undo plays the same zoom in reverse. Selecting a reference
-or cropping keeps the action toolbar visible and leaves the composer closed;
-press **Edit** when you want to type a prompt. `Ctrl+B` toggles the sidebar.
+image (or `New`) to bring it back; with no references selected, the pencil makes
+the current image the edit reference. **Back** leaves edit mode without clearing
+the image. The selection button crops a region of the image with an animated
+zoom and uses the crop as the new reference; undo plays the same zoom in
+reverse. Selecting references or cropping keeps the action toolbar visible and
+leaves the composer closed; press **Edit** when you want to type a prompt.
+`Ctrl+B` toggles the sidebar.
+
+The reference strip above the canvas is the multi-image workspace: add images
+with the `+` tile or the image button, click a thumbnail to show it on the
+canvas, and remove one with its ×. Add order defines the prompt indices:
+refer to the inputs as `<image_1>`, `<image_2>`, and so on (Fibo 2.0 and
+FLUX.3 klein both accept multi-image instructions). With several references the
+sidebar MP and ratio set the output size; a single reference still matches its
+aspect ratio. FLUX.1 schnell cannot edit images, and the strip caps at the
+model's reference limit. History chains follow `<image_1>`, so a result is
+grouped under the history entry that produced the first reference.
 
 **Colorize**, **Recover**, **Enhance**, **Denoise**, **Photoreal** and
 **Replace background** use built-in prompts and preserve the source aspect at

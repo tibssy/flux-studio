@@ -359,6 +359,9 @@ mod tests {
             duration_ms: 1000,
             image_path: "/tmp/out.png".into(),
             reference_path: reference.map(str::to_string),
+            reference_paths: reference
+                .map(|path| vec![path.to_string()])
+                .unwrap_or_default(),
             kind: kind.into(),
             source_path: None,
             parent_id: None,

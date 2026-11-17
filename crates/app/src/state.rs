@@ -1,39 +1,50 @@
 use std::path::PathBuf;
 
-/// Which image is on screen and whether it is also the edit reference.
+/// Which image is on screen and which images are used as edit references.
 ///
-/// Text-to-image runs keep `reference` empty even after producing a result, so
+/// Text-to-image runs keep `references` empty even after producing a result, so
 /// pressing Generate again makes a fresh image from the prompt. Edits promote
 /// their result to the next reference, which makes iteration natural.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct AppState {
     pub display: Option<PathBuf>,
-    pub reference: Option<PathBuf>,
+    /// Images passed to the model as `ref_images`, in prompt order.
+    pub references: Vec<PathBuf>,
 }
 
 impl AppState {
-    /// Start a text-to-image run: clear the canvas and the reference.
+    /// Start a text-to-image run: clear the canvas and the references.
     pub fn new_image(&mut self) {
         self.display = None;
-        self.reference = None;
+        self.references.clear();
     }
 
-    /// Load an existing image (history click or file picker) for editing.
+    /// Load an existing image as the only edit reference.
     pub fn load(&mut self, path: PathBuf) {
         self.display = Some(path.clone());
-        self.reference = Some(path);
+        self.references = vec![path];
     }
 
-    /// Show an image without making it the edit reference.
+    /// Show an image without changing the edit references.
+    pub fn select_display(&mut self, path: PathBuf) {
+        self.display = Some(path);
+    }
+
+    /// Browse an image: show it and drop the edit references.
     pub fn preview(&mut self, path: PathBuf) {
         self.display = Some(path);
-        self.reference = None;
+        self.references.clear();
     }
 
     /// Apply a finished generation.
     pub fn on_result(&mut self, path: PathBuf, was_edit: bool) {
         self.display = Some(path.clone());
-        self.reference = if was_edit { Some(path) } else { None };
+        self.references = if was_edit { vec![path] } else { Vec::new() };
+    }
+
+    /// Whether at least one reference is selected.
+    pub fn is_editing(&self) -> bool {
+        !self.references.is_empty()
     }
 }
 
@@ -85,7 +96,7 @@ mod tests {
         let mut state = AppState::default();
         state.on_result(PathBuf::from("/tmp/a.png"), false);
         assert_eq!(state.display, Some(PathBuf::from("/tmp/a.png")));
-        assert_eq!(state.reference, None);
+        assert!(state.references.is_empty());
     }
 
     #[test]
@@ -94,16 +105,36 @@ mod tests {
         state.load(PathBuf::from("/tmp/ref.png"));
         state.on_result(PathBuf::from("/tmp/out.png"), true);
         assert_eq!(state.display, Some(PathBuf::from("/tmp/out.png")));
-        assert_eq!(state.reference, Some(PathBuf::from("/tmp/out.png")));
+        assert_eq!(state.references, vec![PathBuf::from("/tmp/out.png")]);
     }
 
     #[test]
-    fn preview_shows_an_image_without_making_a_reference() {
+    fn preview_shows_an_image_without_keeping_references() {
         let mut state = AppState::default();
         state.load(PathBuf::from("/tmp/ref.png"));
         state.preview(PathBuf::from("/tmp/other.png"));
         assert_eq!(state.display, Some(PathBuf::from("/tmp/other.png")));
-        assert_eq!(state.reference, None);
+        assert!(state.references.is_empty());
+    }
+
+    #[test]
+    fn select_display_keeps_the_references() {
+        let mut state = AppState::default();
+        state.load(PathBuf::from("/tmp/ref.png"));
+        state.references.push(PathBuf::from("/tmp/second.png"));
+        state.select_display(PathBuf::from("/tmp/second.png"));
+        assert_eq!(state.display, Some(PathBuf::from("/tmp/second.png")));
+        assert_eq!(state.references.len(), 2);
+    }
+
+    #[test]
+    fn load_replaces_the_reference_set() {
+        let mut state = AppState {
+            references: vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.png")],
+            ..Default::default()
+        };
+        state.load(PathBuf::from("/tmp/c.png"));
+        assert_eq!(state.references, vec![PathBuf::from("/tmp/c.png")]);
     }
 
     #[test]
@@ -112,7 +143,7 @@ mod tests {
         state.load(PathBuf::from("/tmp/ref.png"));
         state.new_image();
         assert_eq!(state.display, None);
-        assert_eq!(state.reference, None);
+        assert!(state.references.is_empty());
     }
 
     #[test]
@@ -120,11 +151,11 @@ mod tests {
         let mut stack = UndoStack::default();
         let first = AppState {
             display: Some(PathBuf::from("/tmp/a.png")),
-            reference: None,
+            references: Vec::new(),
         };
         let second = AppState {
             display: Some(PathBuf::from("/tmp/b.png")),
-            reference: Some(PathBuf::from("/tmp/b.png")),
+            references: vec![PathBuf::from("/tmp/b.png")],
         };
         stack.push(&first, (1.0, 2.0, 3.0, 4.0));
         stack.push(&second, (5.0, 6.0, 7.0, 8.0));

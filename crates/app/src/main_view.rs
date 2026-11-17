@@ -5,8 +5,9 @@ pub(crate) struct MainView {
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
     pub picture_back: gtk::Picture,
-    pub reference_bar: gtk::Box,
-    pub reference_name: gtk::Label,
+    pub reference_strip: gtk::Box,
+    pub reference_thumbs: gtk::Box,
+    pub reference_add: gtk::Button,
     pub prompt: gtk::TextView,
     pub composer: gtk::Revealer,
     pub reference_button: gtk::Button,
@@ -266,26 +267,31 @@ pub(crate) fn build() -> MainView {
     image_overlay.add_overlay(&image_actions);
     image_overlay.add_overlay(&nav_actions);
 
-    let reference_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    reference_bar.add_css_class("reference-bar");
-    reference_bar.set_visible(false);
-    reference_bar.set_margin_top(12);
-    reference_bar.set_margin_start(12);
-    reference_bar.set_margin_end(12);
-    let reference_icon = gtk::Image::from_icon_name("image-x-generic-symbolic");
+    let reference_thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    reference_thumbs.set_valign(gtk::Align::Center);
+
     let reference_caption = gtk::Label::builder()
-        .label("Editing reference")
-        .css_classes(["caption"])
+        .label("References")
+        .css_classes(["caption", "dim-label"])
         .build();
-    let reference_name = gtk::Label::builder()
-        .xalign(0.0)
-        .hexpand(true)
-        .ellipsize(gtk::pango::EllipsizeMode::Middle)
-        .css_classes(["caption"])
+
+    let reference_add = gtk::Button::builder()
+        .icon_name("list-add-symbolic")
+        .tooltip_text("Add reference images")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat", "circular"])
         .build();
-    reference_bar.append(&reference_icon);
-    reference_bar.append(&reference_caption);
-    reference_bar.append(&reference_name);
+
+    let reference_strip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    reference_strip.add_css_class("reference-strip");
+    reference_strip.set_visible(false);
+    reference_strip.set_margin_top(8);
+    reference_strip.set_margin_bottom(4);
+    reference_strip.set_margin_start(12);
+    reference_strip.set_margin_end(12);
+    reference_strip.append(&reference_caption);
+    reference_strip.append(&reference_thumbs);
+    reference_strip.append(&reference_add);
 
     let prompt = gtk::TextView::builder()
         .wrap_mode(gtk::WrapMode::WordChar)
@@ -306,7 +312,7 @@ pub(crate) fn build() -> MainView {
 
     let reference_button = gtk::Button::builder()
         .icon_name("image-x-generic-symbolic")
-        .tooltip_text("Choose a reference image to edit")
+        .tooltip_text("Add reference images to edit")
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
@@ -380,7 +386,7 @@ pub(crate) fn build() -> MainView {
     bottom.append(&status);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&reference_bar);
+    root.append(&reference_strip);
     root.append(&image_overlay);
     root.append(&bottom);
 
@@ -389,8 +395,9 @@ pub(crate) fn build() -> MainView {
         stack,
         picture,
         picture_back,
-        reference_bar,
-        reference_name,
+        reference_strip,
+        reference_thumbs,
+        reference_add,
         prompt,
         composer,
         reference_button,

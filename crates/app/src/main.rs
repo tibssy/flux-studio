@@ -11,6 +11,7 @@ mod state;
 mod upscale_dialog;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -60,8 +61,11 @@ pub(crate) struct Ui {
     pub stack: gtk::Stack,
     pub picture: gtk::Picture,
     pub picture_back: gtk::Picture,
-    pub reference_bar: gtk::Box,
-    pub reference_name: gtk::Label,
+    pub reference_strip: gtk::Box,
+    pub reference_thumbs: gtk::Box,
+    pub reference_add: gtk::Button,
+    /// Scaled 48×48 textures for the reference strip, keyed by source path.
+    pub reference_thumbnails: RefCell<HashMap<PathBuf, gdk::Texture>>,
     pub prompt: gtk::TextView,
     pub generate: gtk::Button,
     pub cancel: gtk::Button,
@@ -184,11 +188,32 @@ fn install_styles() {
          .prompt-field:focus-within {
              border-color: @card_bg_color;
          }
-         .reference-bar {
-             background-color: @accent_bg_color;
-             color: @accent_fg_color;
+         .reference-strip {
+             background-color: @card_bg_color;
+             border: 1px solid alpha(@view_fg_color, 0.12);
+             border-radius: 10px;
+             padding: 4px 8px;
+         }
+         .reference-thumb {
+             padding: 0;
+             min-width: 0;
+             min-height: 0;
+             border-radius: 8px;
+         }
+         .reference-index {
+             background-color: alpha(@window_fg_color, 0.8);
+             color: @window_bg_color;
              border-radius: 6px;
-             padding: 4px 10px;
+             padding: 0 4px;
+             font-size: 0.7em;
+             font-weight: bold;
+         }
+         .reference-remove {
+             min-width: 18px;
+             min-height: 18px;
+             padding: 0;
+             margin: 2px;
+             background-color: alpha(@window_bg_color, 0.85);
          }
          .history-guide {
              background-color: alpha(@accent_bg_color, 0.45);
@@ -316,8 +341,10 @@ fn build_ui(app: &adw::Application) {
         stack: view.stack,
         picture: view.picture,
         picture_back: view.picture_back,
-        reference_bar: view.reference_bar,
-        reference_name: view.reference_name,
+        reference_strip: view.reference_strip,
+        reference_thumbs: view.reference_thumbs,
+        reference_add: view.reference_add,
+        reference_thumbnails: RefCell::new(HashMap::new()),
         prompt: view.prompt,
         generate: view.generate,
         cancel: view.cancel,
@@ -455,7 +482,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     {
         let ui = ui.clone();
         let button = ui.reference_button.clone();
-        button.connect_clicked(move |_| choose_reference(&ui));
+        button.connect_clicked(move |_| choose_references(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.reference_add.clone();
+        button.connect_clicked(move |_| choose_references(&ui));
     }
     {
         let ui = ui.clone();
@@ -846,6 +878,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
         ui.model_hint.add_css_class("error");
         ui.generate.set_sensitive(false);
         ui.reference_button.set_visible(false);
+        render_reference_strip(ui);
         if prompt_helper.is_some() {
             ui.improve_button
                 .set_tooltip_text(Some("No model installed"));
@@ -859,6 +892,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
 
     ui.model_dropdown.set_tooltip_text(Some(model.description));
     ui.reference_button.set_visible(model.supports_edit);
+    render_reference_strip(ui);
 
     if missing.is_empty() {
         ui.model_hint.set_text(&format!(
@@ -1032,7 +1066,13 @@ pub(crate) fn set_size(ui: &Rc<Ui>, width: u32, height: u32) {
 }
 
 /// Match the target ratio to the reference image, keeping the current MP.
+///
+/// Only applies to a single reference: with several inputs the sidebar target
+/// is the source of truth.
 fn fit_reference_size(ui: &Rc<Ui>) {
+    if ui.state.borrow().references.len() != 1 {
+        return;
+    }
     let (width, height) = ui.image_size.get();
     if width == 0 || height == 0 {
         return;
@@ -1064,10 +1104,7 @@ fn crossfade_to_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
 }
 
 pub(crate) fn update_image_view(ui: &Rc<Ui>) {
-    let (display, reference) = {
-        let state = ui.state.borrow();
-        (state.display.clone(), state.reference.clone())
-    };
+    let display = ui.state.borrow().display.clone();
 
     match display {
         Some(path) => match gdk::Texture::from_filename(&path) {
@@ -1091,27 +1128,94 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
         }
     }
 
-    match reference {
-        Some(path) => {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string());
-            ui.reference_name.set_text(&name);
-            ui.reference_name
-                .set_tooltip_text(Some(&path.display().to_string()));
-            ui.reference_bar.set_visible(true);
-        }
-        None => {
-            ui.reference_name.set_text("");
-            ui.reference_name.set_tooltip_text(None);
-            ui.reference_bar.set_visible(false);
-        }
-    }
+    render_reference_strip(ui);
 
     ui.ratio_area.queue_draw();
     sync_history_selection(ui);
     update_image_actions(ui);
+}
+
+/// Rebuild the reference thumbnails above the canvas.
+fn render_reference_strip(ui: &Rc<Ui>) {
+    while let Some(child) = ui.reference_thumbs.first_child() {
+        ui.reference_thumbs.remove(&child);
+    }
+
+    let references = ui.state.borrow().references.clone();
+    ui.reference_strip.set_visible(!references.is_empty());
+
+    let max = active_preset(ui).max_references as usize;
+    for (index, path) in references.iter().enumerate() {
+        let number = index + 1;
+        let picture = gtk::Picture::builder()
+            .width_request(48)
+            .height_request(48)
+            .content_fit(gtk::ContentFit::Cover)
+            .build();
+        if let Some(texture) = reference_thumbnail(ui, path) {
+            picture.set_paintable(Some(&texture));
+        }
+
+        let image = gtk::Button::builder()
+            .child(&picture)
+            .tooltip_text(format!(
+                "Image {number} · refer to it as <image_{number}>\n{}",
+                path.display()
+            ))
+            .css_classes(["flat", "reference-thumb"])
+            .build();
+        {
+            let ui = ui.clone();
+            let path = path.clone();
+            image.connect_clicked(move |_| {
+                if references_busy(&ui) {
+                    return;
+                }
+                ui.state.borrow_mut().select_display(path.clone());
+                update_image_view(&ui);
+                ui.status.set_text(&format!(
+                    "Reference {number} of {count}",
+                    count = ui.state.borrow().references.len()
+                ));
+            });
+        }
+
+        let badge = gtk::Label::builder()
+            .label(number.to_string())
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .margin_start(3)
+            .margin_top(3)
+            .css_classes(["reference-index"])
+            .build();
+
+        let remove = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Remove this reference")
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .css_classes(["flat", "circular", "reference-remove"])
+            .build();
+        {
+            let ui = ui.clone();
+            let path = path.clone();
+            remove.connect_clicked(move |_| remove_reference(&ui, &path));
+        }
+
+        let tile = gtk::Overlay::new();
+        tile.set_child(Some(&image));
+        tile.add_overlay(&badge);
+        tile.add_overlay(&remove);
+        ui.reference_thumbs.append(&tile);
+    }
+
+    let at_max = references.len() >= max;
+    ui.reference_add.set_sensitive(!at_max);
+    ui.reference_add.set_tooltip_text(Some(if at_max {
+        "Maximum number of references reached"
+    } else {
+        "Add reference images"
+    }));
 }
 
 pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
@@ -1130,7 +1234,7 @@ pub(crate) fn show_composer(ui: &Rc<Ui>, show: bool) {
 pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let (has_image, editing) = {
         let state = ui.state.borrow();
-        (state.display.is_some(), state.reference.is_some())
+        (state.display.is_some(), state.is_editing())
     };
     let composing = ui.composer.reveals_child();
     let generating = ui.generating.get();
@@ -1183,11 +1287,26 @@ fn edit_current_image(ui: &Rc<Ui>) {
     let Some(path) = ui.state.borrow().display.clone() else {
         return;
     };
-    ui.state.borrow_mut().reference = Some(path);
+    let added = {
+        let mut state = ui.state.borrow_mut();
+        if state.references.is_empty() {
+            state.references.push(path);
+            true
+        } else {
+            false
+        }
+    };
     update_image_view(ui);
-    fit_reference_size(ui);
+    if added {
+        fit_reference_size(ui);
+    }
     show_composer(ui, true);
-    ui.status.set_text("Editing reference");
+    let count = ui.state.borrow().references.len();
+    ui.status.set_text(&if count == 1 {
+        "Editing reference".to_string()
+    } else {
+        format!("Editing with {count} references")
+    });
 }
 
 fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
@@ -1583,9 +1702,19 @@ fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.generate.set_sensitive(enabled);
 }
 
-fn choose_reference(ui: &Rc<Ui>) {
+fn choose_references(ui: &Rc<Ui>) {
+    if references_busy(ui) {
+        return;
+    }
+    if !active_preset(ui).supports_edit {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot edit images.",
+            active_preset(ui).label
+        )));
+        return;
+    }
     let dialog = gtk::FileDialog::builder()
-        .title("Choose a reference image")
+        .title("Choose reference images")
         .modal(true)
         .build();
     let filter = gtk::FileFilter::new();
@@ -1600,25 +1729,152 @@ fn choose_reference(ui: &Rc<Ui>) {
 
     let ui = ui.clone();
     let window = ui.window.clone();
-    dialog.open(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
-        let Ok(file) = result else {
+    dialog.open_multiple(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+        let Ok(files) = result else {
             return;
         };
-        let Some(path) = file.path() else {
-            return;
-        };
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        ui.undo.borrow_mut().clear();
-        ui.state.borrow_mut().load(path);
-        update_image_view(&ui);
-        fit_reference_size(&ui);
-        show_composer(&ui, false);
-        ui.status
-            .set_text(&format!("Reference ready · {name} · press Edit to prompt"));
+        let mut paths = Vec::new();
+        for index in 0..files.n_items() {
+            if let Some(path) = files
+                .item(index)
+                .and_downcast::<gtk::gio::File>()
+                .and_then(|file| file.path())
+            {
+                paths.push(path);
+            }
+        }
+        add_references(&ui, paths);
     });
+}
+
+/// Append picked images to the edit reference set.
+fn add_references(ui: &Rc<Ui>, paths: Vec<PathBuf>) {
+    if references_busy(ui) {
+        return;
+    }
+    let max = active_preset(ui).max_references as usize;
+    if max == 0 {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot edit images.",
+            active_preset(ui).label
+        )));
+        return;
+    }
+
+    let mut added = 0usize;
+    let mut capped = false;
+    let (was_empty, count) = {
+        let mut state = ui.state.borrow_mut();
+        let was_empty = state.references.is_empty();
+        let mut first_added = None;
+        for path in paths {
+            if state.references.len() >= max {
+                capped = true;
+                break;
+            }
+            if state
+                .references
+                .iter()
+                .any(|existing| same_file(existing, &path))
+            {
+                continue;
+            }
+            if first_added.is_none() {
+                first_added = Some(path.clone());
+            }
+            state.references.push(path);
+            added += 1;
+        }
+        if was_empty && let Some(path) = first_added {
+            state.display = Some(path);
+        }
+        (was_empty, state.references.len())
+    };
+
+    if added == 0 {
+        return;
+    }
+
+    ui.undo.borrow_mut().clear();
+    update_image_view(ui);
+    if was_empty && count == 1 {
+        fit_reference_size(ui);
+    }
+    show_composer(ui, false);
+    let label = if count == 1 {
+        "Reference ready".to_string()
+    } else {
+        format!("{count} references ready")
+    };
+    ui.status
+        .set_text(&format!("{label} · press Edit to prompt"));
+
+    if capped {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Using {count} references (the maximum for this model)."
+        )));
+    }
+}
+
+fn remove_reference(ui: &Rc<Ui>, path: &Path) {
+    if references_busy(ui) {
+        return;
+    }
+    let (removed, count) = {
+        let mut state = ui.state.borrow_mut();
+        let before = state.references.len();
+        state.references.retain(|reference| reference != path);
+        (before != state.references.len(), state.references.len())
+    };
+    if !removed {
+        return;
+    }
+
+    {
+        let mut state = ui.state.borrow_mut();
+        let showing_removed = state.display.as_deref() == Some(path);
+        if showing_removed && !state.references.is_empty() {
+            let next = state.references.first().cloned();
+            state.display = next;
+        }
+    }
+    update_image_view(ui);
+    if count == 0 {
+        ui.status.set_text("Viewing image");
+    } else {
+        ui.status.set_text(&format!("{count} reference(s) ready"));
+    }
+}
+
+fn references_busy(ui: &Rc<Ui>) -> bool {
+    ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get()
+}
+
+/// A 48×48 cover-scaled texture for a reference thumbnail.
+fn reference_thumbnail(ui: &Rc<Ui>, path: &Path) -> Option<gdk::Texture> {
+    if let Some(texture) = ui.reference_thumbnails.borrow().get(path).cloned() {
+        return Some(texture);
+    }
+    let image = image::open(path).ok()?;
+    let thumb = image.resize_to_fill(48, 48, image::imageops::FilterType::Triangle);
+    let mut png = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    let bytes = glib::Bytes::from(&png);
+    let texture = gdk::Texture::from_bytes(&bytes).ok()?;
+    ui.reference_thumbnails
+        .borrow_mut()
+        .insert(path.to_path_buf(), texture.clone());
+    Some(texture)
+}
+
+fn same_file(left: &Path, right: &Path) -> bool {
+    left == right
+        || matches!(
+            (left.canonicalize(), right.canonicalize()),
+            (Ok(left), Ok(right)) if left == right
+        )
 }
 
 fn improve_prompt(ui: &Rc<Ui>) {
@@ -1798,7 +2054,15 @@ fn current_style_id(ui: &Rc<Ui>) -> &'static str {
 }
 
 fn start_generation(ui: &Rc<Ui>) {
-    let mode = if ui.state.borrow().reference.is_some() {
+    let editing = ui.state.borrow().is_editing();
+    if editing && !active_preset(ui).supports_edit {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot edit images. Remove the references or pick another model.",
+            active_preset(ui).label
+        )));
+        return;
+    }
+    let mode = if editing {
         GenerationMode::Edit
     } else {
         GenerationMode::Generate
@@ -1875,7 +2139,7 @@ fn generate(
     let effective_prompt = flux_core::style::compose_prompt(&base_prompt, style_id);
 
     let (width, height) = target_size(ui);
-    let reference = ui.state.borrow().reference.clone();
+    let references = ui.state.borrow().references.clone();
     let keep_reference = mode.keeps_reference();
     let output_dir = ui.config.borrow().output_dir.clone();
     let (offload, previews) = {
@@ -1895,7 +2159,7 @@ fn generate(
     request.sampler = model.sampler;
     request.offload = offload;
     request.previews = previews;
-    request.reference_images = reference.iter().cloned().collect();
+    request.reference_images = references.clone();
 
     ui.generating.set(true);
     set_controls_enabled(ui, false);
@@ -1928,9 +2192,13 @@ fn generate(
     let style_for_history = style_id.to_string();
     let seed_for_history = seed.to_string();
     let steps_for_history = request.steps;
-    let reference_for_history = reference
-        .as_ref()
+    let reference_for_history = references
+        .first()
         .map(|path| path.to_string_lossy().into_owned());
+    let reference_paths_for_history: Vec<String> = references
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
     let source_path_for_history = source_path;
     let started = Instant::now();
 
@@ -1987,6 +2255,7 @@ fn generate(
                         duration_ms,
                         image_path: &image_path,
                         reference_path: reference_for_history.as_deref(),
+                        reference_paths: &reference_paths_for_history,
                         kind: mode.kind(),
                         source_path: source_path_for_history.as_deref(),
                     });
@@ -2009,6 +2278,7 @@ fn generate(
                                 duration_ms,
                                 image_path,
                                 reference_path: reference_for_history.clone(),
+                                reference_paths: reference_paths_for_history.clone(),
                                 kind: mode.kind().into(),
                                 source_path: source_path_for_history.clone(),
                                 parent_id,
@@ -2066,7 +2336,7 @@ fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
         | GenerationMode::Night
         | GenerationMode::Day
         | GenerationMode::Expand => {
-            ui.state.borrow_mut().reference = None;
+            ui.state.borrow_mut().references.clear();
             update_image_view(ui);
             show_composer(ui, false);
         }
@@ -2108,9 +2378,9 @@ pub(crate) fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empt
     };
 
     // Keep the source shape, but use the MP target from the sidebar.
-    fit_reference_size(ui);
-    ui.state.borrow_mut().reference = Some(source.clone());
+    ui.state.borrow_mut().references = vec![source.clone()];
     update_image_view(ui);
+    fit_reference_size(ui);
     ui.prompt.buffer().set_text(prompt);
     ui.seed_entry.set_text("");
     generate(
@@ -2199,9 +2469,9 @@ fn start_lighting_conversion(ui: &Rc<Ui>, source: PathBuf, to_night: bool) {
     };
 
     // Keep the source shape, but use the MP target from the sidebar.
-    fit_reference_size(ui);
-    ui.state.borrow_mut().reference = Some(source.clone());
+    ui.state.borrow_mut().references = vec![source.clone()];
     update_image_view(ui);
+    fit_reference_size(ui);
     ui.prompt.buffer().set_text(prompt);
     ui.seed_entry.set_text("");
     generate(
@@ -2310,7 +2580,7 @@ fn expand_image(ui: &Rc<Ui>) {
         prompt
     };
     let style_id = current_style_id(ui);
-    ui.state.borrow_mut().reference = Some(source.clone());
+    ui.state.borrow_mut().references = vec![source.clone()];
     update_image_view(ui);
     generate(
         ui,
@@ -2329,7 +2599,7 @@ fn back_to_view(ui: &Rc<Ui>) {
     cancel_zoom(ui);
     set_crop_mode(ui, false);
     ui.crop_button.set_active(false);
-    ui.state.borrow_mut().reference = None;
+    ui.state.borrow_mut().references.clear();
     update_image_view(ui);
     show_composer(ui, false);
     ui.status.set_text("Viewing image");
@@ -2349,9 +2619,7 @@ fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     ui.image_size
         .set((texture.width() as u32, texture.height() as u32));
     ui.state.borrow_mut().preview(path.to_path_buf());
-    ui.reference_name.set_text("");
-    ui.reference_name.set_tooltip_text(None);
-    ui.reference_bar.set_visible(false);
+    render_reference_strip(ui);
     crossfade_to_texture(ui, &texture);
     sync_history_selection(ui);
     update_image_actions(ui);
@@ -2516,6 +2784,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                     duration_ms,
                     image_path: &image_path,
                     reference_path: None,
+                    reference_paths: &[],
                     kind: "upscale",
                     source_path: Some(&source_path),
                 });
@@ -2538,6 +2807,7 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
                             duration_ms,
                             image_path,
                             reference_path: None,
+                            reference_paths: Vec::new(),
                             kind: "upscale".into(),
                             source_path: Some(source_path),
                             parent_id,

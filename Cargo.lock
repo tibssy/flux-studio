@@ -682,6 +682,7 @@ dependencies = [
  "image",
  "libadwaita",
  "rusqlite",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

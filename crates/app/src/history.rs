@@ -17,6 +17,8 @@ pub struct Generation {
     pub duration_ms: i64,
     pub image_path: String,
     pub reference_path: Option<String>,
+    /// All reference images used for the run, in prompt order.
+    pub reference_paths: Vec<String>,
     /// `generate`, `upscale`, `colorize`, or `expand`.
     pub kind: String,
     /// Original image for an upscale entry.
@@ -37,6 +39,8 @@ pub struct NewGeneration<'a> {
     pub duration_ms: i64,
     pub image_path: &'a str,
     pub reference_path: Option<&'a str>,
+    /// All reference images used for the run, in prompt order.
+    pub reference_paths: &'a [String],
     pub kind: &'a str,
     pub source_path: Option<&'a str>,
 }
@@ -74,6 +78,7 @@ impl History {
                  duration_ms INTEGER NOT NULL,
                  image_path  TEXT    NOT NULL,
                  reference_path TEXT,
+                 reference_paths TEXT,
                  kind        TEXT    NOT NULL DEFAULT 'generate',
                  source_path TEXT
              );
@@ -94,6 +99,7 @@ impl History {
             "TEXT NOT NULL DEFAULT 'none'",
         )?;
         ensure_column(&conn, "generations", "reference_path", "TEXT")?;
+        ensure_column(&conn, "generations", "reference_paths", "TEXT")?;
         ensure_column(
             &conn,
             "generations",
@@ -135,12 +141,17 @@ impl History {
                 .optional()?,
             None => None,
         };
+        let reference_paths = if generation.reference_paths.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(generation.reference_paths)?)
+        };
         self.conn.execute(
             "INSERT INTO generations
                  (prompt, model, style, width, height, steps, seed, created_at,
-                  duration_ms, image_path, reference_path, kind, source_path,
-                  parent_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  duration_ms, image_path, reference_path, reference_paths, kind,
+                  source_path, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 generation.prompt,
                 generation.model,
@@ -153,6 +164,7 @@ impl History {
                 generation.duration_ms,
                 generation.image_path,
                 generation.reference_path,
+                reference_paths,
                 generation.kind,
                 generation.source_path,
                 parent_id,
@@ -164,13 +176,26 @@ impl History {
     pub fn recent(&self, limit: usize) -> Result<Vec<Generation>> {
         let mut statement = self.conn.prepare(
             "SELECT id, prompt, model, style, width, height, steps, seed,
-                    created_at, duration_ms, image_path, reference_path, kind,
-                    source_path, parent_id
+                    created_at, duration_ms, image_path, reference_path,
+                    reference_paths, kind, source_path, parent_id
              FROM generations
              ORDER BY created_at DESC, id DESC
              LIMIT ?1",
         )?;
         let rows = statement.query_map([limit as i64], |row| {
+            let reference_path: Option<String> = row.get(11)?;
+            let raw_paths: Option<String> = row.get(12)?;
+            let mut reference_paths = raw_paths
+                .as_deref()
+                .and_then(|paths| serde_json::from_str::<Vec<String>>(paths).ok())
+                .unwrap_or_default();
+            if reference_paths.is_empty() {
+                // Databases written before multi-reference support only kept
+                // the first path.
+                if let Some(path) = reference_path.clone() {
+                    reference_paths.push(path);
+                }
+            }
             Ok(Generation {
                 id: row.get(0)?,
                 prompt: row.get(1)?,
@@ -183,10 +208,11 @@ impl History {
                 created_at: row.get(8)?,
                 duration_ms: row.get(9)?,
                 image_path: row.get(10)?,
-                reference_path: row.get(11)?,
-                kind: row.get(12)?,
-                source_path: row.get(13)?,
-                parent_id: row.get(14)?,
+                reference_path,
+                reference_paths,
+                kind: row.get(13)?,
+                source_path: row.get(14)?,
+                parent_id: row.get(15)?,
             })
         })?;
 
@@ -253,6 +279,7 @@ mod tests {
             duration_ms: 1000,
             image_path: "/tmp/a.png",
             reference_path: None,
+            reference_paths: &[],
             kind: "generate",
             source_path: None,
         }
@@ -292,6 +319,23 @@ mod tests {
         history.insert(&generation).unwrap();
         let recent = history.recent(1).unwrap();
         assert_eq!(recent[0].reference_path.as_deref(), Some("/tmp/ref.png"));
+        assert_eq!(recent[0].reference_paths, vec!["/tmp/ref.png"]);
+    }
+
+    #[test]
+    fn records_multiple_reference_paths() {
+        let history = History::open_in_memory().unwrap();
+        let mut generation = sample("edit", "flux2-klein-4b");
+        generation.reference_path = Some("/tmp/a.png");
+        let paths = ["/tmp/a.png".to_string(), "/tmp/b.png".to_string()];
+        generation.reference_paths = &paths;
+        history.insert(&generation).unwrap();
+        let recent = history.recent(1).unwrap();
+        assert_eq!(recent[0].reference_path.as_deref(), Some("/tmp/a.png"));
+        assert_eq!(
+            recent[0].reference_paths,
+            vec!["/tmp/a.png".to_string(), "/tmp/b.png".to_string()]
+        );
     }
 
     #[test]

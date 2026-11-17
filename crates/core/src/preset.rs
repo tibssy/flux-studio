@@ -62,6 +62,8 @@ pub struct ModelPreset {
     pub default_height: u32,
     /// Whether the model accepts `-r <image>` reference images.
     pub supports_edit: bool,
+    /// Largest number of reference images the model accepts (0 without edit).
+    pub max_references: u32,
     /// Licensing for the weights, shown in Preferences and Credits.
     pub license: Option<ModelLicense>,
     /// Extra backend flags specific to this family.
@@ -164,6 +166,7 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    max_references: 10,
     license: Some(ModelLicense {
         name: "Apache-2.0",
         holder: "Black Forest Labs",
@@ -210,6 +213,7 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    max_references: 10,
     license: Some(ModelLicense {
         name: "FLUX Community License",
         holder: "Black Forest Labs",
@@ -266,6 +270,7 @@ pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    max_references: 10,
     license: Some(ModelLicense {
         name: "CC BY-NC 4.0",
         holder: "BRIA AI",
@@ -320,6 +325,7 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: false,
+    max_references: 0,
     license: Some(ModelLicense {
         name: "Apache-2.0",
         holder: "Black Forest Labs",
@@ -432,6 +438,27 @@ mod tests {
                 .expect("schnell has a license")
                 .requires_acceptance
         );
+    }
+
+    #[test]
+    fn edit_presets_declare_a_reference_limit() {
+        for preset in PRESETS {
+            if preset.supports_edit {
+                assert!(
+                    preset.max_references > 0,
+                    "{} supports editing but rejects references",
+                    preset.id
+                );
+            } else {
+                assert_eq!(
+                    preset.max_references, 0,
+                    "{} cannot edit but declares a reference limit",
+                    preset.id
+                );
+            }
+        }
+        assert_eq!(FLUX3_KLEIN.max_references, 10);
+        assert_eq!(FLUX1_SCHNELL.max_references, 0);
     }
 
     #[test]

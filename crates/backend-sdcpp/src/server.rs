@@ -207,6 +207,13 @@ impl SdServer {
         if !request.reference_images.is_empty() && !model.supports_edit {
             bail!("{} does not support reference images", model.label);
         }
+        if request.reference_images.len() > model.max_references as usize {
+            bail!(
+                "{} accepts at most {} reference images",
+                model.label,
+                model.max_references
+            );
+        }
         if let Some(parent) = request.output.parent() {
             std::fs::create_dir_all(parent)?;
         }

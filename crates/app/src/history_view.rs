@@ -362,11 +362,11 @@ pub(crate) fn add_row(
             entry.duration_ms as f64 / 1000.0,
             entry.seed,
             style_label(&entry.style),
-            entry
-                .reference_path
-                .as_deref()
-                .map(|path| format!("\nreference: {path}"))
-                .unwrap_or_default()
+            match entry.reference_paths.len() {
+                0 => String::new(),
+                1 => format!("\nreference: {}", entry.reference_paths[0]),
+                count => format!("\nreferences: {count} images"),
+            }
         )
     };
     row.set_tooltip_text(Some(&tooltip));
@@ -530,8 +530,13 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         ));
         content.append(&kv("Created", &created_label(entry.created_at)));
         if entry.kind == "generate" {
-            if let Some(reference) = entry.reference_path.as_deref() {
-                content.append(&kv("Reference", reference));
+            for (index, reference) in entry.reference_paths.iter().enumerate() {
+                let label = if entry.reference_paths.len() == 1 {
+                    "Reference".to_string()
+                } else {
+                    format!("Reference {}", index + 1)
+                };
+                content.append(&kv(&label, reference));
             }
         } else if let Some(source) = entry.source_path.as_deref() {
             content.append(&kv("Source", source));
@@ -634,7 +639,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let is_active = {
         let state = ui.state.borrow();
         state.display.as_deref() == Some(path.as_path())
-            || state.reference.as_deref() == Some(path.as_path())
+            || state.references.iter().any(|reference| reference == &path)
     };
     if is_active {
         ui.state.borrow_mut().new_image();
@@ -806,6 +811,7 @@ mod tests {
             duration_ms: 1000,
             image_path: format!("/tmp/{id}.png"),
             reference_path: None,
+            reference_paths: Vec::new(),
             kind: "generate".into(),
             source_path: None,
             parent_id: parent,
