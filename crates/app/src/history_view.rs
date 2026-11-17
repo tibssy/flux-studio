@@ -417,6 +417,7 @@ fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
 pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
     match kind {
         "upscale" => Some("Upscaled"),
+        "custom" => Some("Effect"),
         "colorize" => Some("Colorized"),
         "recover" => Some("Recovered"),
         "enhance" => Some("Enhanced"),

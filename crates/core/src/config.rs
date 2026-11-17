@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{paths, size};
 
+/// A prompt saved from an edit result and shown in the effects menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomEffect {
+    pub name: String,
+    pub prompt: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -55,6 +62,8 @@ pub struct Config {
     pub accepted_licenses: Vec<String>,
     /// Show live step previews on the canvas while sampling.
     pub show_previews: bool,
+    /// User-saved prompts shown at the bottom of the effects menu.
+    pub custom_effects: Vec<CustomEffect>,
 }
 
 impl Default for Config {
@@ -87,6 +96,7 @@ impl Default for Config {
             llama_custom_cli: None,
             accepted_licenses: Vec::new(),
             show_previews: true,
+            custom_effects: Vec::new(),
         }
     }
 }
@@ -161,6 +171,7 @@ mod tests {
         assert!(config.llama_manifest_url.is_none());
         assert!(config.llama_custom_cli.is_none());
         assert!(config.show_previews);
+        assert!(config.custom_effects.is_empty());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
         assert!((config.mp() - 0.589824).abs() < 1e-6);
@@ -197,5 +208,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.ratio(), (19, 13));
+    }
+
+    #[test]
+    fn round_trips_custom_effects() {
+        let mut config = Config::default();
+        config.custom_effects.push(CustomEffect {
+            name: "Restore".into(),
+            prompt: "repair this photo".into(),
+        });
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.custom_effects, config.custom_effects);
     }
 }

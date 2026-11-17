@@ -22,6 +22,9 @@ pub(crate) struct MainView {
     pub upscale_button: gtk::Button,
     pub effects_button: gtk::MenuButton,
     pub effects_popover: gtk::Popover,
+    pub save_effect_button: gtk::Button,
+    pub custom_effects_section: gtk::Box,
+    pub custom_effects_box: gtk::Box,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
     pub enhance_item: gtk::Button,
@@ -160,13 +163,44 @@ pub(crate) fn build() -> MainView {
     effects_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     effects_box.append(&expand_item);
 
-    let effects_popover = gtk::Popover::builder().child(&effects_box).build();
+    let custom_effects_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let custom_scroller = gtk::ScrolledWindow::builder()
+        .child(&custom_effects_box)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(240)
+        .build();
+    let custom_effects_section = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    custom_effects_section.set_visible(false);
+    custom_effects_section.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let custom_heading = gtk::Label::builder()
+        .label("Your effects")
+        .xalign(0.0)
+        .margin_top(4)
+        .margin_start(10)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    custom_effects_section.append(&custom_heading);
+    custom_effects_section.append(&custom_scroller);
+    effects_box.append(&custom_effects_section);
+
+    let effects_popover = gtk::Popover::builder()
+        .child(&effects_box)
+        .css_classes(["effects-popover"])
+        .build();
     let effects_button = gtk::MenuButton::builder()
         .icon_name("applications-graphics-symbolic")
         .tooltip_text("Image effects")
         .visible(false)
         .css_classes(["osd", "circular"])
         .popover(&effects_popover)
+        .build();
+    let save_effect_button = gtk::Button::builder()
+        .icon_name("bookmark-new-symbolic")
+        .tooltip_text("Save this prompt as an effect")
+        .visible(false)
+        .css_classes(["osd", "circular"])
         .build();
     let back_button = gtk::Button::builder()
         .icon_name("go-previous-symbolic")
@@ -204,6 +238,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
     image_actions.append(&effects_button);
+    image_actions.append(&save_effect_button);
     image_actions.append(&upscale_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
@@ -371,6 +406,9 @@ pub(crate) fn build() -> MainView {
         upscale_button,
         effects_button,
         effects_popover,
+        save_effect_button,
+        custom_effects_section,
+        custom_effects_box,
         colorize_item,
         recover_item,
         enhance_item,
@@ -389,7 +427,7 @@ pub(crate) fn build() -> MainView {
     }
 }
 
-fn effect_item(icon_name: &str, title: &str, subtitle: &str) -> gtk::Button {
+pub(crate) fn effect_item(icon_name: &str, title: &str, subtitle: &str) -> gtk::Button {
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.set_valign(gtk::Align::Start);
 

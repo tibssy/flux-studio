@@ -1,4 +1,5 @@
 mod backends;
+mod effects;
 mod history;
 mod history_view;
 mod main_view;
@@ -78,6 +79,9 @@ pub(crate) struct Ui {
     pub upscale_button: gtk::Button,
     pub effects_button: gtk::MenuButton,
     pub effects_popover: gtk::Popover,
+    pub save_effect_button: gtk::Button,
+    pub custom_effects_section: gtk::Box,
+    pub custom_effects_box: gtk::Box,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
     pub enhance_item: gtk::Button,
@@ -204,6 +208,12 @@ fn install_styles() {
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
          }
+         popover.effects-popover > contents {
+             background-color: @window_bg_color;
+         }
+         popover.effects-popover > arrow {
+             background-color: @window_bg_color;
+         }
          button.active-backend-icon,
          button.active-backend-icon:disabled {
              color: @accent_bg_color;
@@ -325,6 +335,9 @@ fn build_ui(app: &adw::Application) {
         upscale_button: view.upscale_button,
         effects_button: view.effects_button,
         effects_popover: view.effects_popover,
+        save_effect_button: view.save_effect_button,
+        custom_effects_section: view.custom_effects_section,
+        custom_effects_box: view.custom_effects_box,
         colorize_item: view.colorize_item,
         recover_item: view.recover_item,
         enhance_item: view.enhance_item,
@@ -387,6 +400,7 @@ fn build_ui(app: &adw::Application) {
         .build();
 
     wire_events(&ui, &preferences_button);
+    effects::rebuild_menu(&ui);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
 
@@ -569,6 +583,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.upscale_button.clone();
         button.connect_clicked(move |_| upscale_dialog::show(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.save_effect_button.clone();
+        button.connect_clicked(move |_| effects::show_save_dialog(&ui));
     }
     {
         let ui = ui.clone();
@@ -1130,6 +1149,8 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.nav_down_button
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.effects_button.set_visible(editable);
+    ui.save_effect_button
+        .set_visible(actions && effects::current_savable_prompt(ui).is_some());
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
@@ -1716,9 +1737,10 @@ const DAY_PROMPT: &str = "transform this night scene into bright daylight, clear
 const EXPAND_PROMPT: &str = "expand the image to fill the new canvas, extending the scene naturally beyond the original borders, keep the same composition, subjects, lighting, and details";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum GenerationMode {
+pub(crate) enum GenerationMode {
     Generate,
     Edit,
+    Custom,
     Colorize,
     Recover,
     Enhance,
@@ -1737,6 +1759,7 @@ impl GenerationMode {
 
     fn kind(self) -> &'static str {
         match self {
+            Self::Custom => "custom",
             Self::Colorize => "colorize",
             Self::Recover => "recover",
             Self::Enhance => "enhance",
@@ -1752,6 +1775,7 @@ impl GenerationMode {
 
     fn done_message(self) -> &'static str {
         match self {
+            Self::Custom => "Effect applied.",
             Self::Colorize => "Image colorized.",
             Self::Recover => "Image recovered.",
             Self::Enhance => "Image enhanced.",
@@ -2032,7 +2056,8 @@ fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
     // Replace any live preview frame with the state's current image again.
     update_image_view(ui);
     match mode {
-        GenerationMode::Colorize
+        GenerationMode::Custom
+        | GenerationMode::Colorize
         | GenerationMode::Recover
         | GenerationMode::Enhance
         | GenerationMode::Denoise
@@ -2063,7 +2088,7 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
     true
 }
 
-fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
+pub(crate) fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
     if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }

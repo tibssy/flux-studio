@@ -44,7 +44,8 @@ Milestone 3 (packaged desktop app):
   and night entries are used
 - **image actions** over the canvas: an effects menu (colorize, recover,
   enhance, denoise, photoreal, replace background, day/night, expand),
-  upscale, edit, crop-to-reference, undo, and back-to-view
+  save-prompt-as-effect, upscale, edit, crop-to-reference, undo, and
+  back-to-view
 - **image upscaling** with five permissive 4× models, 2×/4× output, model
   downloads and tile-size fallback for 8 GB GPUs
 - **history navigation** with a crossfade: scroll over the image or use the
@@ -150,6 +151,8 @@ without leaving the app.
 | Convert to daylight | **Effects → To daylight** (used when the helper is not installed) |
 | Convert to night | **Effects → To night** (used when the helper is not installed) |
 | Expand the image | **Effects → Expand** (sidebar MP + ratio target) |
+| Save the edit prompt as an effect | bookmark button at the top-right of the image (edit results only) |
+| Edit or delete a saved effect | pencil / trash buttons on its row under **Effects → Your effects** |
 | Leave edit mode | **Back** button at the top-right of the image |
 | Upscale the image | zoom button at the top-right of the image (2× or 4×) |
 | Upscale from the keyboard | `Ctrl+U` |
@@ -186,6 +189,12 @@ daylight and applies the opposite prompt automatically. Without it,
 back to a built-in expansion prompt when the prompt field is empty, so it works
 directly from the canvas.
 
+After an edit, the bookmark button over the canvas saves the prompt that
+produced the image as a user effect. Saved effects appear under **Your
+effects** at the bottom of the effects menu, apply with one click, and can be
+renamed, reworded or removed with their pencil and trash buttons. They are
+stored in `config.toml`.
+
 Styles are prompt suffixes, e.g. *Cinematic* appends
 "cinematic film still, dramatic lighting, shallow depth of field, 35mm". Built-in
 options include cinematic, dynamic, photographic, anime, Disney/Pixar, 2D/3D
@@ -219,7 +228,7 @@ Data locations:
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
 | `~/.cache/flux-studio/crops/` | cropped reference images |
-| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths |
+| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths, user effects |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
 ## Licensing and legal
