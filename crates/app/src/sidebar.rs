@@ -30,6 +30,7 @@ pub(crate) fn build(
     config: &Config,
     size_cell: Rc<Cell<(u32, u32)>>,
     image_size: Rc<Cell<(u32, u32)>>,
+    size_step: u32,
 ) -> Sidebar {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.set_margin_top(12);
@@ -67,7 +68,7 @@ pub(crate) fn build(
 
     let mp = config.mp();
     let ratio = config.ratio();
-    let (width, height) = size::size_for_mp(mp, ratio);
+    let (width, height) = size::size_for_mp_step(mp, ratio, size_step);
     size_cell.set((width, height));
 
     let mp_scale = make_mp_scale(mp);

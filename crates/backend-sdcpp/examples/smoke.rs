@@ -20,6 +20,7 @@ fn request(prompt: &str, output: &str, references: Vec<PathBuf>) -> GenerateRequ
         height: 256,
         steps: 4,
         cfg: 1.0,
+        sigmas: Vec::new(),
         seed: 42,
         sampler: Sampler::Euler,
         offload: true,

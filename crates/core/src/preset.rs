@@ -64,6 +64,17 @@ pub struct ModelPreset {
     pub supports_edit: bool,
     /// Largest number of reference images the model accepts (0 without edit).
     pub max_references: u32,
+    /// Pixel grid the model's latent packing requires.
+    ///
+    /// Most presets work on multiples of 16, which is the UI grid. Models that
+    /// pack latents in larger patches (Qwen Image 2.1 uses 32) need coarser
+    /// sizes or the backend refuses the request.
+    pub size_step: u32,
+    /// Fixed sigma schedule. Empty lets the backend generate one from `steps`.
+    ///
+    /// Distilled models ship their own schedule; the sigma count decides the
+    /// real step count, so `steps` must match `sigmas.len() - 1`.
+    pub sigmas: &'static [f32],
     /// Licensing for the weights, shown in Preferences and Credits.
     pub license: Option<ModelLicense>,
     /// Extra backend flags specific to this family.
@@ -167,6 +178,8 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
     default_height: 768,
     supports_edit: true,
     max_references: 10,
+    size_step: 16,
+    sigmas: &[],
     license: Some(ModelLicense {
         name: "Apache-2.0",
         holder: "Black Forest Labs",
@@ -219,6 +232,8 @@ pub const FLUX2_KLEIN_9B: ModelPreset = ModelPreset {
     default_height: 768,
     supports_edit: true,
     max_references: 10,
+    size_step: 16,
+    sigmas: &[],
     license: Some(ModelLicense {
         name: "FLUX Non-Commercial License",
         holder: "Black Forest Labs",
@@ -266,6 +281,8 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
     default_height: 768,
     supports_edit: true,
     max_references: 10,
+    size_step: 16,
+    sigmas: &[],
     license: Some(ModelLicense {
         name: "FLUX Community License",
         holder: "Black Forest Labs",
@@ -323,6 +340,8 @@ pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
     default_height: 768,
     supports_edit: true,
     max_references: 10,
+    size_step: 16,
+    sigmas: &[],
     license: Some(ModelLicense {
         name: "CC BY-NC 4.0",
         holder: "BRIA AI",
@@ -378,6 +397,8 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     default_height: 768,
     supports_edit: false,
     max_references: 0,
+    size_step: 16,
+    sigmas: &[],
     license: Some(ModelLicense {
         name: "Apache-2.0",
         holder: "Black Forest Labs",
@@ -388,12 +409,82 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     extra_args: &["--clip-on-cpu"],
 };
 
+/// Qwen Image 2.1 Turbo: unified text-to-image and editing in one 7B model.
+///
+/// The distilled Turbo weights sample in 8 steps with their own sigma schedule,
+/// which is why the preset carries `sigmas` and the backend gets it per request.
+/// Measurements on an 8 GB Maxwell card (768², two references): ~5 min for an
+/// edit, ~3 min for text-to-image, ~10.5 GB peak RAM.
+///
+/// Weights are under the **Qwen Research License** (non-commercial only), so the
+/// preset gates the download behind an in-app licence confirmation.
+pub const QWEN_IMAGE_2_1_TURBO: ModelPreset = ModelPreset {
+    id: "qwen-image-2-1-turbo",
+    label: "Qwen Image 2.1 Turbo",
+    description: "8-step · 7B · crispest text, slower",
+    files: &[
+        ModelFileSpec {
+            role: ModelRole::Diffusion,
+            rel_path: "diffusion/qwen-image-2.1-turbo-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF/resolve/main/qwen-image-2.1-turbo-Q4_K_M.gguf",
+            approx_bytes: 4_199_565_120,
+        },
+        ModelFileSpec {
+            role: ModelRole::Vae,
+            rel_path: "vae/qwen_image_2.1_vae_bf16.safetensors",
+            url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+            approx_bytes: 675_509_688,
+        },
+        ModelFileSpec {
+            role: ModelRole::TextEncoder,
+            rel_path: "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            approx_bytes: 5_027_784_800,
+        },
+        ModelFileSpec {
+            role: ModelRole::VisionEncoder,
+            rel_path: "text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            approx_bytes: 752_289_728,
+        },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taeqi2_1.safetensors",
+            url: "https://huggingface.co/madebyollin/taeqi2_1/resolve/main/taeqi2_1.safetensors",
+            approx_bytes: 30_600_000,
+        },
+    ],
+    steps: 8,
+    cfg: 1.0,
+    sampler: Sampler::Euler,
+    default_width: 768,
+    default_height: 768,
+    supports_edit: true,
+    max_references: 10,
+    size_step: 32,
+    // The Turbo schedule shipped with the model (qwen-image-2.1-turbo).
+    sigmas: &[
+        1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0,
+    ],
+    license: Some(ModelLicense {
+        name: "Qwen Research License",
+        holder: "Alibaba Qwen, Hangzhou Tongyi Laboratory",
+        url: "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+        summary: "Non-commercial use only. Commercial use requires a license from Alibaba Qwen.",
+        requires_acceptance: true,
+    }),
+    // Without a small prefix cache the 8 GB card runs out of memory while
+    // decoding at 1024 px.
+    extra_args: &["--model-args", "qwen_image_2_1_prefix_cache_type=q8_0"],
+};
+
 pub const PRESETS: &[ModelPreset] = &[
     FLUX1_SCHNELL,
     FLUX2_KLEIN_4B,
     FLUX2_KLEIN_9B,
     FLUX3_KLEIN,
     FIBO2_EDIT_TURBO,
+    QWEN_IMAGE_2_1_TURBO,
 ];
 
 pub fn preset(id: &str) -> Option<&'static ModelPreset> {
@@ -476,6 +567,7 @@ mod tests {
         assert!(FLUX2_KLEIN_9B.llm_encoder().is_some());
         assert!(FLUX3_KLEIN.llm_encoder().is_some());
         assert!(FIBO2_EDIT_TURBO.llm_encoder().is_some());
+        assert!(QWEN_IMAGE_2_1_TURBO.llm_encoder().is_some());
         assert!(FLUX1_SCHNELL.llm_encoder().is_none());
         assert!(FLUX1_SCHNELL.file(ModelRole::ClipEncoder).is_some());
     }
@@ -488,6 +580,9 @@ mod tests {
         let klein9b = FLUX2_KLEIN_9B.license.expect("klein 9B has a license");
         assert!(klein9b.requires_acceptance);
         assert_eq!(klein9b.name, "FLUX Non-Commercial License");
+        let qwen = QWEN_IMAGE_2_1_TURBO.license.expect("qwen has a license");
+        assert!(qwen.requires_acceptance);
+        assert_eq!(qwen.name, "Qwen Research License");
         assert!(
             !FLUX2_KLEIN_4B
                 .license
@@ -500,6 +595,51 @@ mod tests {
                 .expect("schnell has a license")
                 .requires_acceptance
         );
+    }
+
+    #[test]
+    fn fixed_sigma_schedules_match_their_step_count() {
+        for preset in PRESETS {
+            if preset.sigmas.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                preset.sigmas.len() as u32,
+                preset.steps + 1,
+                "{} declares {} sigmas for {} steps",
+                preset.id,
+                preset.sigmas.len(),
+                preset.steps
+            );
+            assert_eq!(
+                preset.sigmas.last().copied(),
+                Some(0.0),
+                "{} must end its schedule at zero",
+                preset.id
+            );
+        }
+        assert_eq!(QWEN_IMAGE_2_1_TURBO.steps, 8);
+        assert_eq!(QWEN_IMAGE_2_1_TURBO.sigmas.len(), 9);
+    }
+
+    #[test]
+    fn size_steps_divide_the_size_limits() {
+        for preset in PRESETS {
+            assert!(
+                crate::size::MIN_SIZE.is_multiple_of(preset.size_step),
+                "{} size step {} does not divide the minimum size",
+                preset.id,
+                preset.size_step
+            );
+            assert!(
+                crate::size::MAX_SIZE.is_multiple_of(preset.size_step),
+                "{} size step {} does not divide the maximum size",
+                preset.id,
+                preset.size_step
+            );
+        }
+        assert_eq!(QWEN_IMAGE_2_1_TURBO.size_step, 32);
+        assert!(PRESETS.iter().any(|preset| preset.size_step == 16));
     }
 
     #[test]

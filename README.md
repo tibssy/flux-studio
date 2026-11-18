@@ -4,10 +4,10 @@ A GTK4 / libadwaita desktop app for **local image generation and editing**,
 driven by [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 No Python, no PyTorch, no cloud.
 
-Ships with five presets — FLUX.2 klein 4B, FLUX.2 klein 9B, FLUX.3 Image klein,
-Fibo 2.0 Edit Turbo and FLUX.1 schnell — and uses each model's native
-reference-image support for editing, so text-to-image and image-to-image share
-the same weights.
+Ships with six presets — FLUX.2 klein 4B, FLUX.2 klein 9B, FLUX.3 Image klein,
+Fibo 2.0 Edit Turbo, Qwen Image 2.1 Turbo and FLUX.1 schnell — and uses each
+model's native reference-image support for editing, so text-to-image and
+image-to-image share the same weights.
 
 ## Status
 
@@ -15,7 +15,8 @@ Milestone 3 (packaged desktop app):
 
 - **hideable sidebar** with a Setup section and a History section
 - **megapixel + aspect-ratio target** (0.01–2.00 MP, 12 landscape/portrait
-  presets, 128–2048 px sides on a 16 px grid) with a live aspect-ratio preview
+  presets, 128–2048 px sides on a 16 px grid, 32 px for Qwen) with a live
+  aspect-ratio preview
   that overlays the current image's aspect when it differs from the target,
   plus a snapped-size readout
 - **style presets** (cinematic, dynamic, 2D, 3D, photographic, anime) applied
@@ -77,6 +78,7 @@ Milestone 3 (packaged desktop app):
 | **FLUX.2 klein 9B** | 11.0 GB | 4 | **148–158 s** | 7.8 GB |
 | **FLUX.3 Image klein** | 6.3 GB | 16 | **254 s** | 5.0 GB |
 | **Fibo 2.0 Edit Turbo** | 9.2 GB | 4 | — | — |
+| **Qwen Image 2.1 Turbo** | 10.7 GB | 8 | **192 s** | 6.5 GB |
 | **FLUX.1 schnell** | 10.1 GB | 4 | — | — |
 
 FLUX.3 is the quality option (~3× slower on Maxwell); klein 4B is the fastest
@@ -86,6 +88,12 @@ alongside the GPU (it peaks at ~7.8 GB of VRAM with CPU offload) and runs about
 twice as slowly as klein 4B here. Fibo, klein 9B and FLUX.3 support
 reference-image editing; FLUX.1 schnell is text-to-image only. Fibo needs a
 vision projector (`--llm_vision`) and is slower than klein 4B.
+
+Qwen Image 2.1 Turbo is the typography option: it renders long, small text
+correctly where the FLUX models drift, costs about 3× klein 4B at the same size,
+and peaks at ~10.5 GB of RAM with the 8B text encoder and vision projector. A
+1024² edit takes ~11 min here, so 768² is the practical size; the preset snaps
+to a 32 px grid because Qwen packs latents in 32 px patches.
 
 Measured on a Quadro M4000 (Maxwell, sm_52, 8 GB), CUDA 12.9,
 `GGML_CUDA_NCCL=OFF`, with `--offload-to-cpu --vae-tiling`.
@@ -199,7 +207,8 @@ The reference strip above the canvas is the multi-image workspace: add images
 with the `+` tile or the image button, click a thumbnail to show it on the
 canvas, and remove one with its ×. Add order defines the prompt indices:
 refer to the inputs as `<image_1>`, `<image_2>`, and so on (Fibo 2.0, FLUX.2
-klein 9B and FLUX.3 klein all accept multi-image instructions). With several
+klein 9B, FLUX.3 klein and Qwen Image 2.1 all accept multi-image
+instructions). With several
 references the sidebar MP and ratio set the output size; a single reference
 still matches its aspect ratio. FLUX.1 schnell cannot edit images, and the
 strip caps at the model's reference limit. History chains follow `<image_1>`,
@@ -283,8 +292,14 @@ Data locations:
 - **FLUX.1 schnell** is **Apache-2.0**. The preset uses the
   [unsloth GGUF](https://huggingface.co/unsloth/FLUX.1-schnell-GGUF) for the
   transformer, a Q4_K_M T5-XXL encoder and the Apache-2.0 FLUX VAE.
-- **Qwen3-4B**, **Qwen3-8B**, **Qwen3-VL-4B-Instruct**, **T5-XXL** and
-  **CLIP-L** text encoders are **Apache-2.0** (CLIP-L is MIT). The FLUX VAE is
+- **Qwen Image 2.1 Turbo** weights use the **Qwen Research License** and are
+  for **non-commercial use only**; commercial use needs a separate licence from
+  Alibaba Qwen ([license text](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)).
+  The preset requires an explicit in-app confirmation before downloading. The
+  GGUF is [unsloth's quantization](https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF),
+  which inherits the same license.
+- **Qwen3-4B**, **Qwen3-8B**, **Qwen3-VL-4B-Instruct**, **Qwen3-VL-8B-Instruct**,
+  **T5-XXL** and **CLIP-L** text encoders are **Apache-2.0** (CLIP-L is MIT). The FLUX VAE is
   Apache-2.0, repacked by Meituan LongCat.
 - **LFM2.5-VL-450M** is released under the **LFM Open License v1.0**; commercial
   use is allowed below the revenue threshold defined in that license. The
@@ -427,7 +442,8 @@ strings.
 ## Adding a model
 
 Add a `ModelPreset` in `crates/core/src/preset.rs` (files, URLs, steps, CFG,
-sampler, edit support) and append it to `PRESETS`. The dropdown, downloader,
+sampler, edit support, size grid and optional fixed sigma schedule) and append
+it to `PRESETS`. The dropdown, downloader,
 history and backend pick it up automatically. Styles live in
 `crates/core/src/style.rs`; add a `StylePreset` with a prompt suffix and append
 it to `STYLES`. Arbitrary user-supplied models from Hugging Face are planned

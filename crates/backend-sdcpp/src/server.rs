@@ -243,6 +243,8 @@ impl SdServer {
                 "sample_method": request.sampler.as_str(),
                 "sample_steps": request.steps,
                 "guidance": { "txt_cfg": request.cfg },
+                // An empty list keeps the backend's generated schedule.
+                "custom_sigmas": request.sigmas,
             },
             "vae_tiling_params": { "enabled": true },
         });

@@ -28,6 +28,8 @@ pub struct GenerateRequest {
     pub height: u32,
     pub steps: u32,
     pub cfg: f32,
+    /// Fixed sigma schedule. Empty lets the backend generate one from `steps`.
+    pub sigmas: Vec<f32>,
     pub seed: u64,
     pub sampler: Sampler,
     pub offload: bool,
@@ -48,6 +50,7 @@ impl GenerateRequest {
             height: preset.default_height,
             steps: preset.steps,
             cfg: preset.cfg,
+            sigmas: preset.sigmas.to_vec(),
             seed: Self::random_seed(),
             sampler: preset.sampler,
             offload: true,

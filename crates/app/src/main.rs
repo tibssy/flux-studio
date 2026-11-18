@@ -307,13 +307,21 @@ fn build_ui(app: &adw::Application) {
         }
     };
 
-    let size_cell = Rc::new(Cell::new(size::size_for_mp(config.mp(), config.ratio())));
+    let initial_preset = preset(&config.active_preset).unwrap_or_else(default_preset);
+    let initial_size =
+        size::size_for_mp_step(config.mp(), config.ratio(), initial_preset.size_step);
+    let size_cell = Rc::new(Cell::new(initial_size));
     let image_size = Rc::new(Cell::new((0u32, 0u32)));
 
     let view = main_view::build();
     view.improve_button
         .set_visible(prompt_ai::find_cli(&config).is_some());
-    let side = sidebar::build(&config, size_cell.clone(), image_size.clone());
+    let side = sidebar::build(
+        &config,
+        size_cell.clone(),
+        image_size.clone(),
+        initial_preset.size_step,
+    );
 
     let header = adw::HeaderBar::new();
     let sidebar_toggle = gtk::ToggleButton::builder()
@@ -552,6 +560,8 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             // idle timeout.
             ui.backend.unload();
             refresh_model(&ui);
+            // The new preset can require a coarser pixel grid.
+            update_size_ui(&ui);
         });
     }
     {
@@ -1119,7 +1129,11 @@ fn current_mp(ui: &Rc<Ui>) -> f64 {
 }
 
 fn target_size(ui: &Rc<Ui>) -> (u32, u32) {
-    size::size_for_mp(current_mp(ui), selected_ratio(ui))
+    size::size_for_mp_step(
+        current_mp(ui),
+        selected_ratio(ui),
+        active_preset(ui).size_step,
+    )
 }
 
 pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
@@ -1128,7 +1142,7 @@ pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
     }
     let mp = current_mp(ui);
     let ratio = selected_ratio(ui);
-    let (width, height) = size::size_for_mp(mp, ratio);
+    let (width, height) = size::size_for_mp_step(mp, ratio, active_preset(ui).size_step);
     let megapixels = size::megapixels(width, height);
 
     ui.size_guard.set(true);
@@ -1189,8 +1203,26 @@ pub(crate) fn update_size_ui(ui: &Rc<Ui>) {
 pub(crate) fn set_size(ui: &Rc<Ui>, width: u32, height: u32) {
     let width = width.max(1);
     let height = height.max(1);
+    if matches_current_target(ui, width, height) {
+        set_target(ui, current_mp(ui), selected_ratio(ui));
+        return;
+    }
     let mp = size::mp_for_size(width, height);
     set_target(ui, mp, (width, height));
+}
+
+/// Whether `(width, height)` is just the current target rounded to the grid.
+///
+/// A coarse grid cannot reproduce every aspect exactly: 3:4 at 0.5 MP becomes
+/// 608 x 832 on a 32 px grid, which reduces to 19:26. Treating that as a custom
+/// ratio would change the sidebar for images that the app itself produced.
+fn matches_current_target(ui: &Rc<Ui>, width: u32, height: u32) -> bool {
+    let step = active_preset(ui).size_step;
+    let (target_width, target_height) =
+        size::size_for_mp_step(current_mp(ui), selected_ratio(ui), step);
+    let tolerance = i64::from(step) / 2;
+    (i64::from(target_width) - i64::from(width)).abs() <= tolerance
+        && (i64::from(target_height) - i64::from(height)).abs() <= tolerance
 }
 
 /// Match the target ratio to the reference image, keeping the current MP.
@@ -1205,7 +1237,12 @@ fn fit_reference_size(ui: &Rc<Ui>) {
     if width == 0 || height == 0 {
         return;
     }
-    set_target(ui, current_mp(ui), (width, height));
+    let mp = current_mp(ui);
+    if matches_current_target(ui, width, height) {
+        set_target(ui, mp, selected_ratio(ui));
+    } else {
+        set_target(ui, mp, (width, height));
+    }
 }
 
 /// Keep the sidebar selection in sync with the image on the canvas.
@@ -2444,6 +2481,7 @@ fn generate(
     request.height = height;
     request.steps = model.steps;
     request.cfg = model.cfg;
+    request.sigmas = model.sigmas.to_vec();
     request.seed = seed;
     request.sampler = model.sampler;
     request.offload = offload;

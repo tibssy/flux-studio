@@ -273,6 +273,17 @@ pub fn build_args(
         "--vae-tiling".into(),
     ]);
 
+    if !request.sigmas.is_empty() {
+        let schedule = request
+            .sigmas
+            .iter()
+            .map(|sigma| format!("{sigma}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push("--sigmas".into());
+        args.push(schedule.into());
+    }
+
     for arg in preset.extra_args {
         args.push((*arg).into());
     }
@@ -359,7 +370,7 @@ pub fn parse_progress_line(line: &str, expected_steps: u32) -> Option<Progress> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flux_core::preset::FLUX2_KLEIN_4B;
+    use flux_core::preset::{FLUX2_KLEIN_4B, QWEN_IMAGE_2_1_TURBO};
 
     #[test]
     fn parses_progress_bar() {
@@ -393,6 +404,7 @@ mod tests {
             height: 768,
             steps: 4,
             cfg: 1.0,
+            sigmas: Vec::new(),
             seed: 42,
             sampler: flux_core::Sampler::Euler,
             offload: true,
@@ -418,6 +430,50 @@ mod tests {
     }
 
     #[test]
+    fn passes_the_preset_sigma_schedule() {
+        let preset = &QWEN_IMAGE_2_1_TURBO;
+        let request = GenerateRequest {
+            preset_id: preset.id.into(),
+            prompt: "a poster".into(),
+            width: 768,
+            height: 768,
+            steps: preset.steps,
+            cfg: preset.cfg,
+            sigmas: preset.sigmas.to_vec(),
+            seed: 42,
+            sampler: preset.sampler,
+            offload: true,
+            reference_images: vec!["/tmp/ref.png".into()],
+            previews: false,
+            output: "/tmp/out.png".into(),
+        };
+        let args: Vec<String> = build_args(Path::new("/models"), preset, &request)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let schedule = preset
+            .sigmas
+            .iter()
+            .map(|sigma| sigma.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(args.windows(2).any(|w| w == ["--steps", "8"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--sigmas" && w[1] == schedule)
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--model-args", "qwen_image_2_1_prefix_cache_type=q8_0"])
+        );
+        assert!(args.windows(2).any(|w| w
+            == [
+                "--llm_vision",
+                "/models/text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+            ]));
+    }
+
+    #[test]
     fn flux1_uses_t5_and_clip_l_instead_of_llm() {
         let preset = &flux_core::preset::FLUX1_SCHNELL;
         let request = GenerateRequest {
@@ -427,6 +483,7 @@ mod tests {
             height: 768,
             steps: preset.steps,
             cfg: preset.cfg,
+            sigmas: Vec::new(),
             seed: 1,
             sampler: preset.sampler,
             offload: true,
@@ -461,6 +518,7 @@ mod tests {
             height: 768,
             steps: preset.steps,
             cfg: preset.cfg,
+            sigmas: Vec::new(),
             seed: 7,
             sampler: preset.sampler,
             offload: true,

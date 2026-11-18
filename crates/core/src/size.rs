@@ -43,12 +43,25 @@ pub enum RatioMatch {
 
 /// Clamp and snap a dimension to the supported grid.
 pub fn snap(value: u32) -> u32 {
+    snap_to(value, SIZE_STEP)
+}
+
+/// Clamp and snap a dimension to a preset's grid.
+///
+/// `step` must divide [`MIN_SIZE`] and [`MAX_SIZE`]; both 16 and 32 do.
+pub fn snap_to(value: u32, step: u32) -> u32 {
+    let step = step.max(1);
     let clamped = value.clamp(MIN_SIZE, MAX_SIZE);
-    ((clamped + SIZE_STEP / 2) / SIZE_STEP * SIZE_STEP).clamp(MIN_SIZE, MAX_SIZE)
+    ((clamped + step / 2) / step * step).clamp(MIN_SIZE, MAX_SIZE)
 }
 
 pub fn is_valid(value: u32) -> bool {
-    (MIN_SIZE..=MAX_SIZE).contains(&value) && value.is_multiple_of(SIZE_STEP)
+    is_valid_with(value, SIZE_STEP)
+}
+
+/// Whether a size is inside the limits and on the given grid.
+pub fn is_valid_with(value: u32, step: u32) -> bool {
+    (MIN_SIZE..=MAX_SIZE).contains(&value) && value.is_multiple_of(step.max(1))
 }
 
 pub fn megapixels(width: u32, height: u32) -> f64 {
@@ -96,6 +109,11 @@ pub fn is_large(width: u32, height: u32) -> bool {
 
 /// Convert an MP target and a ratio into a snapped, in-range size.
 pub fn size_for_mp(mp: f64, ratio: (u32, u32)) -> (u32, u32) {
+    size_for_mp_step(mp, ratio, SIZE_STEP)
+}
+
+/// Convert an MP target and a ratio into a size on a preset's grid.
+pub fn size_for_mp_step(mp: f64, ratio: (u32, u32), step: u32) -> (u32, u32) {
     let (ratio_width, ratio_height) = if ratio.0 == 0 || ratio.1 == 0 {
         (1, 1)
     } else {
@@ -132,11 +150,12 @@ pub fn size_for_mp(mp: f64, ratio: (u32, u32)) -> (u32, u32) {
     width *= shrink;
     height *= shrink;
 
-    (snap_side(width), snap_side(height))
+    (snap_side(width, step), snap_side(height, step))
 }
 
-fn snap_side(value: f64) -> u32 {
-    let snapped = (value / SIZE_STEP as f64).round() * SIZE_STEP as f64;
+fn snap_side(value: f64, step: u32) -> u32 {
+    let step = step.max(1) as f64;
+    let snapped = (value / step).round() * step;
     (snapped.round() as u32).clamp(MIN_SIZE, MAX_SIZE)
 }
 
@@ -195,6 +214,39 @@ mod tests {
         assert!(!is_valid(120));
         assert!(!is_valid(2064));
         assert!(!is_valid(300));
+    }
+
+    #[test]
+    fn snaps_to_a_coarser_grid() {
+        assert_eq!(snap_to(250, 32), 256);
+        assert_eq!(snap_to(830, 32), 832);
+        assert_eq!(snap_to(300, 32), 288);
+        assert_eq!(snap_to(20, 32), MIN_SIZE);
+        assert_eq!((snap_to(608, 32), snap_to(816, 32)), (608, 832));
+        assert_eq!(size_for_mp_step(0.5, (3, 4), 32), (608, 832));
+        assert_eq!(size_for_mp_step(0.6, (1, 1), 32), (768, 768));
+    }
+
+    #[test]
+    fn produces_sizes_on_a_coarser_grid() {
+        for ratio in RATIOS {
+            for mp in [0.1, 0.25, 0.5, 1.0, 2.0] {
+                let (width, height) = size_for_mp_step(mp, ratio, 32);
+                assert!(
+                    is_valid_with(width, 32) && is_valid_with(height, 32),
+                    "{ratio:?} at {mp} MP produced {width}x{height}"
+                );
+                // The hard side limit wins over the MP target, as in the UI hint.
+                if width == MAX_SIZE || height == MAX_SIZE {
+                    continue;
+                }
+                let actual = mp_for_size(width, height);
+                assert!(
+                    (actual - mp).abs() < 0.09,
+                    "{ratio:?} at {mp} MP produced {width}x{height} ({actual:.3} MP)"
+                );
+            }
+        }
     }
 
     #[test]

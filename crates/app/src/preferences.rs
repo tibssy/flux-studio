@@ -32,6 +32,10 @@ const FLUX3_GGUF_URL: &str = "https://huggingface.co/leejet/flux-3-image-klein-G
 const FIBO_URL: &str = "https://huggingface.co/briaai/Fibo-2.0-edit-turbo";
 const FIBO_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-nc/4.0/";
 const FIBO_GGUF_URL: &str = "https://huggingface.co/molbal/fibo-2.0-GGUF";
+const QWEN_IMAGE_TURBO_URL: &str = "https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo";
+const QWEN_IMAGE_LICENSE_URL: &str = "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE";
+const QWEN_IMAGE_GGUF_URL: &str = "https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF";
+const QWEN3_VL_8B_URL: &str = "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct";
 const FLUX1_SCHNELL_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.1-schnell";
 const SCHNELL_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.1-schnell-GGUF";
 const T5_XXL_URL: &str = "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf";
@@ -643,6 +647,21 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FIBO_GGUF_URL,
     ));
     credits_group.add(&link_row(
+        "Qwen Image 2.1 Turbo",
+        "Alibaba Qwen · Qwen Research License (non-commercial)",
+        QWEN_IMAGE_TURBO_URL,
+    ));
+    credits_group.add(&link_row(
+        "Qwen3-VL-8B-Instruct text encoder",
+        "Alibaba Qwen · Apache-2.0",
+        QWEN3_VL_8B_URL,
+    ));
+    credits_group.add(&link_row(
+        "Qwen Image 2.1 GGUF quantization",
+        "unsloth · follows the Qwen Research License",
+        QWEN_IMAGE_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
         "FLUX.1 schnell GGUF quantization",
         "unsloth · Apache-2.0",
         SCHNELL_GGUF_URL,
@@ -659,7 +678,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX_VAE_URL,
     ));
     credits_group.add(&link_row(
-        "TAEF1/TAEF2 preview decoders",
+        "TAEF1/TAEF2 and TAEQI2.1 preview decoders",
         "madebyollin · MIT",
         TAE_URL,
     ));
@@ -758,12 +777,21 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FIBO_LICENSE_URL,
     ));
     legal_group.add(&link_row(
+        "Qwen Image 2.1 weights",
+        "Qwen Research License · non-commercial use only",
+        QWEN_IMAGE_LICENSE_URL,
+    ));
+    legal_group.add(&link_row(
         "T5-XXL and CLIP-L text encoders",
         "Apache-2.0 / MIT",
         T5_XXL_URL,
     ));
     legal_group.add(&link_row("FLUX VAE", "Apache-2.0", FLUX_VAE_URL));
-    legal_group.add(&link_row("TAEF1/TAEF2 preview decoders", "MIT", TAE_URL));
+    legal_group.add(&link_row(
+        "TAEF1/TAEF2 and TAEQI2.1 preview decoders",
+        "MIT",
+        TAE_URL,
+    ));
     legal_group.add(&link_row(
         "Real-ESRGAN upscaler weights",
         "BSD-3-Clause",

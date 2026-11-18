@@ -4,6 +4,7 @@
 #   ./scripts/fetch-models.sh                 # FLUX.2 klein 4B (~5.4 GB)
 #   ./scripts/fetch-models.sh flux2-klein-9b  # FLUX.2 klein 9B (~11 GB)
 #   ./scripts/fetch-models.sh flux3-klein     # FLUX.3 Image klein (~6.3 GB)
+#   ./scripts/fetch-models.sh qwen-image-2-1-turbo  # Qwen Image 2.1 Turbo (~10.7 GB)
 #   ./scripts/fetch-models.sh upscalers       # five upscaler weights (~150 MB)
 #   ./scripts/fetch-models.sh all             # all presets and upscalers
 set -euo pipefail
@@ -49,6 +50,17 @@ fetch_flux3_klein() {
     models/vae/flux2-vae.safetensors
 }
 
+fetch_qwen_image_2_1_turbo() {
+  get "https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF/resolve/main/qwen-image-2.1-turbo-Q4_K_M.gguf" \
+    models/diffusion/qwen-image-2.1-turbo-Q4_K_M.gguf
+  get "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf" \
+    models/text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+  get "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf" \
+    models/text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
+  get "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors" \
+    models/vae/qwen_image_2.1_vae_bf16.safetensors
+}
+
 fetch_upscalers() {
   get "https://huggingface.co/Phips/4xNomos2_hq_mosr/resolve/main/4xNomos2_hq_mosr.pth" \
     models/upscalers/4xNomos2_hq_mosr.pth
@@ -66,15 +78,17 @@ case "${1:-flux2-klein-4b}" in
   flux2-klein-4b) fetch_flux2_klein ;;
   flux2-klein-9b) fetch_flux2_klein_9b ;;
   flux3-klein) fetch_flux3_klein ;;
+  qwen-image-2-1-turbo) fetch_qwen_image_2_1_turbo ;;
   upscalers) fetch_upscalers ;;
   all)
     fetch_flux2_klein
     fetch_flux2_klein_9b
     fetch_flux3_klein
+    fetch_qwen_image_2_1_turbo
     fetch_upscalers
     ;;
   *)
-    echo "unknown preset: $1 (expected flux2-klein-4b, flux2-klein-9b, flux3-klein, upscalers or all)" >&2
+    echo "unknown preset: $1 (expected flux2-klein-4b, flux2-klein-9b, flux3-klein, qwen-image-2-1-turbo, upscalers or all)" >&2
     exit 1
     ;;
 esac
