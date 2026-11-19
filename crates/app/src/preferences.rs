@@ -161,6 +161,25 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         .build();
     output_row.add_suffix(&output_button);
     output_group.add(&output_row);
+
+    let copy_row = adw::SwitchRow::builder()
+        .title("Copy results to clipboard")
+        .subtitle("Makes finished generations, upscales and adjusted copies available for pasting")
+        .active(ui.config.borrow().copy_result_to_clipboard)
+        .build();
+    {
+        let ui = ui.clone();
+        copy_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            let mut config = ui.config.borrow_mut();
+            if config.copy_result_to_clipboard == active {
+                return;
+            }
+            config.copy_result_to_clipboard = active;
+            let _ = config.save();
+        });
+    }
+    output_group.add(&copy_row);
     general.add(&output_group);
     {
         let ui = ui.clone();

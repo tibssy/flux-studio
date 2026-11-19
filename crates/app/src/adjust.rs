@@ -372,6 +372,7 @@ fn save_adjusted(ui: &Rc<Ui>, preview: &Preview, adjustments: Adjustments, popov
 
     ui.undo.borrow_mut().clear();
     fade_to_image(ui, &output);
+    crate::copy_result_to_clipboard(ui, &output);
     ui.toast
         .add_toast(adw::Toast::new("Saved an adjusted copy."));
     ui.status.set_text(&format!(

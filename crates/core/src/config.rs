@@ -65,6 +65,8 @@ pub struct Config {
     /// Show a desktop notification when a job finishes while the window is in
     /// the background.
     pub notify_on_finish: bool,
+    /// Put finished images on the system clipboard.
+    pub copy_result_to_clipboard: bool,
     /// User-saved prompts shown at the bottom of the effects menu.
     pub custom_effects: Vec<CustomEffect>,
 }
@@ -100,6 +102,7 @@ impl Default for Config {
             accepted_licenses: Vec::new(),
             show_previews: true,
             notify_on_finish: true,
+            copy_result_to_clipboard: false,
             custom_effects: Vec::new(),
         }
     }

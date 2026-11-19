@@ -2970,6 +2970,7 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
             }
 
             let history_id = record_history(ui, generate, &image_path, duration_ms, follow_live);
+            copy_result_to_clipboard(ui, &path);
             // Do not overwrite the seed field while more jobs are waiting: it
             // belongs to the next composition, not to this result.
             if ui.queue.borrow().pending_len() == 0
@@ -3181,6 +3182,7 @@ fn complete_upscale(
             let follow_live = ui.live_view.get();
             ui.undo.borrow_mut().clear();
             let history_id = record_upscale(ui, job, &image, duration_ms, follow_live);
+            copy_result_to_clipboard(ui, &image.path);
             ui.toast.add_toast(adw::Toast::new(&format!(
                 "Upscaled to {} × {}.",
                 image.width, image.height
@@ -3362,6 +3364,19 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
         ui.queue_bubble_spinner.start();
     } else {
         ui.queue_bubble_spinner.stop();
+    }
+}
+
+/// Put a finished image on the system clipboard when the user asked for it.
+pub(crate) fn copy_result_to_clipboard(ui: &Ui, path: &Path) {
+    if !ui.config.borrow().copy_result_to_clipboard {
+        return;
+    }
+    match gdk::Texture::from_filename(path) {
+        Ok(texture) => ui.window.clipboard().set_texture(&texture),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "failed to copy result to clipboard");
+        }
     }
 }
 

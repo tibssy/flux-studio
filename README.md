@@ -59,6 +59,9 @@ Milestone 3 (packaged desktop app):
 - **desktop notifications** when a job finishes while the window is in the
   background, with a Preferences toggle; clicking the notification opens that
   result in History
+- **optional clipboard copy**: finished generations, upscales and adjusted
+  copies can be placed on the clipboard automatically from
+  **Preferences → General** (off by default)
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,

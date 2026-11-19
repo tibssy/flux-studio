@@ -84,7 +84,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp target/release/flux-studio dist/
-          cp README.md LICENSE dist/
+          cp README.md CHANGELOG.md LICENSE dist/
           cp packaging/io.github.tibssy.FluxStudio.desktop dist/
           cp packaging/io.github.tibssy.FluxStudio.svg dist/
           # Checksum of the binary, shipped inside the archive.
