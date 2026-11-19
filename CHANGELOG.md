@@ -5,6 +5,9 @@ rough edges.
 
 ## Unreleased
 
+- **LoRA support**: a **LoRAs…** dialog lists weights from `models/loras`,
+  with per-weight strength and a sidebar summary; active LoRAs apply to
+  generations and effects and are recorded in PNG metadata.
 - **Prompt picker**: the prompt field has a history button in its top-right
   corner that lists saved prompts, and the field is cleared after each
   generation request.
@@ -24,6 +27,7 @@ rough edges.
 - **Open images from disk**: `Ctrl+O` (or the folder button next to **New**)
   imports a copy into the output folder and History, ready to edit, upscale or
   use as a reference.
+
 - **Batch and variations**: queue 1–4 images per Generate with consecutive
   seeds, and re-run a result with seed + 1 from the new shuffle button.
 - **Before/after compare**: split the canvas against the source of an edit,

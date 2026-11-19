@@ -14,6 +14,14 @@ impl Sampler {
     }
 }
 
+/// One LoRA weight applied to a request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoraConfig {
+    /// Path relative to the server's LoRA directory.
+    pub path: String,
+    pub weight: f32,
+}
+
 /// A single image-generation request.
 ///
 /// `steps`/`cfg` are copied from the selected [`crate::preset::ModelPreset`]
@@ -35,6 +43,8 @@ pub struct GenerateRequest {
     pub offload: bool,
     /// Reference images for editing (`-r`). Empty for text-to-image.
     pub reference_images: Vec<PathBuf>,
+    /// LoRA weights applied to this request.
+    pub loras: Vec<LoraConfig>,
     /// Whether the backend should stream per-step previews.
     pub previews: bool,
     pub output: PathBuf,
@@ -55,6 +65,7 @@ impl GenerateRequest {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            loras: Vec::new(),
             previews: true,
             output: output.into(),
         }
