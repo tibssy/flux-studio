@@ -1055,8 +1055,9 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                     glib::Propagation::Stop
                 }
                 gdk::Key::v | gdk::Key::V => {
-                    let formats = ui.window.clipboard().formats();
-                    let has_image = [
+                    let clipboard = ui.window.clipboard();
+                    let formats = clipboard.formats();
+                    let has_texture = [
                         "image/png",
                         "image/jpeg",
                         "image/webp",
@@ -1066,25 +1067,48 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                     ]
                     .iter()
                     .any(|mime| formats.contain_mime_type(mime));
-                    if !has_image {
+                    let has_files = formats.contain_mime_type("x-special/gnome-copied-files")
+                        || formats.contain_mime_type("text/uri-list");
+                    if !has_texture && !has_files {
                         // Let the focused text view paste ordinary text.
                         return glib::Propagation::Proceed;
                     }
-                    let ui = ui.clone();
-                    glib::spawn_future_local(async move {
-                        match ui.window.clipboard().read_texture_future().await {
-                            Ok(Some(texture)) => add_reference_texture(&ui, &texture),
-                            Ok(None) => {
-                                ui.toast
-                                    .add_toast(adw::Toast::new("The clipboard has no image."));
+                    if has_texture {
+                        let clipboard = clipboard.clone();
+                        let ui = ui.clone();
+                        glib::spawn_future_local(async move {
+                            match clipboard.read_texture_future().await {
+                                Ok(Some(texture)) => add_reference_texture(&ui, &texture),
+                                Ok(None) => {
+                                    ui.toast
+                                        .add_toast(adw::Toast::new("The clipboard has no image."));
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "failed to read a clipboard image");
+                                    ui.toast
+                                        .add_toast(adw::Toast::new("Could not paste the image."));
+                                }
                             }
-                            Err(error) => {
-                                tracing::warn!(%error, "failed to read a clipboard image");
-                                ui.toast
-                                    .add_toast(adw::Toast::new("Could not paste the image."));
+                        });
+                    } else {
+                        let ui = ui.clone();
+                        glib::spawn_future_local(async move {
+                            match clipboard_file_paths(&clipboard).await {
+                                Ok(paths) if !paths.is_empty() => add_references(&ui, paths),
+                                Ok(_) => {
+                                    ui.toast.add_toast(adw::Toast::new(
+                                        "No image files in the clipboard.",
+                                    ));
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "failed to read clipboard files");
+                                    ui.toast.add_toast(adw::Toast::new(
+                                        "Could not read the copied files.",
+                                    ));
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                     glib::Propagation::Stop
                 }
                 gdk::Key::comma => {
@@ -2313,6 +2337,46 @@ fn install_reference_drop(ui: &Rc<Ui>) {
         });
     }
     ui.stack.add_controller(target);
+}
+
+async fn clipboard_file_paths(clipboard: &gdk::Clipboard) -> Result<Vec<PathBuf>, String> {
+    let (stream, _mime) = clipboard
+        .read_future(
+            &["x-special/gnome-copied-files", "text/uri-list"],
+            glib::Priority::DEFAULT,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let bytes = stream
+        .read_bytes_future(1024 * 1024, glib::Priority::DEFAULT)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(paths_from_uri_list(&String::from_utf8_lossy(
+        bytes.as_ref(),
+    )))
+}
+
+fn paths_from_uri_list(text: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line == "copy" || line == "cut" {
+            continue;
+        }
+        let path = if line.contains("://") {
+            gio::File::for_uri(line).path()
+        } else {
+            let path = PathBuf::from(line);
+            path.is_absolute().then_some(path)
+        };
+        let Some(path) = path else {
+            continue;
+        };
+        if path.is_file() && image::image_dimensions(&path).is_ok() {
+            paths.push(path);
+        }
+    }
+    paths
 }
 
 fn add_reference_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
