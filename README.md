@@ -46,7 +46,10 @@ Milestone 3 (packaged desktop app):
   bar; the eye button in the queue row (or on the canvas) returns to the live
   preview. Upscale joins the same queue: while watching a generation it
   upscales that result when it finishes, while browsing History it upscales the
-  image on screen. History rows can be deleted even while jobs run
+  image on screen. History rows used by a queued job hide their delete action,
+  so a reference or upscale source cannot disappear from under it; other rows
+  can still be deleted while jobs run. Browsing with the mouse wheel, the
+  history rows or the arrow keys works during generations and upscales
 - **live step previews** on the canvas: `sd-server` streams a TAE-decoded frame
   for each sampling step and the canvas crossfades between them, with a
   Preferences toggle and ~11 MB optional preview weights per model family

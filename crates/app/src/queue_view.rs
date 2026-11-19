@@ -205,6 +205,7 @@ fn remove_job(ui: &Rc<Ui>, id: u64) {
     if let Some(job) = removed {
         cleanup_job(&job);
         rebuild(ui);
+        crate::refresh_history_locks(ui);
     }
 }
 
@@ -248,6 +249,7 @@ pub(crate) fn clear_pending(ui: &Rc<Ui>) {
         cleanup_job(job);
     }
     rebuild(ui);
+    crate::refresh_history_locks(ui);
     ui.status.set_text(&match removed.len() {
         1 => "Removed 1 waiting job".into(),
         count => format!("Removed {count} waiting jobs"),

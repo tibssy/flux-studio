@@ -256,6 +256,25 @@ impl JobQueue {
         self.completed.get(&id).map(PathBuf::as_path)
     }
 
+    /// Whether any running or waiting job uses `path` as a reference or as an
+    /// upscale source.
+    pub fn uses_source(&self, path: &Path) -> bool {
+        let matches = |value: Option<&str>| value.is_some_and(|value| Path::new(value) == path);
+        let job_uses = |job: &Job| match &job.kind {
+            JobKind::Generate(job) => {
+                job.reference_paths
+                    .iter()
+                    .any(|candidate| candidate == path)
+                    || matches(job.source_path.as_deref())
+            }
+            JobKind::Upscale(job) => matches(job.source_path.as_deref()),
+        };
+        self.running
+            .as_ref()
+            .is_some_and(|running| job_uses(&running.job))
+            || self.pending.iter().any(job_uses)
+    }
+
     /// Whether `id` is still running or waiting.
     pub fn is_active(&self, id: u64) -> bool {
         self.running
@@ -455,6 +474,30 @@ mod tests {
         queue.clear_pending();
         assert!(!queue.is_active(7));
         assert_eq!(queue.completed_output(7), Some(Path::new("/tmp/out.png")));
+    }
+
+    #[test]
+    fn reports_sources_used_by_queued_jobs() {
+        let mut queue = JobQueue::default();
+        let mut generate = generate_job(1);
+        if let JobKind::Generate(job) = &mut generate.kind {
+            job.reference_paths = vec!["/tmp/ref.png".into()];
+        }
+        queue.push(generate);
+
+        let mut upscale = upscale_job(2, UpscaleTarget::Displayed);
+        if let Some(job) = upscale.upscale_mut() {
+            job.source_path = Some("/tmp/source.png".into());
+        }
+        queue.push(upscale);
+
+        assert!(queue.uses_source(Path::new("/tmp/ref.png")));
+        assert!(queue.uses_source(Path::new("/tmp/source.png")));
+        assert!(!queue.uses_source(Path::new("/tmp/other.png")));
+
+        let running = queue.take_next().unwrap();
+        queue.start(running);
+        assert!(queue.uses_source(Path::new("/tmp/ref.png")));
     }
 
     #[test]

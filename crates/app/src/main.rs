@@ -682,7 +682,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let list = ui.history_list.clone();
         list.connect_row_activated(move |_, row| {
-            if ui.upscaling.get() || ui.classifying.get() {
+            if ui.classifying.get() {
                 return;
             }
             let Ok(id) = row.widget_name().parse::<i64>() else {
@@ -907,12 +907,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let stack = ui.stack.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll(move |_, _dx, dy| {
-            if dy == 0.0
-                || ui.generating.get()
-                || ui.upscaling.get()
-                || ui.zooming.get()
-                || ui.classifying.get()
-            {
+            if dy == 0.0 || ui.zooming.get() || ui.classifying.get() {
                 return glib::Propagation::Proceed;
             }
             // While zoomed the wheel pans the viewport instead of walking history.
@@ -1665,7 +1660,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let position = history_position(ui);
     let actions = has_image && !foreground;
     let editable = actions && active_preset(ui).supports_edit;
-    let navigation = actions && !editing && !generating;
+    let navigation = has_image && !editing && !zooming && !classifying;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
@@ -2638,6 +2633,7 @@ fn generate(
         ui.live_view.set(true);
     }
     ui.queue.borrow_mut().push(job);
+    refresh_history_locks(ui);
     queue_view::rebuild(ui);
     if was_busy {
         ui.status.set_text("Added to the queue");
@@ -3003,6 +2999,7 @@ fn resolve_pending_upscales(ui: &Rc<Ui>, generation_id: u64, path: &Path) {
         }
     }
     queue_view::rebuild(ui);
+    refresh_history_locks(ui);
 }
 
 /// Drop upscales that were waiting for a generation which did not produce one.
@@ -3015,6 +3012,7 @@ fn drop_pending_upscales(ui: &Rc<Ui>, generation_id: u64, reason: &str) {
         remove_job_files(job);
     }
     queue_view::rebuild(ui);
+    refresh_history_locks(ui);
     ui.toast.add_toast(adw::Toast::new(&format!(
         "Skipped {} upscale{}: {reason}.",
         dropped.len(),
@@ -3271,6 +3269,16 @@ fn finish_job(ui: &Rc<Ui>) {
     refresh_model(ui);
     queue_view::rebuild(ui);
     update_image_actions(ui);
+}
+
+/// Whether a queued job is holding this image as a reference or upscale source.
+pub(crate) fn history_entry_locked(ui: &Ui, path: &Path) -> bool {
+    ui.queue.borrow().uses_source(path)
+}
+
+/// Refresh the delete buttons after the queue gains or loses a job.
+pub(crate) fn refresh_history_locks(ui: &Rc<Ui>) {
+    history_view::rebuild_preserving_scroll(ui);
 }
 
 /// Keep the progress row and the "show live" button in sync with the view.
@@ -3712,9 +3720,10 @@ fn history_position(ui: &Ui) -> Option<(usize, usize)> {
 
 /// Move `delta` entries through history: positive is older, negative newer.
 fn navigate_history(ui: &Rc<Ui>, delta: isize) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
+    pause_live_view(ui);
     let Some((index, count)) = history_position(ui) else {
         return;
     };
@@ -3934,6 +3943,7 @@ pub(crate) fn start_upscale(
 
     let was_busy = ui.queue.borrow().running().is_some();
     ui.queue.borrow_mut().push(job);
+    refresh_history_locks(ui);
     queue_view::rebuild(ui);
     if was_busy {
         ui.status.set_text("Upscale added to the queue");

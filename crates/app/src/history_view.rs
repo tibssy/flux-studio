@@ -287,6 +287,10 @@ pub(crate) fn add_row(
         .tooltip_text("Delete image")
         .css_classes(["flat"])
         .build();
+    if crate::history_entry_locked(ui, Path::new(&entry.image_path)) {
+        delete_button.set_visible(false);
+        delete_button.set_tooltip_text(Some("Used by a queued job"));
+    }
     actions.append(&info_button);
     actions.append(&delete_button);
 
@@ -444,9 +448,6 @@ pub(crate) fn status_label(entry: &Generation) -> String {
 /// Show a history entry on the canvas with the image actions, without making
 /// it the edit reference.
 pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.upscaling.get() {
-        return;
-    }
     crate::pause_live_view(ui);
     cancel_zoom(ui);
     restore_settings(ui, entry);
@@ -463,9 +464,6 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
 
 /// Load a history entry as the edit reference and bring the composer back.
 pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.upscaling.get() {
-        return;
-    }
     crate::pause_live_view(ui);
     cancel_zoom(ui);
     restore_settings(ui, entry);
