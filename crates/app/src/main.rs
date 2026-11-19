@@ -135,6 +135,10 @@ pub(crate) struct Ui {
     pub queue_tick: RefCell<Option<glib::SourceId>>,
     /// Pending count next to the progress bar.
     pub queue_status: gtk::Label,
+    /// Floating indicator for the queue when the sidebar is hidden.
+    pub queue_bubble: gtk::Button,
+    pub queue_bubble_spinner: gtk::Spinner,
+    pub queue_bubble_label: gtk::Label,
     /// Set once the user confirmed quitting with jobs still queued.
     pub quitting: Cell<bool>,
     /// Returns from a history image to the running job's live preview.
@@ -221,6 +225,17 @@ fn install_styles() {
          }
          .prompt-field:focus-within {
              border-color: @card_bg_color;
+         }
+         .queue-bubble {
+             background-image: none;
+             background-color: alpha(@window_bg_color, 0.92);
+             border: 1px solid alpha(@view_fg_color, 0.18);
+             border-radius: 999px;
+             padding: 6px 12px;
+             box-shadow: 0 2px 8px alpha(@window_fg_color, 0.16);
+         }
+         .queue-bubble:hover {
+             background-color: @card_bg_color;
          }
          .reference-strip {
              background-color: @card_bg_color;
@@ -458,6 +473,9 @@ fn build_ui(app: &adw::Application) {
         queue_running_row: RefCell::new(None),
         queue_tick: RefCell::new(None),
         queue_status: view.queue_status,
+        queue_bubble: view.queue_bubble,
+        queue_bubble_spinner: view.queue_bubble_spinner,
+        queue_bubble_label: view.queue_bubble_label,
         quitting: Cell::new(false),
         live_button: view.live_button,
         live_view: Cell::new(true),
@@ -542,6 +560,7 @@ fn build_ui(app: &adw::Application) {
     refresh_model_list(&ui);
     update_size_ui(&ui);
     update_image_view(&ui);
+    update_queue_bubble(&ui);
 
     ui.window.present();
     show_composer(&ui, true);
@@ -586,6 +605,13 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         ui.live_button
             .clone()
             .connect_clicked(move |_| show_live(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.queue_bubble.clone().connect_clicked(move |_| {
+            ui.split.set_show_sidebar(true);
+            update_queue_bubble(&ui);
+        });
     }
     {
         let ui = ui.clone();
@@ -709,11 +735,14 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let split = ui.split.clone();
         split.connect_show_sidebar_notify(move |split| {
             let visible = split.shows_sidebar();
-            let mut config = ui.config.borrow_mut();
-            if config.sidebar_visible != visible {
-                config.sidebar_visible = visible;
-                let _ = config.save();
+            {
+                let mut config = ui.config.borrow_mut();
+                if config.sidebar_visible != visible {
+                    config.sidebar_visible = visible;
+                    let _ = config.save();
+                }
             }
+            update_queue_bubble(&ui);
         });
     }
     {
@@ -2136,6 +2165,7 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
     cancel_zoom(ui);
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
+    ui.prompt.buffer().set_text("");
     update_image_view(ui);
     show_composer(ui, true);
     ui.status.set_text("New image");
@@ -3298,6 +3328,41 @@ fn finish_job(ui: &Rc<Ui>) {
     refresh_model(ui);
     queue_view::rebuild(ui);
     update_image_actions(ui);
+}
+
+/// Show the queue as a floating pill while the sidebar is hidden.
+pub(crate) fn update_queue_bubble(ui: &Ui) {
+    let (running, pending) = {
+        let queue = ui.queue.borrow();
+        (
+            queue.running().map(|running| running.job.is_upscale()),
+            queue.pending_len(),
+        )
+    };
+    let visible = !ui.split.shows_sidebar() && (running.is_some() || pending > 0);
+    ui.queue_bubble.set_visible(visible);
+    if !visible {
+        ui.queue_bubble_spinner.stop();
+        ui.queue_bubble_spinner.set_visible(false);
+        return;
+    }
+
+    let text = match running {
+        Some(true) if pending > 0 => format!("Upscaling · {pending} waiting"),
+        Some(true) => "Upscaling".to_string(),
+        Some(false) if pending > 0 => format!("Generating · {pending} waiting"),
+        Some(false) => "Generating".to_string(),
+        None if pending == 1 => "1 queued".to_string(),
+        None => format!("{pending} queued"),
+    };
+    ui.queue_bubble_label.set_text(&text);
+    let spinning = running.is_some();
+    ui.queue_bubble_spinner.set_visible(spinning);
+    if spinning {
+        ui.queue_bubble_spinner.start();
+    } else {
+        ui.queue_bubble_spinner.stop();
+    }
 }
 
 /// Whether a queued job is holding this image as a reference or upscale source.

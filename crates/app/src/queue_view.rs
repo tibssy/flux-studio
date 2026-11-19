@@ -60,6 +60,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     } else {
         stop_ticker(ui);
     }
+    crate::update_queue_bubble(ui);
 }
 
 fn running_row(ui: &Rc<Ui>, running: &queue::Running) -> adw::ActionRow {

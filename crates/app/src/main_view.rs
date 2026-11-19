@@ -17,6 +17,10 @@ pub(crate) struct MainView {
     pub progress: gtk::ProgressBar,
     /// Number of jobs waiting behind the running one.
     pub queue_status: gtk::Label,
+    /// Floating queue indicator when the sidebar is hidden.
+    pub queue_bubble: gtk::Button,
+    pub queue_bubble_spinner: gtk::Spinner,
+    pub queue_bubble_label: gtk::Label,
     pub cancel: gtk::Button,
     pub status: gtk::Label,
     pub crop_overlay: gtk::DrawingArea,
@@ -319,6 +323,25 @@ pub(crate) fn build() -> MainView {
         .tooltip_text("Fit to window")
         .css_classes(["flat", "circular"])
         .build();
+    let queue_bubble_spinner = gtk::Spinner::new();
+    queue_bubble_spinner.set_size_request(14, 14);
+    queue_bubble_spinner.set_visible(false);
+    let queue_bubble_label = gtk::Label::builder().css_classes(["caption"]).build();
+    let queue_bubble_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    queue_bubble_content.append(&queue_bubble_spinner);
+    queue_bubble_content.append(&queue_bubble_label);
+    let queue_bubble = gtk::Button::builder()
+        .child(&queue_bubble_content)
+        .tooltip_text("Open the job queue")
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::End)
+        .margin_start(16)
+        .margin_bottom(16)
+        .visible(false)
+        .css_classes(["queue-bubble"])
+        .build();
+    queue_bubble.update_property(&[gtk::accessible::Property::Label("Open the job queue")]);
+
     let zoom_controls = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     zoom_controls.add_css_class("osd");
     zoom_controls.add_css_class("zoom-controls");
@@ -337,6 +360,7 @@ pub(crate) fn build() -> MainView {
     image_overlay.add_overlay(&image_actions);
     image_overlay.add_overlay(&nav_actions);
     image_overlay.add_overlay(&zoom_controls);
+    image_overlay.add_overlay(&queue_bubble);
 
     let reference_thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     reference_thumbs.set_valign(gtk::Align::Center);
@@ -482,6 +506,9 @@ pub(crate) fn build() -> MainView {
         progress_row,
         progress,
         queue_status,
+        queue_bubble,
+        queue_bubble_spinner,
+        queue_bubble_label,
         cancel,
         status,
         crop_overlay,

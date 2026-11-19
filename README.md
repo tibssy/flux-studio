@@ -38,8 +38,10 @@ Milestone 3 (packaged desktop app):
   and seed
 - **job queue**: press Generate while a job is running to queue another one.
   Each request snapshots its prompt, model, size, seed and references. The
-  composer closes when a job is submitted; use New (`Ctrl+N`) or Edit to
-  compose and queue the next one while earlier jobs run. The sidebar lists waiting and
+  composer closes when a job is submitted; use New (`Ctrl+N`, starts with an
+  empty prompt) or Edit to compose and queue the next one while earlier jobs
+  run. When the sidebar is hidden, a pill in the bottom-left corner shows the
+  running job and waiting count; click it to open the sidebar. The sidebar lists waiting and
   running jobs with per-row remove/cancel, the progress bar shows how many are
   waiting, and closing the window asks before discarding the queue. Jobs run
   one at a time because the server holds a single model in VRAM. Browsing
