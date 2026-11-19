@@ -2285,14 +2285,16 @@ fn add_references(ui: &Rc<Ui>, paths: Vec<PathBuf>) {
     if was_empty && count == 1 {
         fit_reference_size(ui);
     }
-    show_composer(ui, false);
+    // This path is only used by the file picker, not by history references.
+    // Keep the prompt open so the user can describe the edit immediately
+    // instead of having to press Edit first.
+    show_composer(ui, true);
     let label = if count == 1 {
         "Reference ready".to_string()
     } else {
         format!("{count} references ready")
     };
-    ui.status
-        .set_text(&format!("{label} · press Edit to prompt"));
+    ui.status.set_text(&format!("{label} · describe the edit"));
 
     if capped {
         ui.toast.add_toast(adw::Toast::new(&format!(

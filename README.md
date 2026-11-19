@@ -234,7 +234,8 @@ leaves the composer closed; press **Edit** when you want to type a prompt.
 
 The reference strip above the canvas is the multi-image workspace: add images
 with the `+` tile or the image button, click a thumbnail to show it on the
-canvas, and remove one with its ×. Add order defines the prompt indices:
+canvas, and remove one with its ×. Picking files keeps the prompt composer
+open and focused, ready for the edit instruction. Add order defines the prompt indices:
 refer to the inputs as `<image_1>`, `<image_2>`, and so on (Fibo 2.0, FLUX.2
 klein 9B, FLUX.3 klein and Qwen Image 2.1 all accept multi-image
 instructions). With several
