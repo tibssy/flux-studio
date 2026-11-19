@@ -46,7 +46,9 @@ Milestone 3 (packaged desktop app):
   empty prompt) or Edit to compose and queue the next one while earlier jobs
   run. When the sidebar is hidden, a pill in the bottom-left corner shows the
   running job and waiting count; click it to open the sidebar. The sidebar lists waiting and
-  running jobs with per-row remove/cancel, the progress bar shows how many are
+  running jobs with per-row remove/cancel, **move up/down**, **duplicate** for
+  generations, and a **pause/resume** control; the running row shows an
+  estimated time left. The progress bar shows how many are
   waiting, and closing the window asks before discarding the queue. Jobs run
   one at a time because the server holds a single model in VRAM. Browsing
   History while a job runs pins the canvas to that image and hides the step
@@ -87,6 +89,16 @@ Milestone 3 (packaged desktop app):
 - **manual adjustments** with brightness, contrast and saturation sliders and
   a live canvas preview; saving writes a new PNG that joins the history chain
   without re-running the model
+- **batch and variations**: **Batch** in the sidebar queues 1–4 images with
+  consecutive seeds, and the shuffle button over the canvas re-runs the
+  displayed prompt with seed + 1
+- **before/after compare**: the split button over the canvas shows the source
+  of an edit, upscale or adjustment beside the result; drag the divider or
+  click a side to move it
+- **prompt history**: `Alt+Up` / `Alt+Down` recalls submitted prompts and keeps
+  the draft you were writing
+- **session restore**: optionally reopen the last image and draft prompt on
+  launch (**Preferences → General**, on by default)
 - **view-only zoom** with a bottom-right pill: zoom in/out, real-pixel scale
   readout, fit, drag-to-pan and wheel-to-pan while zoomed. It never modifies
   the image
@@ -232,6 +244,13 @@ without leaving the app.
 | Show the image in its folder | folder button over the canvas |
 | Drag an image out | drag from the canvas into the file manager |
 | Export / import effects | **Effects → Export… / Import…** |
+| Batch generation | **Batch** spinner in the sidebar (1–4 images) |
+| Generate a variation | shuffle button over the canvas (seed + 1) |
+| Compare with the source | split button over the canvas |
+| Pause / resume the queue | pause button in the **Queue** header |
+| Reorder waiting jobs | up/down arrows on a waiting queue row |
+| Duplicate a queued prompt | copy button on a waiting queue row |
+| Recall a previous prompt | `Alt+Up` / `Alt+Down` in the composer |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |

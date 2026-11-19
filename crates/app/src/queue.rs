@@ -179,6 +179,9 @@ pub(crate) struct JobQueue {
     /// Recent generation outputs, so an upscale whose dialog was open while
     /// the generation finished can still find its input.
     completed: HashMap<u64, PathBuf>,
+    /// The user paused the queue; the running job continues, but no new job
+    /// starts until it is resumed.
+    paused: bool,
 }
 
 impl JobQueue {
@@ -210,6 +213,63 @@ impl JobQueue {
 
     pub fn pending_job_mut(&mut self, id: u64) -> Option<&mut Job> {
         self.pending.iter_mut().find(|job| job.id == id)
+    }
+
+    pub fn pending_job(&self, id: u64) -> Option<&Job> {
+        self.pending.iter().find(|job| job.id == id)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    /// Whether a waiting job can move by `delta` without crossing a pending
+    /// upscale's dependency.
+    pub fn can_move_waiting(&self, id: u64, delta: isize) -> bool {
+        let Some(index) = self.pending.iter().position(|job| job.id == id) else {
+            return false;
+        };
+        let target = (index as isize + delta).clamp(0, self.pending.len() as isize - 1) as usize;
+        if target == index {
+            return false;
+        }
+        let mut moved = self.pending.clone();
+        let job = moved.remove(index).expect("pending index exists");
+        moved.insert(target, job);
+        for (position, job) in moved.iter().enumerate() {
+            let Some(upscale) = job.upscale() else {
+                continue;
+            };
+            let UpscaleTarget::Pending(target_id) = upscale.target else {
+                continue;
+            };
+            if let Some(dependency) = moved.iter().position(|candidate| candidate.id == target_id)
+                && dependency > position
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Move a waiting job by `delta` positions. Returns whether it moved.
+    pub fn move_waiting(&mut self, id: u64, delta: isize) -> bool {
+        if !self.can_move_waiting(id, delta) {
+            return false;
+        }
+        let index = self
+            .pending
+            .iter()
+            .position(|job| job.id == id)
+            .expect("pending index exists");
+        let target = (index as isize + delta).clamp(0, self.pending.len() as isize - 1) as usize;
+        let job = self.pending.remove(index).expect("pending index exists");
+        self.pending.insert(target, job);
+        true
     }
 
     pub fn running(&self) -> Option<&Running> {
@@ -406,6 +466,64 @@ mod tests {
         queue.clear_running();
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.take_next().unwrap().id, 2);
+    }
+
+    #[test]
+    fn reorder_respects_pending_upscale_dependencies() {
+        let mut queue = JobQueue::default();
+        queue.push(generate_job(1));
+        queue.push(upscale_job(2, UpscaleTarget::Pending(1)));
+        queue.push(generate_job(3));
+
+        assert!(
+            !queue.can_move_waiting(2, -1),
+            "upscale before its generation"
+        );
+        assert!(
+            !queue.can_move_waiting(1, 1),
+            "generation after its upscale"
+        );
+        assert!(queue.can_move_waiting(3, -1));
+        assert!(!queue.can_move_waiting(1, 0));
+
+        assert!(!queue.move_waiting(2, -1));
+        assert_eq!(
+            queue.pending().map(|job| job.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn reorders_waiting_jobs() {
+        let mut queue = JobQueue::default();
+        for id in 1..=3 {
+            queue.push(generate_job(id));
+        }
+        assert!(queue.move_waiting(3, -1));
+        assert_eq!(
+            queue.pending().map(|job| job.id).collect::<Vec<_>>(),
+            vec![1, 3, 2]
+        );
+        assert!(queue.move_waiting(3, -1));
+        assert_eq!(
+            queue.pending().map(|job| job.id).collect::<Vec<_>>(),
+            vec![3, 1, 2]
+        );
+        assert!(!queue.move_waiting(3, -1), "already first");
+        assert!(!queue.move_waiting(2, 1), "already last");
+        assert!(!queue.move_waiting(99, -1), "unknown job");
+    }
+
+    #[test]
+    fn pauses_without_dropping_jobs() {
+        let mut queue = JobQueue::default();
+        assert!(!queue.is_paused());
+        queue.push(generate_job(1));
+        queue.set_paused(true);
+        assert!(queue.is_paused());
+        assert_eq!(queue.pending_len(), 1);
+        queue.set_paused(false);
+        assert_eq!(queue.take_next().unwrap().id, 1);
     }
 
     #[test]

@@ -180,6 +180,25 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         });
     }
     output_group.add(&copy_row);
+
+    let session_row = adw::SwitchRow::builder()
+        .title("Restore the last image on launch")
+        .subtitle("Reopen the last canvas image and the draft prompt")
+        .active(ui.config.borrow().session_restore)
+        .build();
+    {
+        let ui = ui.clone();
+        session_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            let mut config = ui.config.borrow_mut();
+            if config.session_restore == active {
+                return;
+            }
+            config.session_restore = active;
+            let _ = config.save();
+        });
+    }
+    output_group.add(&session_row);
     general.add(&output_group);
     {
         let ui = ui.clone();

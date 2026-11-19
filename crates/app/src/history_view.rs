@@ -421,7 +421,7 @@ pub(crate) fn add_row(
 }
 
 /// Restore the prompt, model, style, size and seed recorded with an entry.
-fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
+pub(crate) fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     if entry.kind == "upscale" || entry.kind == "adjust" {
         return;
     }

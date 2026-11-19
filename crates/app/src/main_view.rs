@@ -27,6 +27,7 @@ pub(crate) struct MainView {
     pub zoom_overlay: gtk::DrawingArea,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub variation_button: gtk::Button,
     pub adjust_button: gtk::Button,
     /// Returns from a history image to the running job's live preview.
     pub live_button: gtk::Button,
@@ -60,6 +61,8 @@ pub(crate) struct MainView {
     pub undo_button: gtk::Button,
     pub copy_button: gtk::Button,
     pub folder_button: gtk::Button,
+    pub compare_button: gtk::ToggleButton,
+    pub compare_area: gtk::DrawingArea,
 }
 
 pub(crate) fn build() -> MainView {
@@ -127,6 +130,12 @@ pub(crate) fn build() -> MainView {
     let upscale_button = gtk::Button::builder()
         .icon_name("zoom-in-symbolic")
         .tooltip_text("Upscale this image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let variation_button = gtk::Button::builder()
+        .icon_name("media-playlist-shuffle-symbolic")
+        .tooltip_text("Generate a variation (seed + 1)")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
@@ -305,6 +314,19 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
+    let compare_button = gtk::ToggleButton::builder()
+        .icon_name("object-flip-horizontal-symbolic")
+        .tooltip_text("Compare with the source image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let compare_area = gtk::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .can_target(true)
+        .css_classes(["compare-overlay"])
+        .build();
     let image_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     image_actions.set_halign(gtk::Align::End);
     image_actions.set_valign(gtk::Align::Start);
@@ -315,12 +337,14 @@ pub(crate) fn build() -> MainView {
     image_actions.append(&save_effect_button);
     image_actions.append(&adjust_button);
     image_actions.append(&upscale_button);
+    image_actions.append(&variation_button);
     image_actions.append(&edit_button);
     image_actions.append(&crop_button);
     image_actions.append(&undo_button);
     image_actions.append(&back_button);
     image_actions.append(&copy_button);
     image_actions.append(&folder_button);
+    image_actions.append(&compare_button);
 
     let image_overlay = gtk::Overlay::builder()
         .child(&scroller_clip)
@@ -392,6 +416,7 @@ pub(crate) fn build() -> MainView {
 
     image_overlay.add_overlay(&crop_overlay);
     image_overlay.add_overlay(&zoom_overlay);
+    image_overlay.add_overlay(&compare_area);
     image_overlay.add_overlay(&image_actions);
     image_overlay.add_overlay(&nav_actions);
     image_overlay.add_overlay(&zoom_controls);
@@ -557,6 +582,7 @@ pub(crate) fn build() -> MainView {
         zoom_fit_button,
         edit_button,
         upscale_button,
+        variation_button,
         live_button,
         effects_button,
         effects_popover,
@@ -582,6 +608,8 @@ pub(crate) fn build() -> MainView {
         undo_button,
         copy_button,
         folder_button,
+        compare_button,
+        compare_area,
     }
 }
 

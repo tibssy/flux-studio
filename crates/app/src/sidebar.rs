@@ -22,6 +22,7 @@ pub(crate) struct Sidebar {
     pub size_hint: gtk::Label,
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
+    pub batch_spin: gtk::SpinButton,
     pub new_button: gtk::Button,
     pub history_search: gtk::SearchEntry,
     pub history_filter: gtk::DropDown,
@@ -31,6 +32,7 @@ pub(crate) struct Sidebar {
     pub queue_list: gtk::ListBox,
     pub queue_waiting: gtk::Label,
     pub queue_clear: gtk::Button,
+    pub queue_pause: gtk::ToggleButton,
 }
 
 pub(crate) fn build(
@@ -203,6 +205,22 @@ pub(crate) fn build(
     seed_row.append(&seed_entry);
     seed_row.append(&random_button);
 
+    let batch_spin = gtk::SpinButton::with_range(1.0, 4.0, 1.0);
+    batch_spin.set_value(config.batch_count.clamp(1, 4) as f64);
+    batch_spin.set_width_chars(2);
+    batch_spin.set_valign(gtk::Align::Center);
+    batch_spin.set_tooltip_text(Some("Images to queue per Generate"));
+    let batch_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    batch_row.append(&field_label("Batch"));
+    batch_row.append(&batch_spin);
+    let batch_hint = gtk::Label::builder()
+        .label("images")
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    batch_row.append(&batch_hint);
+
     let setup = gtk::Box::new(gtk::Orientation::Vertical, 6);
     setup.append(&row("Model", &model_dropdown));
     setup.append(&model_hint);
@@ -216,6 +234,7 @@ pub(crate) fn build(
     ratio_select_row.append(&field_label("Ratio"));
     ratio_select_row.append(&ratio_dropdown);
     setup.append(&seed_row);
+    setup.append(&batch_row);
     setup.append(&ratio_select_row);
     setup.append(&size_row);
     setup.append(&ratio_preview);
@@ -283,9 +302,16 @@ pub(crate) fn build(
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
+    let queue_pause = gtk::ToggleButton::builder()
+        .icon_name("media-playback-pause-symbolic")
+        .tooltip_text("Pause the queue")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
     let queue_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     queue_header.append(&queue_title);
     queue_header.append(&queue_waiting);
+    queue_header.append(&queue_pause);
     queue_header.append(&queue_clear);
 
     let queue_list = gtk::ListBox::builder()
@@ -328,6 +354,7 @@ pub(crate) fn build(
         size_hint,
         seed_entry,
         random_button,
+        batch_spin,
         new_button,
         history_search,
         history_filter,
@@ -337,6 +364,7 @@ pub(crate) fn build(
         queue_list,
         queue_waiting,
         queue_clear,
+        queue_pause,
     }
 }
 

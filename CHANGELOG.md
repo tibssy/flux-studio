@@ -5,6 +5,16 @@ rough edges.
 
 ## Unreleased
 
+- **Batch and variations**: queue 1–4 images per Generate with consecutive
+  seeds, and re-run a result with seed + 1 from the new shuffle button.
+- **Before/after compare**: split the canvas against the source of an edit,
+  upscale or adjustment with a draggable divider.
+- **Queue control**: pause/resume, reorder waiting jobs, duplicate a generation
+  job, and an estimated time remaining on the running row.
+- **Prompt history**: `Alt+Up` / `Alt+Down` recall submitted prompts without
+  losing the current draft.
+- **Session restore**: optionally reopen the last image and draft prompt on
+  launch (**Preferences → General**, on by default).
 - **PNG metadata**: every generation, upscale and adjusted copy now carries its
   prompt, model, style, seed, steps, CFG, sampler, size, references and app
   version in PNG text chunks, plus an A1111-compatible `parameters` block.

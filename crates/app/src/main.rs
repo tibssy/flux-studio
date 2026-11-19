@@ -87,6 +87,7 @@ pub(crate) struct Ui {
     pub classifying: Cell<bool>,
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
+    pub variation_button: gtk::Button,
     pub adjust_button: gtk::Button,
     /// View zoom factor, 1.0 being fit-to-window.
     pub zoom: Cell<f64>,
@@ -122,9 +123,19 @@ pub(crate) struct Ui {
     pub undo_button: gtk::Button,
     pub copy_button: gtk::Button,
     pub folder_button: gtk::Button,
+    pub compare_button: gtk::ToggleButton,
+    pub compare_area: gtk::DrawingArea,
+    pub compare_surfaces: RefCell<Option<(gtk::cairo::ImageSurface, gtk::cairo::ImageSurface)>>,
+    pub compare_split: Cell<f64>,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
+    /// Position while browsing prompt history; `None` is the live draft.
+    pub prompt_history_index: Cell<Option<usize>>,
+    /// Suppresses the draft reset while the history fills the prompt.
+    pub prompt_edit_guard: Cell<bool>,
+    /// Text the user was writing before browsing older prompts.
+    pub prompt_draft: RefCell<String>,
     pub backend: Arc<dyn Backend>,
     pub worker: GenerationWorker,
     pub models_dir: PathBuf,
@@ -137,6 +148,9 @@ pub(crate) struct Ui {
     pub queue_list: gtk::ListBox,
     pub queue_waiting: gtk::Label,
     pub queue_clear: gtk::Button,
+    pub queue_pause: gtk::ToggleButton,
+    /// Suppresses the pause handler while the UI syncs it from the queue.
+    pub queue_pause_guard: Cell<bool>,
     pub queue_running_row: RefCell<Option<adw::ActionRow>>,
     pub queue_tick: RefCell<Option<glib::SourceId>>,
     /// Pending count next to the progress bar.
@@ -178,6 +192,7 @@ pub(crate) struct Ui {
     pub size_hint: gtk::Label,
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
+    pub batch_spin: gtk::SpinButton,
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
     pub upscaling: Cell<bool>,
@@ -239,6 +254,9 @@ fn install_styles() {
          .drop-active {
              box-shadow: inset 0 0 0 2px @accent_color;
              border-radius: 16px;
+         }
+         .compare-overlay {
+             background-color: @window_bg_color;
          }
          .queue-bubble {
              background-image: none;
@@ -441,6 +459,7 @@ fn build_ui(app: &adw::Application) {
         classifying: Cell::new(false),
         edit_button: view.edit_button,
         upscale_button: view.upscale_button,
+        variation_button: view.variation_button,
         adjust_button: view.adjust_button,
         zoom: Cell::new(1.0),
         zoom_animation: RefCell::new(None),
@@ -474,9 +493,16 @@ fn build_ui(app: &adw::Application) {
         undo_button: view.undo_button,
         copy_button: view.copy_button,
         folder_button: view.folder_button,
+        compare_button: view.compare_button,
+        compare_area: view.compare_area,
+        compare_surfaces: RefCell::new(None),
+        compare_split: Cell::new(0.5),
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
+        prompt_history_index: Cell::new(None),
+        prompt_edit_guard: Cell::new(false),
+        prompt_draft: RefCell::new(String::new()),
         backend,
         worker,
         models_dir,
@@ -488,6 +514,8 @@ fn build_ui(app: &adw::Application) {
         queue_list: side.queue_list,
         queue_waiting: side.queue_waiting,
         queue_clear: side.queue_clear,
+        queue_pause: side.queue_pause,
+        queue_pause_guard: Cell::new(false),
         queue_running_row: RefCell::new(None),
         queue_tick: RefCell::new(None),
         queue_status: view.queue_status,
@@ -521,6 +549,7 @@ fn build_ui(app: &adw::Application) {
         size_hint: side.size_hint,
         seed_entry: side.seed_entry,
         random_button: side.random_button,
+        batch_spin: side.batch_spin,
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
         upscaling: Cell::new(false),
@@ -546,6 +575,7 @@ fn build_ui(app: &adw::Application) {
     effects::install_tools(&ui);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
+    setup_compare_overlay(&ui);
 
     // Notification clicks land here: focus the window and show that result.
     {
@@ -577,6 +607,7 @@ fn build_ui(app: &adw::Application) {
         history_view::collapse_all_groups(&ui);
         history_view::rebuild(&ui);
     }
+    restore_session(&ui);
 
     if let Err(error) = ui.config.borrow().save() {
         tracing::warn!(%error, "failed to write config");
@@ -627,6 +658,30 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.queue_pause.clone().connect_toggled(move |button| {
+            if ui.queue_pause_guard.get() {
+                return;
+            }
+            let paused = button.is_active();
+            ui.queue.borrow_mut().set_paused(paused);
+            button.set_icon_name(if paused {
+                "media-playback-start-symbolic"
+            } else {
+                "media-playback-pause-symbolic"
+            });
+            button.set_tooltip_text(Some(if paused {
+                "Resume the queue"
+            } else {
+                "Pause the queue"
+            }));
+            queue_view::rebuild(&ui);
+            if !paused && !pump_queue(&ui) {
+                ui.status.set_text("Queue resumed");
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
         ui.live_button
             .clone()
             .connect_clicked(move |_| show_live(&ui));
@@ -668,6 +723,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 show_in_folder(&ui, &path);
             }
         });
+    }
+    {
+        let ui = ui.clone();
+        ui.variation_button
+            .clone()
+            .connect_clicked(move |_| generate_variation(&ui));
     }
     {
         let ui = ui.clone();
@@ -769,6 +830,28 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let button = ui.random_button.clone();
         button.connect_clicked(move |_| {
             entry.set_text(&GenerateRequest::random_seed().to_string());
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.prompt.buffer().connect_changed(move |_| {
+            if !ui.prompt_edit_guard.get() {
+                ui.prompt_history_index.set(None);
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.batch_spin.clone().connect_value_changed(move |spin| {
+            let value = spin.value().round().clamp(1.0, 4.0) as u32;
+            spin.set_value(value as f64);
+            {
+                let mut config = ui.config.borrow_mut();
+                config.batch_count = value;
+            }
+            if let Err(error) = ui.config.borrow().save() {
+                tracing::warn!(%error, "failed to save the batch count");
+            }
         });
     }
     {
@@ -1041,6 +1124,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let window = ui.window.clone();
         window.connect_close_request(move |window| {
+            remember_session(&ui);
             let _ = ui.config.borrow().save();
             if ui.quitting.get() {
                 return glib::Propagation::Proceed;
@@ -1090,8 +1174,18 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 ui.crop_button.set_active(false);
                 return glib::Propagation::Stop;
             }
+            if key == gdk::Key::Escape && ui.compare_button.is_active() {
+                ui.compare_button.set_active(false);
+                return glib::Propagation::Stop;
+            }
             if key == gdk::Key::Escape && ui.zoom.get() > 1.0 {
                 reset_zoom(&ui);
+                return glib::Propagation::Stop;
+            }
+            if state.contains(gdk::ModifierType::ALT_MASK)
+                && matches!(key, gdk::Key::Up | gdk::Key::Down)
+            {
+                navigate_prompt_history(&ui, key == gdk::Key::Up);
                 return glib::Propagation::Stop;
             }
             if !state.contains(gdk::ModifierType::CONTROL_MASK) {
@@ -1567,8 +1661,11 @@ fn apply_zoom(ui: &Ui) {
 
 fn update_zoom_controls(ui: &Ui) {
     let has_image = ui.state.borrow().display.is_some();
-    let busy =
-        ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get();
+    let busy = ui.generating.get()
+        || ui.upscaling.get()
+        || ui.zooming.get()
+        || ui.classifying.get()
+        || ui.compare_button.is_active();
     let visible = has_image && !busy && !ui.crop_mode.get();
     ui.zoom_controls.set_visible(visible);
     // Hiding the box is not enough: GTK keeps focusable children in the tab
@@ -1686,6 +1783,9 @@ fn crossfade_to_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
 }
 
 pub(crate) fn update_image_view(ui: &Rc<Ui>) {
+    if ui.compare_button.is_active() {
+        ui.compare_button.set_active(false);
+    }
     let display = ui.state.borrow().display.clone();
 
     match display {
@@ -1859,6 +1959,12 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         && (ui.state.borrow().display.is_some()
             || (generating && !upscaling && ui.live_view.get()));
     ui.upscale_button.set_visible(upscale_ready);
+    ui.variation_button.set_visible(
+        actions
+            && stable
+            && current_history_entry(ui)
+                .is_some_and(|entry| entry.kind == "generate" && !entry.prompt.trim().is_empty()),
+    );
     ui.adjust_button.set_visible(actions && stable);
     ui.live_button
         .set_visible(generating && !upscaling && !ui.live_view.get());
@@ -1869,6 +1975,13 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(editable && stable && ui.undo.borrow().can_undo());
     ui.copy_button.set_visible(actions && stable);
     ui.folder_button.set_visible(actions && stable);
+    let comparable = actions
+        && stable
+        && current_history_entry(ui).is_some_and(|entry| compare_source(&entry).is_some());
+    ui.compare_button.set_visible(comparable);
+    if !comparable && ui.compare_button.is_active() {
+        ui.compare_button.set_active(false);
+    }
     update_zoom_controls(ui);
 
     if composing || !editable {
@@ -2164,6 +2277,161 @@ fn image_surface(image: &image::DynamicImage) -> anyhow::Result<gtk::cairo::Imag
     }
     surface.mark_dirty();
     Ok(surface)
+}
+
+/// Draw the current image and its source either side of a draggable split.
+fn setup_compare_overlay(ui: &Rc<Ui>) {
+    {
+        let inner = ui.clone();
+        let area = ui.compare_area.clone();
+        area.set_draw_func(move |_area, cr, width, height| {
+            let surfaces = inner.compare_surfaces.borrow();
+            let Some((after, before)) = surfaces.as_ref() else {
+                return;
+            };
+            let width = width as f64;
+            let height = height as f64;
+            let split = inner.compare_split.get().clamp(0.0, 1.0) * width;
+
+            // The current image fills the canvas; the source replaces the
+            // left side so the split reads as before/after.
+            draw_contained(cr, after, width, height);
+            let _ = cr.save();
+            cr.rectangle(0.0, 0.0, split, height);
+            cr.clip();
+            draw_contained(cr, before, width, height);
+            let _ = cr.restore();
+
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
+            cr.rectangle(split - 1.0, 0.0, 2.0, height);
+            let _ = cr.fill();
+            cr.arc(split, height / 2.0, 13.0, 0.0, std::f64::consts::TAU);
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.35);
+            let _ = cr.fill();
+            cr.arc(split, height / 2.0, 11.0, 0.0, std::f64::consts::TAU);
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.85);
+            let _ = cr.fill();
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
+            cr.set_line_width(1.5);
+            let _ = cr.stroke();
+        });
+    }
+
+    let drag = gtk::GestureDrag::new();
+    {
+        let ui = ui.clone();
+        drag.connect_drag_update(move |gesture, offset_x, _| {
+            let Some((start_x, _)) = gesture.start_point() else {
+                return;
+            };
+            let width = ui.compare_area.width() as f64;
+            if width > 0.0 {
+                ui.compare_split
+                    .set(((start_x + offset_x) / width).clamp(0.0, 1.0));
+                ui.compare_area.queue_draw();
+            }
+        });
+    }
+    ui.compare_area.add_controller(drag);
+
+    let click = gtk::GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
+    {
+        let ui = ui.clone();
+        click.connect_pressed(move |_, _, x, _| {
+            let width = ui.compare_area.width() as f64;
+            if width > 0.0 {
+                ui.compare_split.set((x / width).clamp(0.0, 1.0));
+                ui.compare_area.queue_draw();
+            }
+        });
+    }
+    ui.compare_area.add_controller(click);
+
+    {
+        let inner = ui.clone();
+        let button = ui.compare_button.clone();
+        button.connect_toggled(move |button| set_compare_mode(&inner, button.is_active()));
+    }
+}
+
+fn draw_contained(
+    cr: &gtk::cairo::Context,
+    surface: &gtk::cairo::ImageSurface,
+    area_width: f64,
+    area_height: f64,
+) {
+    let width = surface.width() as f64;
+    let height = surface.height() as f64;
+    if width <= 0.0 || height <= 0.0 || area_width <= 0.0 || area_height <= 0.0 {
+        return;
+    }
+    let scale = (area_width / width).min(area_height / height);
+    let scaled_width = width * scale;
+    let scaled_height = height * scale;
+    let _ = cr.save();
+    cr.translate(
+        (area_width - scaled_width) / 2.0,
+        (area_height - scaled_height) / 2.0,
+    );
+    cr.scale(scale, scale);
+    let _ = cr.set_source_surface(surface, 0.0, 0.0);
+    let _ = cr.paint();
+    let _ = cr.restore();
+}
+
+fn compare_source(entry: &Generation) -> Option<PathBuf> {
+    entry
+        .source_path
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| entry.reference_paths.first().map(PathBuf::from))
+        .filter(|path| path.is_file())
+}
+
+fn load_compare_surface(path: &Path) -> Option<gtk::cairo::ImageSurface> {
+    let image = image::open(path).ok()?;
+    image_surface(&image).ok()
+}
+
+fn set_compare_mode(ui: &Rc<Ui>, active: bool) {
+    if !active {
+        ui.compare_area.set_visible(false);
+        *ui.compare_surfaces.borrow_mut() = None;
+        update_zoom_controls(ui);
+        return;
+    }
+
+    let Some(entry) = current_history_entry(ui) else {
+        ui.compare_button.set_active(false);
+        return;
+    };
+    let Some(source) = compare_source(&entry) else {
+        ui.toast
+            .add_toast(adw::Toast::new("This image has no source to compare with."));
+        ui.compare_button.set_active(false);
+        return;
+    };
+    let Some(after) = load_compare_surface(Path::new(&entry.image_path)) else {
+        ui.toast
+            .add_toast(adw::Toast::new("Could not load this image."));
+        ui.compare_button.set_active(false);
+        return;
+    };
+    let Some(before) = load_compare_surface(&source) else {
+        ui.toast
+            .add_toast(adw::Toast::new("Could not load the source image."));
+        ui.compare_button.set_active(false);
+        return;
+    };
+
+    *ui.compare_surfaces.borrow_mut() = Some((after, before));
+    ui.compare_split.set(0.5);
+    ui.compare_area.set_visible(true);
+    ui.compare_area.queue_draw();
+    reset_zoom(ui);
+    update_zoom_controls(ui);
+    ui.status.set_text("Comparing with the source");
 }
 
 fn setup_zoom_overlay(ui: &Rc<Ui>) {
@@ -2714,6 +2982,111 @@ fn current_prompt(ui: &Rc<Ui>) -> String {
         .to_string()
 }
 
+/// Remember a submitted prompt for Alt+Up/Down recall.
+fn remember_prompt(ui: &Rc<Ui>, prompt: &str) {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return;
+    }
+    let mut config = ui.config.borrow_mut();
+    if config
+        .prompt_history
+        .last()
+        .is_some_and(|last| last == prompt)
+    {
+        return;
+    }
+    config.prompt_history.push(prompt.to_string());
+    while config.prompt_history.len() > 50 {
+        config.prompt_history.remove(0);
+    }
+    if let Err(error) = config.save() {
+        tracing::warn!(%error, "failed to save prompt history");
+    }
+}
+
+/// Cycle through submitted prompts; `older` walks towards the oldest entry.
+fn navigate_prompt_history(ui: &Rc<Ui>, older: bool) {
+    let history = ui.config.borrow().prompt_history.clone();
+    if history.is_empty() || (ui.prompt_history_index.get().is_none() && !older) {
+        return;
+    }
+    if !ui.composer.reveals_child() {
+        show_composer(ui, true);
+    }
+
+    let len = history.len();
+    let next = match (ui.prompt_history_index.get(), older) {
+        (None, true) => {
+            *ui.prompt_draft.borrow_mut() = current_prompt(ui);
+            Some(len - 1)
+        }
+        (Some(0), true) => Some(0),
+        (Some(index), true) => Some(index - 1),
+        (Some(index), false) if index + 1 < len => Some(index + 1),
+        _ => None,
+    };
+
+    ui.prompt_edit_guard.set(true);
+    match next {
+        Some(index) => {
+            ui.prompt.buffer().set_text(&history[index]);
+            ui.prompt_history_index.set(Some(index));
+        }
+        None => {
+            let draft = ui.prompt_draft.borrow().clone();
+            ui.prompt.buffer().set_text(&draft);
+            ui.prompt_history_index.set(None);
+        }
+    }
+    ui.prompt_edit_guard.set(false);
+}
+
+/// Store the canvas and draft prompt so the next launch can restore them.
+fn remember_session(ui: &Ui) {
+    if !ui.config.borrow().session_restore {
+        return;
+    }
+    let display = ui.state.borrow().display.clone();
+    let buffer = ui.prompt.buffer();
+    let draft = buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+        .to_string();
+    let mut config = ui.config.borrow_mut();
+    config.last_image = display.filter(|path| path.is_file());
+    config.draft_prompt = draft;
+}
+
+fn restore_session(ui: &Rc<Ui>) {
+    let (enabled, path, draft) = {
+        let config = ui.config.borrow();
+        (
+            config.session_restore,
+            config.last_image.clone(),
+            config.draft_prompt.clone(),
+        )
+    };
+    if !enabled {
+        return;
+    }
+    let Some(path) = path.filter(|path| path.is_file()) else {
+        return;
+    };
+    let entry = ui
+        .entries
+        .borrow()
+        .iter()
+        .find(|entry| Path::new(&entry.image_path) == path)
+        .cloned();
+    let Some(entry) = entry else {
+        return;
+    };
+    history_view::load_entry(ui, &entry);
+    if !draft.trim().is_empty() {
+        ui.prompt.buffer().set_text(&draft);
+    }
+}
+
 const COLORIZE_PROMPT: &str = "photorealistic colorization of this vintage black and white photo, restoring natural skin tones and authentic colors while maintaining the original details";
 const RECOVER_PROMPT: &str = "restore this old damaged photograph, remove scratches, stains, creases, dust and tears, repair missing areas, recover natural detail and texture, photorealistic restoration, keep the same composition, subjects, and expression";
 const ENHANCE_PROMPT: &str = "enhance this image, sharpen fine details, increase clarity and micro-contrast, reduce blur and compression artifacts, natural textures, photorealistic, keep the same composition, subjects, colors, and lighting";
@@ -2814,6 +3187,54 @@ fn start_generation(ui: &Rc<Ui>) {
         current_style_id(ui),
         true,
         None,
+        None,
+    );
+}
+
+fn generate_variation(ui: &Rc<Ui>) {
+    if ui.classifying.get() || ui.zooming.get() {
+        return;
+    }
+    let Some(entry) = current_history_entry(ui) else {
+        return;
+    };
+    if entry.kind != "generate" || entry.prompt.trim().is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("This image was not made with a prompt."));
+        return;
+    }
+
+    pause_live_view(ui);
+    ui.undo.borrow_mut().clear();
+    history_view::restore_settings(ui, &entry);
+    ui.state.borrow_mut().references = entry.reference_paths.iter().map(PathBuf::from).collect();
+
+    let seed = entry
+        .seed
+        .parse::<u64>()
+        .ok()
+        .filter(|seed| *seed <= GenerateRequest::MAX_SEED)
+        .unwrap_or_else(GenerateRequest::random_seed)
+        .saturating_add(1)
+        .min(GenerateRequest::MAX_SEED);
+    ui.seed_entry.set_text(&seed.to_string());
+
+    let mode = if !entry.reference_paths.is_empty() && active_preset(ui).supports_edit {
+        GenerationMode::Edit
+    } else {
+        ui.state.borrow_mut().references.clear();
+        GenerationMode::Generate
+    };
+    render_reference_strip(ui);
+    update_image_actions(ui);
+    generate(
+        ui,
+        mode,
+        entry.prompt.clone(),
+        &entry.style,
+        false,
+        Some(1),
+        None,
     );
 }
 
@@ -2823,6 +3244,7 @@ fn generate(
     base_prompt: String,
     style_id: &str,
     require_composer: bool,
+    batch_override: Option<usize>,
     source_path: Option<String>,
 ) {
     if ui.backend_installing.get() {
@@ -2891,66 +3313,168 @@ fn generate(
         (config.offload, config.show_previews)
     };
 
-    let output = output_dir.join(format!("{}-{}.png", slugify(&base_prompt), now_millis()));
+    let batch = batch_override
+        .unwrap_or_else(|| ui.batch_spin.value().round().clamp(1.0, 4.0) as usize)
+        .clamp(1, 4);
+    let available = queue::LIMIT.saturating_sub(ui.queue.borrow().len());
+    if available == 0 {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "The queue is full ({} jobs). Wait for one to finish.",
+            queue::LIMIT
+        )));
+        return;
+    }
+    let count = batch.min(available);
+    if count < batch {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Only {count} queue slot{} left; queuing that many.",
+            if count == 1 { "" } else { "s" }
+        )));
+    }
 
-    let mut request = GenerateRequest::new(effective_prompt, output);
-    request.preset_id = model.id.to_string();
-    request.width = width;
-    request.height = height;
-    request.steps = model.steps;
-    request.cfg = model.cfg;
-    request.sigmas = model.sigmas.to_vec();
-    request.seed = seed;
-    request.sampler = model.sampler;
-    request.offload = offload;
-    request.previews = previews;
-
-    // The queue keeps its own copies: a crop in the cache or a history entry
-    // can disappear before this job starts. The originals stay in the job for
-    // History's parent lookup.
-    let id = ui.queue.borrow_mut().next_id();
-    let (copies, reference_dir) = match copy_references(id, &references) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            ui.toast.add_toast(adw::Toast::new(&format!(
-                "Could not prepare the references: {error}"
-            )));
-            return;
-        }
-    };
-    request.reference_images = copies;
-
-    let job = queue::Job {
-        id,
-        kind: queue::JobKind::Generate(queue::GenerateJob {
-            request,
-            mode,
-            prompt: base_prompt,
-            style: style_id.to_string(),
-            model,
-            width,
-            height,
-            seed,
-            steps: model.steps,
-            reference_paths: references,
-            source_path,
-            seed_text,
-        }),
-        temp_dir: reference_dir,
-    };
-
+    let slug = slugify(&base_prompt);
     let was_busy = ui.queue.borrow().running().is_some();
     if !was_busy {
         ui.live_view.set(true);
     }
-    ui.queue.borrow_mut().push(job);
+    let mut queued = 0;
+    for index in 0..count {
+        let seed = seed
+            .saturating_add(index as u64)
+            .min(GenerateRequest::MAX_SEED);
+        let output = if count == 1 {
+            output_dir.join(format!("{slug}-{}.png", now_millis()))
+        } else {
+            output_dir.join(format!("{slug}-{}-{}.png", now_millis(), index + 1))
+        };
+
+        let mut request = GenerateRequest::new(effective_prompt.clone(), output);
+        request.preset_id = model.id.to_string();
+        request.width = width;
+        request.height = height;
+        request.steps = model.steps;
+        request.cfg = model.cfg;
+        request.sigmas = model.sigmas.to_vec();
+        request.seed = seed;
+        request.sampler = model.sampler;
+        request.offload = offload;
+        request.previews = previews;
+
+        // The queue keeps its own copies: a crop in the cache or a history
+        // entry can disappear before this job starts. The originals stay in
+        // the job for History's parent lookup.
+        let id = ui.queue.borrow_mut().next_id();
+        let (copies, reference_dir) = match copy_references(id, &references) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Could not prepare the references: {error}"
+                )));
+                break;
+            }
+        };
+        request.reference_images = copies;
+
+        let job = queue::Job {
+            id,
+            kind: queue::JobKind::Generate(queue::GenerateJob {
+                request,
+                mode,
+                prompt: base_prompt.clone(),
+                style: style_id.to_string(),
+                model,
+                width,
+                height,
+                seed,
+                steps: model.steps,
+                reference_paths: references.clone(),
+                source_path: source_path.clone(),
+                seed_text: seed_text.clone(),
+            }),
+            temp_dir: reference_dir,
+        };
+        ui.queue.borrow_mut().push(job);
+        queued += 1;
+    }
+    if queued == 0 {
+        return;
+    }
+
     refresh_history_locks(ui);
     queue_view::rebuild(ui);
     show_composer(ui, false);
-    if was_busy {
-        ui.status.set_text("Added to the queue");
-    }
+    remember_prompt(ui, &base_prompt);
+    ui.prompt_history_index.set(None);
+    ui.status.set_text(&match (queued, was_busy) {
+        (1, true) => "Added to the queue".to_string(),
+        (1, false) => "Starting…".to_string(),
+        (count, _) => format!("{count} jobs added to the queue"),
+    });
     pump_queue(ui);
+}
+
+/// Clone a waiting generation job, including fresh copies of its references.
+pub(crate) fn duplicate_job(ui: &Rc<Ui>, id: u64) {
+    let Some(original) = ui.queue.borrow().pending_job(id).cloned() else {
+        return;
+    };
+    let Some(generate) = original.generate() else {
+        return;
+    };
+    if ui.queue.borrow().is_full() {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "The queue is full ({} jobs).",
+            queue::LIMIT
+        )));
+        return;
+    }
+
+    let new_id = ui.queue.borrow_mut().next_id();
+    let (copies, reference_dir) = match copy_references(new_id, &generate.reference_paths) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Could not duplicate the job: {error}"
+            )));
+            return;
+        }
+    };
+
+    let mut request = generate.request.clone();
+    request.output = duplicate_output(&generate.request.output);
+    request.reference_images = copies;
+    let job = queue::Job {
+        id: new_id,
+        kind: queue::JobKind::Generate(queue::GenerateJob {
+            request,
+            mode: generate.mode,
+            prompt: generate.prompt.clone(),
+            style: generate.style.clone(),
+            model: generate.model,
+            width: generate.width,
+            height: generate.height,
+            seed: generate.seed,
+            steps: generate.steps,
+            reference_paths: generate.reference_paths.clone(),
+            source_path: generate.source_path.clone(),
+            seed_text: generate.seed_text.clone(),
+        }),
+        temp_dir: reference_dir,
+    };
+    ui.queue.borrow_mut().push(job);
+    refresh_history_locks(ui);
+    queue_view::rebuild(ui);
+    ui.status.set_text("Job duplicated");
+    pump_queue(ui);
+}
+
+fn duplicate_output(original: &Path) -> PathBuf {
+    let parent = original.parent().unwrap_or_else(|| Path::new("."));
+    let stem = original
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("image");
+    parent.join(format!("{stem}-copy-{}.png", now_millis()))
 }
 
 /// Copy the selected references into a per-job folder.
@@ -2988,6 +3512,9 @@ fn copy_references(
 fn pump_queue(ui: &Rc<Ui>) -> bool {
     if ui.queue.borrow().running().is_some() {
         return true;
+    }
+    if ui.queue.borrow().is_paused() {
+        return false;
     }
     let Some(job) = ui.queue.borrow_mut().take_next() else {
         return false;
@@ -3585,11 +4112,12 @@ fn finish_job(ui: &Rc<Ui>) {
 
 /// Show the queue as a floating pill while the sidebar is hidden.
 pub(crate) fn update_queue_bubble(ui: &Ui) {
-    let (running, pending) = {
+    let (running, pending, paused) = {
         let queue = ui.queue.borrow();
         (
             queue.running().map(|running| running.job.is_upscale()),
             queue.pending_len(),
+            queue.is_paused(),
         )
     };
     let visible = !ui.split.shows_sidebar() && (running.is_some() || pending > 0);
@@ -3600,7 +4128,7 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
         return;
     }
 
-    let text = match running {
+    let mut text = match running {
         Some(true) if pending > 0 => format!("Upscaling · {pending} waiting"),
         Some(true) => "Upscaling".to_string(),
         Some(false) if pending > 0 => format!("Generating · {pending} waiting"),
@@ -3608,6 +4136,9 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
         None if pending == 1 => "1 queued".to_string(),
         None => format!("{pending} queued"),
     };
+    if paused {
+        text.push_str(" · paused");
+    }
     ui.queue_bubble_label.set_text(&text);
     let spinning = running.is_some();
     ui.queue_bubble_spinner.set_visible(spinning);
@@ -3618,7 +4149,6 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
     }
 }
 
-/// Put a finished image on the system clipboard when the user asked for it.
 /// Write prompt and generation metadata into a finished PNG.
 ///
 /// Failures are logged only: the image itself is already valid and the history
@@ -3907,6 +4437,7 @@ pub(crate) fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empt
         prompt.to_string(),
         "none",
         false,
+        Some(1),
         Some(source.to_string_lossy().into_owned()),
     );
 }
@@ -3998,6 +4529,7 @@ fn start_lighting_conversion(ui: &Rc<Ui>, source: PathBuf, to_night: bool) {
         prompt.to_string(),
         "none",
         false,
+        Some(1),
         Some(source.to_string_lossy().into_owned()),
     );
 }
@@ -4106,6 +4638,7 @@ fn expand_image(ui: &Rc<Ui>) {
         prompt,
         style_id,
         false,
+        Some(1),
         Some(source.to_string_lossy().into_owned()),
     );
 }
@@ -4126,6 +4659,9 @@ fn back_to_view(ui: &Rc<Ui>) {
 
 /// Show an image with a crossfade from the currently visible canvas image.
 pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
+    if ui.compare_button.is_active() {
+        ui.compare_button.set_active(false);
+    }
     let texture = match gdk::Texture::from_filename(path) {
         Ok(texture) => texture,
         Err(error) => {
@@ -4144,6 +4680,16 @@ pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     reset_zoom(ui);
     update_image_actions(ui);
     true
+}
+
+/// The history entry whose image is on the canvas, if any.
+fn current_history_entry(ui: &Ui) -> Option<Generation> {
+    let display = ui.state.borrow().display.clone()?;
+    ui.entries
+        .borrow()
+        .iter()
+        .find(|entry| Path::new(&entry.image_path) == display.as_path())
+        .cloned()
 }
 
 /// Position of the displayed image in the history list and the list length.

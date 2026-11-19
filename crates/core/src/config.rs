@@ -67,6 +67,14 @@ pub struct Config {
     pub notify_on_finish: bool,
     /// Put finished images on the system clipboard.
     pub copy_result_to_clipboard: bool,
+    /// Images queued per Generate press (1–4).
+    pub batch_count: u32,
+    /// Recent prompts, newest last.
+    pub prompt_history: Vec<String>,
+    /// Restore the last displayed image and draft prompt on launch.
+    pub session_restore: bool,
+    pub last_image: Option<PathBuf>,
+    pub draft_prompt: String,
     /// User-saved prompts shown at the bottom of the effects menu.
     pub custom_effects: Vec<CustomEffect>,
 }
@@ -103,6 +111,11 @@ impl Default for Config {
             show_previews: true,
             notify_on_finish: true,
             copy_result_to_clipboard: false,
+            batch_count: 1,
+            prompt_history: Vec::new(),
+            session_restore: true,
+            last_image: None,
+            draft_prompt: String::new(),
             custom_effects: Vec::new(),
         }
     }
@@ -179,6 +192,11 @@ mod tests {
         assert!(config.llama_custom_cli.is_none());
         assert!(config.show_previews);
         assert!(config.custom_effects.is_empty());
+        assert_eq!(config.batch_count, 1);
+        assert!(config.prompt_history.is_empty());
+        assert!(config.session_restore);
+        assert!(config.last_image.is_none());
+        assert!(config.draft_prompt.is_empty());
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
         assert!((config.mp() - 0.589824).abs() < 1e-6);
