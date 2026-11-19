@@ -636,9 +636,6 @@ fn confirm_delete(ui: &Rc<Ui>, entry: &Generation) {
 }
 
 fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() || ui.upscaling.get() {
-        return;
-    }
     if let Err(error) = ui.history.borrow().delete(entry.id) {
         ui.toast
             .add_toast(adw::Toast::new(&format!("Could not delete: {error}")));
@@ -653,7 +650,12 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let _ = std::fs::remove_file(thumb_path(entry.id));
 
     ui.entries.borrow_mut().retain(|item| item.id != entry.id);
-    rebuild(ui);
+    if ui.generating.get() || ui.upscaling.get() {
+        // Keep the sidebar where the user left it while a job runs.
+        rebuild_preserving_scroll(ui);
+    } else {
+        rebuild(ui);
+    }
 
     let path = PathBuf::from(&entry.image_path);
     let is_active = {

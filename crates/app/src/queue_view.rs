@@ -67,16 +67,18 @@ fn running_row(ui: &Rc<Ui>, running: &queue::Running) -> adw::ActionRow {
     spinner.set_size_request(16, 16);
     spinner.start();
 
+    let live = !running.job.is_upscale();
     let row = adw::ActionRow::builder()
-        .title(running.job.snippet())
+        .title(running.job.title())
         .subtitle(running_subtitle(running))
-        .activatable(true)
+        .activatable(live)
         .build();
     row.set_title_lines(1);
     row.set_subtitle_lines(1);
-    row.set_tooltip_text(Some("Show the running job's live preview"));
     row.add_prefix(&spinner);
-    {
+
+    if live {
+        row.set_tooltip_text(Some("Show the running job's live preview"));
         let activated_ui = ui.clone();
         row.connect_activated(move |_| crate::show_live(&activated_ui));
         // ActionRow does not emit `activated` for plain clicks outside a
@@ -86,19 +88,19 @@ fn running_row(ui: &Rc<Ui>, running: &queue::Running) -> adw::ActionRow {
         let click_ui = ui.clone();
         click.connect_released(move |_, _, _, _| crate::show_live(&click_ui));
         row.add_controller(click);
-    }
 
-    let show = gtk::Button::builder()
-        .icon_name("view-reveal-symbolic")
-        .tooltip_text("Show the running job's live preview")
-        .valign(gtk::Align::Center)
-        .css_classes(["flat", "circular"])
-        .build();
-    {
-        let ui = ui.clone();
-        show.connect_clicked(move |_| crate::show_live(&ui));
+        let show = gtk::Button::builder()
+            .icon_name("view-reveal-symbolic")
+            .tooltip_text("Show the running job's live preview")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        {
+            let ui = ui.clone();
+            show.connect_clicked(move |_| crate::show_live(&ui));
+        }
+        row.add_suffix(&show);
     }
-    row.add_suffix(&show);
 
     let cancel = gtk::Button::builder()
         .icon_name("process-stop-symbolic")
@@ -119,11 +121,8 @@ fn waiting_row(ui: &Rc<Ui>, job: &queue::Job) -> adw::ActionRow {
     icon.set_pixel_size(16);
 
     let row = adw::ActionRow::builder()
-        .title(job.snippet())
-        .subtitle(format!(
-            "{} · {} × {} · waiting",
-            job.model.label, job.width, job.height
-        ))
+        .title(job.title())
+        .subtitle(format!("{} · waiting", job.meta()))
         .activatable(false)
         .build();
     row.set_title_lines(1);
@@ -156,14 +155,12 @@ fn running_subtitle(running: &queue::Running) -> String {
         "Cancelling".to_string()
     } else if let Some((current, total)) = running.step {
         format!("Step {current}/{total}")
+    } else if running.job.is_upscale() {
+        "Upscaling".to_string()
     } else {
         "Loading model".to_string()
     };
-    format!(
-        "{} · {} · {status} · {time}",
-        running.job.mode.queue_label(),
-        running.job.model.label
-    )
+    format!("{} · {status} · {time}", running.job.meta())
 }
 
 /// Refresh the running row's elapsed time and step.
@@ -204,8 +201,16 @@ fn stop_ticker(ui: &Rc<Ui>) {
 }
 
 fn remove_job(ui: &Rc<Ui>, id: u64) {
-    if ui.queue.borrow_mut().remove(id) {
+    let removed = ui.queue.borrow_mut().remove(id);
+    if let Some(job) = removed {
+        cleanup_job(&job);
         rebuild(ui);
+    }
+}
+
+fn cleanup_job(job: &queue::Job) {
+    if let Some(dir) = &job.temp_dir {
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -220,7 +225,13 @@ pub(crate) fn cancel_running(ui: &Rc<Ui>) {
         }
         running.cancelling = true;
     }
-    if let Err(error) = flux_core::Backend::cancel(ui.backend.as_ref()) {
+    let upscaling = ui.upscaling.get();
+    let result = if upscaling {
+        ui.backend.cancel_upscale()
+    } else {
+        ui.backend.cancel()
+    };
+    if let Err(error) = result {
         tracing::warn!(%error, "failed to cancel the running job");
     }
     rebuild(ui);
@@ -230,11 +241,14 @@ pub(crate) fn cancel_running(ui: &Rc<Ui>) {
 /// Drop every waiting job, leaving the running one alone.
 pub(crate) fn clear_pending(ui: &Rc<Ui>) {
     let removed = ui.queue.borrow_mut().clear_pending();
-    if removed == 0 {
+    if removed.is_empty() {
         return;
     }
+    for job in &removed {
+        cleanup_job(job);
+    }
     rebuild(ui);
-    ui.status.set_text(&match removed {
+    ui.status.set_text(&match removed.len() {
         1 => "Removed 1 waiting job".into(),
         count => format!("Removed {count} waiting jobs"),
     });

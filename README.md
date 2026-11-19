@@ -44,7 +44,9 @@ Milestone 3 (packaged desktop app):
   one at a time because the server holds a single model in VRAM. Browsing
   History while a job runs pins the canvas to that image and hides the step
   bar; the eye button in the queue row (or on the canvas) returns to the live
-  preview
+  preview. Upscale joins the same queue: while watching a generation it
+  upscales that result when it finishes, while browsing History it upscales the
+  image on screen. History rows can be deleted even while jobs run
 - **live step previews** on the canvas: `sd-server` streams a TAE-decoded frame
   for each sampling step and the canvas crossfades between them, with a
   Preferences toggle and ~11 MB optional preview weights per model family
@@ -152,9 +154,15 @@ ESRGAN/MoSR weights are rejected. Consequently the largest accepted input is
 2048 px, because the native 4× pass must stay within the server's 8192 px
 limit. Upscaling unloads the generation model first so both fit in 8 GB.
 
+Upscaling is a queued job. Clicking the button while a generation is running
+queues the running result when you are watching its live preview, or the image
+you selected in History when you are browsing. The job waits behind earlier
+work, shows up in the Queue section with its own cancel button, and unloads the
+generation model before the upscaler starts.
+
 Upscaled images are saved to the output folder and appear in history with their
 source path, upscaler and output size. Deleting an upscale never deletes the
-source image.
+source image, and deleting any history row works while a job is running.
 
 ## Day/night helper
 

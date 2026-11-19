@@ -2,30 +2,29 @@
 //!
 //! The backend runs one request at a time: `sd-server` holds a single context
 //! and one loaded model, and an 8 GB card has room for one of them. This queue
-//! captures a request at the moment the user presses Generate, so they can keep
-//! composing the next one while earlier jobs run. The app only sends a job to
-//! the worker when the previous one has finished, which also makes "remove from
-//! queue" honest.
+//! captures a request at the moment the user presses Generate (or Upscale), so
+//! they can keep composing while earlier jobs run. The app only starts a job
+//! when the previous one has finished, which also makes "remove from queue"
+//! honest.
 //!
 //! Finished jobs leave the queue and land in History like any other result.
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use flux_core::GenerateRequest;
 use flux_core::preset::ModelPreset;
+use flux_core::upscaler::{UpscaleRequest, UpscalerPreset};
 
 use crate::GenerationMode;
 
 /// Maximum number of jobs, including the running one.
 pub(crate) const LIMIT: usize = 10;
 
-/// One generation request captured from the sidebar.
+/// One text-to-image, edit or effect request.
 #[derive(Clone)]
-pub(crate) struct Job {
-    /// App-local id, used by the queue rows and notifications.
-    pub id: u64,
+pub(crate) struct GenerateJob {
     pub request: GenerateRequest,
     pub mode: GenerationMode,
     /// Prompt without the style suffix, as recorded in History.
@@ -42,12 +41,107 @@ pub(crate) struct Job {
     /// Seed field contents when the job was queued, so completion only writes
     /// the used seed back if the user has not typed a new one meanwhile.
     pub seed_text: String,
-    /// Per-job copies of the references; removed when the job ends.
-    pub reference_dir: Option<PathBuf>,
+}
+
+/// Where an upscale job gets its input.
+#[derive(Clone)]
+pub(crate) enum UpscaleTarget {
+    /// A real image that exists now; the request holds its copy.
+    Displayed,
+    /// The output of a generation that is still queued or running.
+    Pending(u64),
+}
+
+/// One upscale request.
+#[derive(Clone)]
+pub(crate) struct UpscaleJob {
+    pub request: UpscaleRequest,
+    pub target: UpscaleTarget,
+    pub upscaler: &'static UpscalerPreset,
+    pub factor: u32,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    /// Original input path for History's parent lookup, once known.
+    pub source_path: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) enum JobKind {
+    Generate(GenerateJob),
+    Upscale(UpscaleJob),
+}
+
+/// One queued request.
+#[derive(Clone)]
+pub(crate) struct Job {
+    /// App-local id, used by the queue rows and notifications.
+    pub id: u64,
+    pub kind: JobKind,
+    /// Per-job copies of references or the upscale input; removed when the job
+    /// ends or leaves the queue.
+    pub temp_dir: Option<PathBuf>,
 }
 
 impl Job {
+    pub fn is_upscale(&self) -> bool {
+        matches!(self.kind, JobKind::Upscale(_))
+    }
+
+    pub fn generate(&self) -> Option<&GenerateJob> {
+        match &self.kind {
+            JobKind::Generate(job) => Some(job),
+            JobKind::Upscale(_) => None,
+        }
+    }
+
+    pub fn upscale(&self) -> Option<&UpscaleJob> {
+        match &self.kind {
+            JobKind::Upscale(job) => Some(job),
+            JobKind::Generate(_) => None,
+        }
+    }
+
+    pub fn upscale_mut(&mut self) -> Option<&mut UpscaleJob> {
+        match &mut self.kind {
+            JobKind::Upscale(job) => Some(job),
+            JobKind::Generate(_) => None,
+        }
+    }
+
     /// A one-line label for the queue rows and notifications.
+    pub fn title(&self) -> String {
+        match &self.kind {
+            JobKind::Generate(job) => job.snippet(),
+            JobKind::Upscale(job) => format!("Upscale {}×", job.factor),
+        }
+    }
+
+    /// Model, size and status-independent details for a waiting row.
+    pub fn meta(&self) -> String {
+        match &self.kind {
+            JobKind::Generate(job) => format!(
+                "{} · {} · {} × {}",
+                job.mode.queue_label(),
+                job.model.label,
+                job.width,
+                job.height
+            ),
+            JobKind::Upscale(job) => format!(
+                "{} · {} × {} → {} × {}",
+                job.upscaler.label,
+                job.input_width,
+                job.input_height,
+                job.output_width,
+                job.output_height
+            ),
+        }
+    }
+}
+
+impl GenerateJob {
+    /// A one-line prompt snippet.
     pub fn snippet(&self) -> String {
         const MAX_CHARS: usize = 64;
         let prompt = self.prompt.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -82,12 +176,15 @@ pub(crate) struct JobQueue {
     pending: VecDeque<Job>,
     running: Option<Running>,
     next_id: u64,
+    /// Recent generation outputs, so an upscale whose dialog was open while
+    /// the generation finished can still find its input.
+    completed: HashMap<u64, PathBuf>,
 }
 
 impl JobQueue {
     /// Reserve the next job id.
     ///
-    /// Called before copying references, so the copies get a unique folder even
+    /// Called before copying files, so the copies get a unique folder even
     /// when the job is never pushed (a failed copy must not consume a slot).
     pub fn next_id(&mut self) -> u64 {
         self.next_id += 1;
@@ -109,6 +206,10 @@ impl JobQueue {
 
     pub fn pending(&self) -> impl Iterator<Item = &Job> {
         self.pending.iter()
+    }
+
+    pub fn pending_job_mut(&mut self, id: u64) -> Option<&mut Job> {
+        self.pending.iter_mut().find(|job| job.id == id)
     }
 
     pub fn running(&self) -> Option<&Running> {
@@ -141,18 +242,83 @@ impl JobQueue {
         self.running = None;
     }
 
-    /// Drop a waiting job. The running job cannot be removed this way.
-    pub fn remove(&mut self, id: u64) -> bool {
-        let before = self.pending.len();
-        self.pending.retain(|job| job.id != id);
-        self.pending.len() != before
+    pub fn remember_output(&mut self, id: u64, path: PathBuf) {
+        const KEEP: usize = 32;
+        if self.completed.len() >= KEEP
+            && let Some(oldest) = self.completed.keys().min().copied()
+        {
+            self.completed.remove(&oldest);
+        }
+        self.completed.insert(id, path);
     }
 
-    /// Drop every waiting job and return how many were removed.
-    pub fn clear_pending(&mut self) -> usize {
-        let removed = self.pending.len();
-        self.pending.clear();
-        removed
+    pub fn completed_output(&self, id: u64) -> Option<&Path> {
+        self.completed.get(&id).map(PathBuf::as_path)
+    }
+
+    /// Whether `id` is still running or waiting.
+    pub fn is_active(&self, id: u64) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|running| running.job.id == id)
+            || self.pending.iter().any(|job| job.id == id)
+    }
+
+    /// Drop a waiting job and return it so its copies can be removed.
+    pub fn remove(&mut self, id: u64) -> Option<Job> {
+        let index = self.pending.iter().position(|job| job.id == id)?;
+        self.pending.remove(index)
+    }
+
+    /// Drop every waiting job and return them for cleanup.
+    pub fn clear_pending(&mut self) -> Vec<Job> {
+        self.pending.drain(..).collect()
+    }
+
+    /// Ids of waiting upscales that depend on `target_id`.
+    pub fn pending_upscales_for(&self, target_id: u64) -> Vec<u64> {
+        self.pending
+            .iter()
+            .filter(|job| {
+                matches!(
+                    job.upscale().map(|upscale| &upscale.target),
+                    Some(UpscaleTarget::Pending(id)) if *id == target_id
+                )
+            })
+            .map(|job| job.id)
+            .collect()
+    }
+
+    /// Point a waiting upscale at the finished generation's output.
+    pub fn resolve_upscale(&mut self, id: u64, input: PathBuf, source_path: String) {
+        let Some(job) = self.pending.iter_mut().find(|job| job.id == id) else {
+            return;
+        };
+        let Some(upscale) = job.upscale_mut() else {
+            return;
+        };
+        upscale.target = UpscaleTarget::Displayed;
+        upscale.request.input = input;
+        upscale.source_path = Some(source_path);
+    }
+
+    /// Drop waiting upscales whose generation failed or was cancelled.
+    pub fn drop_pending_upscales(&mut self, target_id: u64) -> Vec<Job> {
+        let mut dropped = Vec::new();
+        let mut kept = VecDeque::with_capacity(self.pending.len());
+        while let Some(job) = self.pending.pop_front() {
+            let matches = matches!(
+                job.upscale().map(|upscale| &upscale.target),
+                Some(UpscaleTarget::Pending(id)) if *id == target_id
+            );
+            if matches {
+                dropped.push(job);
+            } else {
+                kept.push_back(job);
+            }
+        }
+        self.pending = kept;
+        dropped
     }
 }
 
@@ -160,36 +326,63 @@ impl JobQueue {
 mod tests {
     use super::*;
     use flux_core::preset::FLUX2_KLEIN_4B;
+    use flux_core::upscaler::MOSR_4X;
 
-    fn job(id: u64) -> Job {
+    fn generate_job(id: u64) -> Job {
         let mut request = GenerateRequest::new("a prompt", format!("/tmp/{id}.png"));
         request.preset_id = FLUX2_KLEIN_4B.id.into();
         Job {
             id,
-            request,
-            mode: GenerationMode::Generate,
-            prompt: "a prompt".into(),
-            style: "none".into(),
-            model: &FLUX2_KLEIN_4B,
-            width: 608,
-            height: 608,
-            seed: 42,
-            steps: 4,
-            reference_paths: Vec::new(),
-            source_path: None,
-            seed_text: String::new(),
-            reference_dir: None,
+            kind: JobKind::Generate(GenerateJob {
+                request,
+                mode: GenerationMode::Generate,
+                prompt: "a prompt".into(),
+                style: "none".into(),
+                model: &FLUX2_KLEIN_4B,
+                width: 608,
+                height: 608,
+                seed: 42,
+                steps: 4,
+                reference_paths: Vec::new(),
+                source_path: None,
+                seed_text: String::new(),
+            }),
+            temp_dir: None,
+        }
+    }
+
+    fn upscale_job(id: u64, target: UpscaleTarget) -> Job {
+        Job {
+            id,
+            kind: JobKind::Upscale(UpscaleJob {
+                request: UpscaleRequest {
+                    input: PathBuf::new(),
+                    output: format!("/tmp/{id}-up.png").into(),
+                    upscaler_id: MOSR_4X.id.into(),
+                    factor: 2,
+                    tile_size: 0,
+                },
+                target,
+                upscaler: &MOSR_4X,
+                factor: 2,
+                input_width: 608,
+                input_height: 608,
+                output_width: 1216,
+                output_height: 1216,
+                source_path: None,
+            }),
+            temp_dir: None,
         }
     }
 
     #[test]
     fn runs_jobs_in_order() {
         let mut queue = JobQueue::default();
-        queue.push(job(1));
-        queue.push(job(2));
+        queue.push(generate_job(1));
+        queue.push(generate_job(2));
         assert_eq!(queue.len(), 2);
         assert_eq!(queue.take_next().unwrap().id, 1);
-        queue.start(job(1));
+        queue.start(generate_job(1));
         assert_eq!(queue.len(), 2);
         queue.clear_running();
         assert_eq!(queue.len(), 1);
@@ -201,23 +394,23 @@ mod tests {
         let mut queue = JobQueue::default();
         for id in 0..LIMIT as u64 {
             assert!(!queue.is_full());
-            queue.push(job(id));
+            queue.push(generate_job(id));
         }
         assert!(queue.is_full());
         assert_eq!(queue.len(), LIMIT);
-        queue.start(job(99));
+        queue.start(generate_job(99));
         assert!(queue.is_full());
     }
 
     #[test]
     fn removes_waiting_jobs_only() {
         let mut queue = JobQueue::default();
-        queue.push(job(1));
-        queue.push(job(2));
-        queue.start(job(3));
-        assert!(queue.remove(1));
-        assert!(!queue.remove(1));
-        assert!(!queue.remove(3));
+        queue.push(generate_job(1));
+        queue.push(generate_job(2));
+        queue.start(generate_job(3));
+        assert!(queue.remove(1).is_some());
+        assert!(queue.remove(1).is_none());
+        assert!(queue.remove(3).is_none());
         assert_eq!(queue.pending_len(), 1);
         assert_eq!(queue.running().unwrap().job.id, 3);
     }
@@ -225,12 +418,43 @@ mod tests {
     #[test]
     fn clears_waiting_jobs_and_keeps_running() {
         let mut queue = JobQueue::default();
-        queue.push(job(1));
-        queue.push(job(2));
-        queue.start(job(3));
-        assert_eq!(queue.clear_pending(), 2);
+        queue.push(generate_job(1));
+        queue.push(generate_job(2));
+        queue.start(generate_job(3));
+        assert_eq!(queue.clear_pending().len(), 2);
         assert_eq!(queue.pending_len(), 0);
         assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn resolves_upscales_that_depend_on_a_generation() {
+        let mut queue = JobQueue::default();
+        queue.push(upscale_job(1, UpscaleTarget::Pending(7)));
+        queue.push(upscale_job(2, UpscaleTarget::Pending(8)));
+        queue.push(upscale_job(3, UpscaleTarget::Displayed));
+
+        assert_eq!(queue.pending_upscales_for(7), vec![1]);
+        queue.resolve_upscale(1, "/tmp/out.png".into(), "/tmp/out.png".into());
+        let job = queue.pending().find(|job| job.id == 1).unwrap();
+        let upscale = job.upscale().unwrap();
+        assert!(matches!(&upscale.target, UpscaleTarget::Displayed));
+        assert_eq!(upscale.request.input, PathBuf::from("/tmp/out.png"));
+
+        let dropped = queue.drop_pending_upscales(8);
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(queue.pending_len(), 2);
+    }
+
+    #[test]
+    fn keeps_recent_outputs_for_upscales() {
+        let mut queue = JobQueue::default();
+        queue.push(generate_job(7));
+        assert!(queue.is_active(7));
+        queue.remember_output(7, "/tmp/out.png".into());
+        assert_eq!(queue.completed_output(7), Some(Path::new("/tmp/out.png")));
+        queue.clear_pending();
+        assert!(!queue.is_active(7));
+        assert_eq!(queue.completed_output(7), Some(Path::new("/tmp/out.png")));
     }
 
     #[test]
@@ -242,11 +466,22 @@ mod tests {
 
     #[test]
     fn snippets_collapse_whitespace_and_limit_length() {
-        let mut long = job(1);
-        long.prompt = format!("{}\n\n  second line", "word ".repeat(20));
-        let snippet = long.snippet();
+        let mut job = generate_job(1);
+        if let JobKind::Generate(generate) = &mut job.kind {
+            generate.prompt = format!("{}\n\n  second line", "word ".repeat(20));
+        }
+        let snippet = job.title();
         assert!(snippet.chars().count() <= 65);
         assert!(snippet.ends_with('…'));
         assert!(!snippet.contains('\n'));
+    }
+
+    #[test]
+    fn labels_upscales_and_generations() {
+        let generate = generate_job(1);
+        assert_eq!(generate.title(), "a prompt");
+        let upscale = upscale_job(2, UpscaleTarget::Displayed);
+        assert_eq!(upscale.title(), "Upscale 2×");
+        assert!(upscale.meta().contains("→ 1216 × 1216"));
     }
 }

@@ -25,7 +25,7 @@ use adw::prelude::*;
 use flux_backend_sdcpp::{SdServer, SdServerConfig};
 use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
-use flux_core::upscaler::{self, UpscaleRequest, UpscalerPreset};
+use flux_core::upscaler::{self, UpscaleRequest, UpscaledImage, UpscalerPreset};
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 use gtk::{gdk, gio, glib};
 
@@ -1678,10 +1678,12 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
-    ui.upscale_button.set_visible(actions && !generating);
+    let upscale_ready =
+        !foreground && (ui.state.borrow().display.is_some() || (generating && ui.live_view.get()));
+    ui.upscale_button.set_visible(upscale_ready);
     ui.adjust_button.set_visible(actions && !generating);
     ui.live_button
-        .set_visible(generating && !ui.live_view.get());
+        .set_visible(generating && !upscaling && !ui.live_view.get());
     ui.edit_button.set_visible(editable && !composing);
     ui.crop_button.set_visible(editable && !generating);
     ui.back_button.set_visible(editing && !foreground);
@@ -2522,8 +2524,7 @@ fn generate(
             .add_toast(adw::Toast::new("The backend is still installing."));
         return;
     }
-    if ui.upscaling.get()
-        || ui.zooming.get()
+    if ui.zooming.get()
         || ui.classifying.get()
         || !ui.generate.is_sensitive()
         || (require_composer && !ui.composer.reveals_child())
@@ -2615,19 +2616,21 @@ fn generate(
 
     let job = queue::Job {
         id,
-        request,
-        mode,
-        prompt: base_prompt,
-        style: style_id.to_string(),
-        model,
-        width,
-        height,
-        seed,
-        steps: model.steps,
-        reference_paths: references,
-        source_path,
-        seed_text,
-        reference_dir,
+        kind: queue::JobKind::Generate(queue::GenerateJob {
+            request,
+            mode,
+            prompt: base_prompt,
+            style: style_id.to_string(),
+            model,
+            width,
+            height,
+            seed,
+            steps: model.steps,
+            reference_paths: references,
+            source_path,
+            seed_text,
+        }),
+        temp_dir: reference_dir,
     };
 
     let was_busy = ui.queue.borrow().running().is_some();
@@ -2683,27 +2686,49 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
     };
     ui.queue.borrow_mut().start(job.clone());
 
+    let upscaling = job.is_upscale();
     ui.generating.set(true);
+    ui.upscaling.set(upscaling);
     ui.live_preview.borrow_mut().take();
     ui.generate
         .set_tooltip_text(Some("Add to queue (Ctrl+Enter)"));
     ui.cancel.set_sensitive(true);
     ui.progress.set_visible(true);
     ui.progress.set_fraction(0.0);
-    ui.progress.set_text(Some("Loading models…"));
-    if ui.live_view.get() {
-        ui.status.set_text("Loading models…");
+    match &job.kind {
+        queue::JobKind::Generate(_) => {
+            ui.progress.set_text(Some("Loading models…"));
+            if ui.live_view.get() {
+                ui.status.set_text("Loading models…");
+            }
+        }
+        queue::JobKind::Upscale(upscale) => {
+            ui.progress.set_text(Some("Upscaling…"));
+            ui.status.set_text(&format!(
+                "Upscaling {} × {} → {} × {}…",
+                upscale.input_width,
+                upscale.input_height,
+                upscale.output_width,
+                upscale.output_height
+            ));
+        }
     }
     sync_live_controls(ui);
     update_image_actions(ui);
+    queue_view::rebuild(ui);
 
+    match &job.kind {
+        queue::JobKind::Generate(generate) => {
+            start_generation_job(ui, job.clone(), generate.request.clone());
+        }
+        queue::JobKind::Upscale(_) => start_upscale_job(ui, job.clone()),
+    }
+    true
+}
+
+fn start_generation_job(ui: &Rc<Ui>, job: queue::Job, request: GenerateRequest) {
     let (sender, receiver) = async_channel::unbounded();
-    if ui
-        .worker
-        .jobs
-        .send_blocking((job.request.clone(), sender))
-        .is_err()
-    {
+    if ui.worker.jobs.send_blocking((request, sender)).is_err() {
         tracing::error!("generation worker is unavailable");
         complete_job(
             ui,
@@ -2711,8 +2736,8 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
             Outcome::Failed("The generation worker is unavailable.".into()),
             0,
         );
-        ui.queue.borrow_mut().clear_running();
-        return pump_queue(ui);
+        finish_job(ui);
+        return;
     }
 
     queue_view::rebuild(ui);
@@ -2724,7 +2749,9 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
             match message {
                 Progress::Loading => {
                     ui.progress.pulse();
-                    ui.status.set_text("Loading models…");
+                    if ui.live_view.get() {
+                        ui.status.set_text("Loading models…");
+                    }
                 }
                 Progress::Step { current, total } => {
                     ui.progress.set_fraction(current as f64 / total as f64);
@@ -2785,7 +2812,56 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
         }
         finish_job(&ui);
     });
-    true
+}
+
+fn start_upscale_job(ui: &Rc<Ui>, job: queue::Job) {
+    let Some(upscale) = job.upscale() else {
+        complete_upscale(ui, &job, Err("The upscale job has no settings.".into()), 0);
+        finish_job(ui);
+        return;
+    };
+    let request = upscale.request.clone();
+    if request.input.as_os_str().is_empty() || !request.input.exists() {
+        complete_upscale(ui, &job, Err("The upscale input is missing.".into()), 0);
+        finish_job(ui);
+        return;
+    }
+
+    // Free the diffusion model before the upscale server asks for VRAM.
+    ui.backend.unload();
+
+    let backend = ui.backend.clone();
+    let (sender, receiver) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = backend.upscale(&request).map_err(|error| error.to_string());
+        let _ = sender.send_blocking(result);
+    });
+
+    let started = Instant::now();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let ticker = glib::timeout_add_local(Duration::from_millis(500), {
+            let ui = ui.clone();
+            move || {
+                ui.progress.pulse();
+                ui.status.set_text(&format!(
+                    "Upscaling… {:.0}s",
+                    started.elapsed().as_secs_f64()
+                ));
+                glib::ControlFlow::Continue
+            }
+        });
+
+        let result = receiver.recv().await;
+        ticker.remove();
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => Err("The upscale worker stopped unexpectedly.".into()),
+        };
+        let duration_ms = started.elapsed().as_millis() as i64;
+        complete_upscale(&ui, &job, result, duration_ms);
+        finish_job(&ui);
+    });
 }
 
 enum Outcome {
@@ -2794,9 +2870,12 @@ enum Outcome {
     Cancelled,
 }
 
-/// Record a finished job in History, show it, and notify if asked.
+/// Record a finished generation in History, show it, and notify if asked.
 fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i64) {
-    if let Some(dir) = &job.reference_dir
+    let Some(generate) = job.generate() else {
+        return;
+    };
+    if let Some(dir) = &job.temp_dir
         && let Err(error) = std::fs::remove_dir_all(dir)
         && error.kind() != std::io::ErrorKind::NotFound
     {
@@ -2812,8 +2891,8 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
             // since queueing; otherwise they belong to the next composition.
             let references = references_after_result(
                 &ui.state.borrow().references,
-                &job.reference_paths,
-                job.mode,
+                &generate.reference_paths,
+                generate.mode,
                 &path,
             );
             ui.undo.borrow_mut().clear();
@@ -2821,7 +2900,7 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
                 let mut state = ui.state.borrow_mut();
                 if follow_live {
                     match references {
-                        Some(_) => state.on_result(path.clone(), job.mode.keeps_reference()),
+                        Some(_) => state.on_result(path.clone(), generate.mode.keeps_reference()),
                         None => state.display = Some(path.clone()),
                     }
                 } else if let Some(references) = references {
@@ -2835,45 +2914,248 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
                 update_image_actions(ui);
             }
 
-            let history_id = record_history(ui, job, &image_path, duration_ms, follow_live);
+            let history_id = record_history(ui, generate, &image_path, duration_ms, follow_live);
             // Do not overwrite the seed field while more jobs are waiting: it
             // belongs to the next composition, not to this result.
-            if ui.queue.borrow().pending_len() == 0 && ui.seed_entry.text().trim() == job.seed_text
+            if ui.queue.borrow().pending_len() == 0
+                && ui.seed_entry.text().trim() == generate.seed_text
             {
-                ui.seed_entry.set_text(&job.seed.to_string());
+                ui.seed_entry.set_text(&generate.seed.to_string());
             }
 
-            ui.toast.add_toast(adw::Toast::new(job.mode.done_message()));
+            // An upscale queued while this generation was running can now get
+            // its input. Keep the output around for an upscale dialog that was
+            // still open when the generation finished.
+            ui.queue.borrow_mut().remember_output(job.id, path.clone());
+            resolve_pending_upscales(ui, job.id, &path);
+
+            ui.toast
+                .add_toast(adw::Toast::new(generate.mode.done_message()));
             if follow_live {
                 ui.status.set_text(&format!(
                     "{} · {} × {} · seed {}",
-                    job.model.label, job.width, job.height, job.seed
+                    generate.model.label, generate.width, generate.height, generate.seed
                 ));
             } else {
                 ui.status.set_text(&format!(
                     "Result added to History · {} × {}",
-                    job.width, job.height
+                    generate.width, generate.height
                 ));
             }
-            notify_finished(ui, job, history_id, duration_ms, None);
+            notify_finished(ui, generate, job.id, history_id, duration_ms, None);
         }
         Outcome::Failed(error) => {
             let short = error.lines().next().unwrap_or(&error).to_string();
             tracing::error!(%error, "generation failed");
+            drop_pending_upscales(ui, job.id, "the generation failed");
             if ui.live_view.get() {
                 update_image_view(ui);
-                ui.status.set_text("Generation failed");
             }
+            ui.status.set_text("Generation failed");
             ui.toast
                 .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
-            notify_finished(ui, job, None, duration_ms, Some(&short));
+            notify_finished(ui, generate, job.id, None, duration_ms, Some(&short));
         }
         Outcome::Cancelled => {
+            drop_pending_upscales(ui, job.id, "the generation was cancelled");
             if ui.live_view.get() {
                 update_image_view(ui);
-                ui.status.set_text("Cancelled");
             }
+            ui.status.set_text("Cancelled");
             ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
+        }
+    }
+}
+
+/// Give waiting upscales their input after a generation finishes.
+fn resolve_pending_upscales(ui: &Rc<Ui>, generation_id: u64, path: &Path) {
+    let ids = ui.queue.borrow().pending_upscales_for(generation_id);
+    if ids.is_empty() {
+        return;
+    }
+    let source = path.to_string_lossy().into_owned();
+    for id in ids {
+        let dir = paths::cache_dir().join("queue").join(id.to_string());
+        let input = dir.join("input.png");
+        let prepared = std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::copy(path, &input))
+            .map(|_| input);
+
+        match prepared {
+            Ok(input) => {
+                if let Some(job) = ui.queue.borrow_mut().pending_job_mut(id) {
+                    job.temp_dir = Some(dir);
+                }
+                ui.queue
+                    .borrow_mut()
+                    .resolve_upscale(id, input, source.clone());
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to prepare an upscale input");
+                let removed = ui.queue.borrow_mut().remove(id);
+                if let Some(job) = removed {
+                    remove_job_files(&job);
+                }
+                ui.toast.add_toast(adw::Toast::new(&format!(
+                    "Could not queue the upscale: {error}"
+                )));
+            }
+        }
+    }
+    queue_view::rebuild(ui);
+}
+
+/// Drop upscales that were waiting for a generation which did not produce one.
+fn drop_pending_upscales(ui: &Rc<Ui>, generation_id: u64, reason: &str) {
+    let dropped = ui.queue.borrow_mut().drop_pending_upscales(generation_id);
+    if dropped.is_empty() {
+        return;
+    }
+    for job in &dropped {
+        remove_job_files(job);
+    }
+    queue_view::rebuild(ui);
+    ui.toast.add_toast(adw::Toast::new(&format!(
+        "Skipped {} upscale{}: {reason}.",
+        dropped.len(),
+        if dropped.len() == 1 { "" } else { "s" }
+    )));
+}
+
+fn remove_job_files(job: &queue::Job) {
+    if let Some(dir) = &job.temp_dir
+        && let Err(error) = std::fs::remove_dir_all(dir)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, path = %dir.display(), "failed to remove queued files");
+    }
+}
+
+/// Record a finished upscale in History.
+fn record_upscale(
+    ui: &Rc<Ui>,
+    job: &queue::Job,
+    image: &UpscaledImage,
+    duration_ms: i64,
+    follow_live: bool,
+) -> Option<i64> {
+    let upscale = job.upscale()?;
+    let prompt = format!("Upscaled {}×", upscale.factor);
+    let model_id = upscale.upscaler.id;
+    let source_path = upscale.source_path.clone();
+    let image_path = image.path.to_string_lossy().into_owned();
+    let created_at = unix_seconds();
+
+    let inserted = ui.history.borrow().insert(&NewGeneration {
+        prompt: &prompt,
+        model: model_id,
+        style: "none",
+        width: image.width,
+        height: image.height,
+        steps: 0,
+        seed: "",
+        created_at,
+        duration_ms,
+        image_path: &image_path,
+        reference_path: None,
+        reference_paths: &[],
+        kind: "upscale",
+        source_path: source_path.as_deref(),
+    });
+
+    match inserted {
+        Ok((id, parent_id)) => {
+            if let Err(error) = write_thumbnail(&image.path, id) {
+                tracing::warn!(%error, "failed to write thumbnail");
+            }
+            let entry = Generation {
+                id,
+                prompt: prompt.clone(),
+                model: model_id.to_string(),
+                style: "none".into(),
+                width: image.width,
+                height: image.height,
+                steps: 0,
+                seed: String::new(),
+                created_at,
+                duration_ms,
+                image_path,
+                reference_path: None,
+                reference_paths: Vec::new(),
+                kind: "upscale".into(),
+                source_path,
+                parent_id,
+            };
+            ui.entries.borrow_mut().insert(0, entry.clone());
+            trim_history(ui);
+            if follow_live {
+                history_view::rebuild(ui);
+                fade_to_image(ui, &image.path);
+            } else {
+                history_view::rebuild_preserving_scroll(ui);
+                if let Some(display) = ui.state.borrow().display.clone() {
+                    history_view::highlight(ui, &display);
+                }
+            }
+            update_image_actions(ui);
+            Some(id)
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to record upscale");
+            None
+        }
+    }
+}
+
+fn complete_upscale(
+    ui: &Rc<Ui>,
+    job: &queue::Job,
+    result: Result<UpscaledImage, String>,
+    duration_ms: i64,
+) {
+    remove_job_files(job);
+    let upscale = match job.upscale() {
+        Some(upscale) => upscale,
+        None => return,
+    };
+
+    match result {
+        Ok(image) => {
+            let follow_live = ui.live_view.get();
+            ui.undo.borrow_mut().clear();
+            let history_id = record_upscale(ui, job, &image, duration_ms, follow_live);
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Upscaled to {} × {}.",
+                image.width, image.height
+            )));
+            if follow_live {
+                ui.status.set_text(&format!(
+                    "{} · {} × {} · {:.1}s",
+                    upscale.upscaler.label,
+                    image.width,
+                    image.height,
+                    duration_ms as f64 / 1000.0
+                ));
+            } else {
+                ui.status.set_text(&format!(
+                    "Result added to History · {} × {}",
+                    image.width, image.height
+                ));
+            }
+            notify_upscaled(ui, upscale, job.id, history_id, duration_ms, None);
+        }
+        Err(error) => {
+            let short = error.lines().next().unwrap_or(&error).to_string();
+            if error.to_lowercase().contains("cancel") {
+                ui.status.set_text("Upscaling cancelled");
+                ui.toast.add_toast(adw::Toast::new("Upscaling cancelled."));
+            } else {
+                tracing::error!(%error, "upscaling failed");
+                ui.status.set_text("Upscaling failed");
+                ui.toast
+                    .add_toast(adw::Toast::new(&format!("Upscaling failed: {short}")));
+                notify_upscaled(ui, upscale, job.id, None, duration_ms, Some(&short));
+            }
         }
     }
 }
@@ -2901,31 +3183,31 @@ fn references_after_result(
 
 fn record_history(
     ui: &Rc<Ui>,
-    job: &queue::Job,
+    generate: &queue::GenerateJob,
     image_path: &str,
     duration_ms: i64,
     follow_live: bool,
 ) -> Option<i64> {
-    let seed = job.seed.to_string();
-    let reference_paths = job.reference_strings();
+    let seed = generate.seed.to_string();
+    let reference_paths = generate.reference_strings();
     let reference_path = reference_paths.first().cloned();
     let created_at = unix_seconds();
 
     let inserted = ui.history.borrow().insert(&NewGeneration {
-        prompt: &job.prompt,
-        model: job.model.id,
-        style: &job.style,
-        width: job.width,
-        height: job.height,
-        steps: job.steps,
+        prompt: &generate.prompt,
+        model: generate.model.id,
+        style: &generate.style,
+        width: generate.width,
+        height: generate.height,
+        steps: generate.steps,
         seed: &seed,
         created_at,
         duration_ms,
         image_path,
         reference_path: reference_path.as_deref(),
         reference_paths: &reference_paths,
-        kind: job.mode.kind(),
-        source_path: job.source_path.as_deref(),
+        kind: generate.mode.kind(),
+        source_path: generate.source_path.as_deref(),
     });
 
     match inserted {
@@ -2935,20 +3217,20 @@ fn record_history(
             }
             let entry = Generation {
                 id,
-                prompt: job.prompt.clone(),
-                model: job.model.id.to_string(),
-                style: job.style.clone(),
-                width: job.width,
-                height: job.height,
-                steps: job.steps,
+                prompt: generate.prompt.clone(),
+                model: generate.model.id.to_string(),
+                style: generate.style.clone(),
+                width: generate.width,
+                height: generate.height,
+                steps: generate.steps,
                 seed,
                 created_at,
                 duration_ms,
                 image_path: image_path.to_string(),
                 reference_path,
                 reference_paths,
-                kind: job.mode.kind().into(),
-                source_path: job.source_path.clone(),
+                kind: generate.mode.kind().into(),
+                source_path: generate.source_path.clone(),
                 parent_id,
             };
             ui.entries.borrow_mut().insert(0, entry.clone());
@@ -2976,6 +3258,7 @@ fn record_history(
 /// Drop the finished job and start the next one, or return to idle.
 fn finish_job(ui: &Rc<Ui>) {
     ui.queue.borrow_mut().clear_running();
+    ui.upscaling.set(false);
     if !pump_queue(ui) {
         ui.generating.set(false);
         ui.live_preview.borrow_mut().take();
@@ -2992,13 +3275,11 @@ fn finish_job(ui: &Rc<Ui>) {
 
 /// Keep the progress row and the "show live" button in sync with the view.
 fn sync_live_controls(ui: &Ui) {
-    if ui.upscaling.get() {
-        return;
-    }
     let running = ui.generating.get();
     let live = ui.live_view.get();
-    ui.progress_row.set_visible(running && live);
-    ui.live_button.set_visible(running && !live);
+    let upscaling = ui.upscaling.get();
+    ui.progress_row.set_visible(upscaling || (running && live));
+    ui.live_button.set_visible(running && !upscaling && !live);
 }
 
 /// Follow the running job's previews again.
@@ -3006,6 +3287,9 @@ fn sync_live_controls(ui: &Ui) {
 /// The latest frame is kept while the user browses History, so returning is
 /// instant even between sampling steps.
 pub(crate) fn show_live(ui: &Rc<Ui>) {
+    if ui.upscaling.get() {
+        return;
+    }
     ui.live_view.set(true);
     if let Some(texture) = ui.live_preview.borrow().clone() {
         crossfade_to_texture(ui, &texture);
@@ -3034,7 +3318,8 @@ pub(crate) fn pause_live_view(ui: &Rc<Ui>) {
 /// do not need to duplicate them.
 fn notify_finished(
     ui: &Rc<Ui>,
-    job: &queue::Job,
+    job: &queue::GenerateJob,
+    job_id: u64,
     history_id: Option<i64>,
     duration_ms: i64,
     error: Option<&str>,
@@ -3072,7 +3357,54 @@ fn notify_finished(
         notification
             .set_default_action_and_target_value("app.show-generation", Some(&id.to_variant()));
     }
-    app.send_notification(Some(&format!("flux-job-{}", job.id)), &notification);
+    app.send_notification(Some(&format!("flux-job-{job_id}")), &notification);
+}
+
+/// Report a finished upscale the same way.
+fn notify_upscaled(
+    ui: &Rc<Ui>,
+    job: &queue::UpscaleJob,
+    job_id: u64,
+    history_id: Option<i64>,
+    duration_ms: i64,
+    error: Option<&str>,
+) {
+    if !ui.config.borrow().notify_on_finish || ui.window.is_active() {
+        return;
+    }
+    let Some(application) = ui.window.application() else {
+        return;
+    };
+    let app: &gio::Application = application.upcast_ref();
+
+    let title = match error {
+        Some(_) => "Upscale failed",
+        None => "Upscale finished",
+    };
+    let body = match error {
+        Some(error) => format!("Upscale {}×\n{error}", job.factor),
+        None => format!(
+            "Upscale {}× · {} × {} → {} × {}\n{}",
+            job.factor,
+            job.input_width,
+            job.input_height,
+            job.output_width,
+            job.output_height,
+            duration_label(duration_ms)
+        ),
+    };
+
+    let notification = gio::Notification::new(title);
+    notification.set_body(Some(&body));
+    notification.set_icon(&gio::ThemedIcon::new(flux_core::APP_ID));
+    if error.is_some() {
+        notification.set_priority(gio::NotificationPriority::High);
+    }
+    if let Some(id) = history_id {
+        notification
+            .set_default_action_and_target_value("app.show-generation", Some(&id.to_variant()));
+    }
+    app.send_notification(Some(&format!("flux-job-{job_id}")), &notification);
 }
 
 fn duration_label(duration_ms: i64) -> String {
@@ -3403,22 +3735,119 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
     ui.status.set_text(&history_view::status_label(&entry));
 }
 
-/// Run one upscale on a worker thread and show the result like a generation.
-pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor: u32) {
+/// The image an upscale dialog is about to process.
+#[derive(Clone)]
+pub(crate) enum UpscaleTargetView {
+    /// A real image currently on screen.
+    Displayed {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+    },
+    /// The result of a generation that is still running.
+    Pending {
+        job_id: u64,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl UpscaleTargetView {
+    pub fn dimensions(&self) -> (u32, u32) {
+        match self {
+            Self::Displayed { width, height, .. } | Self::Pending { width, height, .. } => {
+                (*width, *height)
+            }
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending { .. })
+    }
+}
+
+/// Pick what the upscale button should process.
+///
+/// Watching a running generation means "upscale this result when it finishes";
+/// browsing History means "upscale the image I am looking at".
+pub(crate) fn upscale_target(ui: &Rc<Ui>) -> Option<UpscaleTargetView> {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+        return None;
+    }
+    if ui.generating.get() && ui.live_view.get() {
+        let queue = ui.queue.borrow();
+        let running = queue.running()?;
+        let generate = running.job.generate()?;
+        return Some(UpscaleTargetView::Pending {
+            job_id: running.job.id,
+            width: generate.width,
+            height: generate.height,
+        });
+    }
+
+    let path = ui.state.borrow().display.clone()?;
+    let (width, height) = image::image_dimensions(&path).ok()?;
+    Some(UpscaleTargetView::Displayed {
+        path,
+        width,
+        height,
+    })
+}
+
+/// Queue one upscale.
+pub(crate) fn start_upscale(
+    ui: &Rc<Ui>,
+    preset: &'static UpscalerPreset,
+    factor: u32,
+    mut target: UpscaleTargetView,
+) {
     if ui.backend_installing.get() {
         ui.toast
             .add_toast(adw::Toast::new("The backend is still installing."));
         return;
     }
-    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
-    let Some(input) = ui.state.borrow().display.clone() else {
-        ui.toast.add_toast(adw::Toast::new("No image to upscale."));
+    // The dialog may have been open when its target generation finished (or
+    // failed). Resolve a finished one from the recent outputs; refuse a target
+    // that no longer exists.
+    if let UpscaleTargetView::Pending {
+        job_id,
+        width,
+        height,
+    } = target
+    {
+        let completed = ui
+            .queue
+            .borrow()
+            .completed_output(job_id)
+            .map(Path::to_path_buf);
+        if let Some(path) = completed {
+            target = UpscaleTargetView::Displayed {
+                path,
+                width,
+                height,
+            };
+        } else if !ui.queue.borrow().is_active(job_id) {
+            ui.toast.add_toast(adw::Toast::new(
+                "The generation this upscale was waiting for is not available.",
+            ));
+            return;
+        }
+    }
+    if ui.queue.borrow().is_full() {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "The queue is full ({} jobs). Wait for one to finish.",
+            queue::LIMIT
+        )));
         return;
-    };
-    let (width, height) = ui.image_size.get();
-    let Some((output_width, output_height)) = upscaler::output_size(width, height, factor) else {
+    }
+
+    let (input_width, input_height) = target.dimensions();
+    let Some((output_width, output_height)) =
+        upscaler::output_size(input_width, input_height, factor)
+    else {
         ui.toast.add_toast(adw::Toast::new(
             "This image is too large: the 4× pass would exceed 8192 px.",
         ));
@@ -3433,12 +3862,15 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
     }
 
     let output_dir = ui.config.borrow().output_dir.clone();
-    let stem = input
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(slugify)
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "image".into());
+    let stem = match &target {
+        UpscaleTargetView::Displayed { path, .. } => path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(slugify)
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "image".into()),
+        UpscaleTargetView::Pending { .. } => "generation".into(),
+    };
     let output = output_dir.join(format!("{stem}-upscaled-{factor}x-{}.png", now_millis()));
 
     {
@@ -3448,166 +3880,65 @@ pub(crate) fn start_upscale(ui: &Rc<Ui>, preset: &'static UpscalerPreset, factor
         let _ = config.save();
     }
 
+    let id = ui.queue.borrow_mut().next_id();
+    // A displayed image is copied now, so deleting its history entry while the
+    // job waits cannot break the upscale. A pending generation is copied when
+    // its result lands.
+    let (input, source_path, temp_dir) = match &target {
+        UpscaleTargetView::Displayed { path, .. } => {
+            let dir = paths::cache_dir().join("queue").join(id.to_string());
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("png");
+            let input = dir.join(format!("input.{extension}"));
+            match std::fs::create_dir_all(&dir).and_then(|()| std::fs::copy(path, &input)) {
+                Ok(_) => (input, Some(path.to_string_lossy().into_owned()), Some(dir)),
+                Err(error) => {
+                    ui.toast.add_toast(adw::Toast::new(&format!(
+                        "Could not prepare the upscale: {error}"
+                    )));
+                    return;
+                }
+            }
+        }
+        UpscaleTargetView::Pending { .. } => (PathBuf::new(), None, None),
+    };
+
+    let queue_target = match &target {
+        UpscaleTargetView::Displayed { .. } => queue::UpscaleTarget::Displayed,
+        UpscaleTargetView::Pending { job_id, .. } => queue::UpscaleTarget::Pending(*job_id),
+    };
     let request = UpscaleRequest {
-        input: input.clone(),
+        input,
         output,
         upscaler_id: preset.id.to_string(),
         factor,
         tile_size: upscaler::DEFAULT_TILE_SIZE,
     };
+    let job = queue::Job {
+        id,
+        kind: queue::JobKind::Upscale(queue::UpscaleJob {
+            request,
+            target: queue_target,
+            upscaler: preset,
+            factor,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            source_path,
+        }),
+        temp_dir,
+    };
 
-    ui.upscaling.set(true);
-    set_controls_enabled(ui, false);
-    ui.composer.set_reveal_child(false);
-    ui.progress_row.set_visible(true);
-    ui.cancel.set_sensitive(true);
-    ui.progress.set_visible(true);
-    ui.progress.set_fraction(0.0);
-    ui.progress.set_text(Some("Upscaling…"));
-    ui.status.set_text(&format!(
-        "Upscaling {width} × {height} → {output_width} × {output_height}…"
-    ));
-    update_image_actions(ui);
-
-    // The generation server may still hold the diffusion model. Free it before
-    // the upscale server requests VRAM.
-    ui.backend.unload();
-
-    let backend = ui.backend.clone();
-    let (sender, receiver) = async_channel::bounded(1);
-    std::thread::spawn(move || {
-        let result = backend.upscale(&request);
-        let _ = sender.send_blocking(result);
-    });
-
-    let ui = ui.clone();
-    let started = Instant::now();
-    let model_id = preset.id.to_string();
-    let source_path = input.to_string_lossy().into_owned();
-    glib::spawn_future_local(async move {
-        let ticker = glib::timeout_add_local(Duration::from_millis(500), {
-            let ui = ui.clone();
-            move || {
-                ui.progress.pulse();
-                ui.status.set_text(&format!(
-                    "Upscaling {width} × {height} → {output_width} × {output_height}… {:.0}s",
-                    started.elapsed().as_secs_f64()
-                ));
-                glib::ControlFlow::Continue
-            }
-        });
-
-        let result = receiver.recv().await;
-        ticker.remove();
-
-        let result = match result {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!("upscale worker stopped unexpectedly")),
-        };
-
-        match result {
-            Ok(image) => {
-                let duration_ms = started.elapsed().as_millis() as i64;
-                let image_path = image.path.to_string_lossy().into_owned();
-                let created_at = unix_seconds();
-                let prompt = format!("Upscaled {factor}×");
-
-                ui.undo.borrow_mut().clear();
-
-                let inserted = ui.history.borrow().insert(&NewGeneration {
-                    prompt: &prompt,
-                    model: &model_id,
-                    style: "none",
-                    width: image.width,
-                    height: image.height,
-                    steps: 0,
-                    seed: "",
-                    created_at,
-                    duration_ms,
-                    image_path: &image_path,
-                    reference_path: None,
-                    reference_paths: &[],
-                    kind: "upscale",
-                    source_path: Some(&source_path),
-                });
-
-                match inserted {
-                    Ok((id, parent_id)) => {
-                        if let Err(error) = write_thumbnail(&image.path, id) {
-                            tracing::warn!(%error, "failed to write thumbnail");
-                        }
-                        let entry = Generation {
-                            id,
-                            prompt: prompt.clone(),
-                            model: model_id.clone(),
-                            style: "none".into(),
-                            width: image.width,
-                            height: image.height,
-                            steps: 0,
-                            seed: String::new(),
-                            created_at,
-                            duration_ms,
-                            image_path,
-                            reference_path: None,
-                            reference_paths: Vec::new(),
-                            kind: "upscale".into(),
-                            source_path: Some(source_path),
-                            parent_id,
-                        };
-                        ui.entries.borrow_mut().insert(0, entry.clone());
-                        trim_history(&ui);
-                        history_view::rebuild(&ui);
-                        history_view::highlight(&ui, Path::new(&entry.image_path));
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "failed to record upscale");
-                    }
-                }
-
-                fade_to_image(&ui, &image.path);
-                ui.toast.add_toast(adw::Toast::new(&format!(
-                    "Upscaled to {} × {}.",
-                    image.width, image.height
-                )));
-                finish(
-                    &ui,
-                    &format!(
-                        "{} · {} × {} · {:.1}s · scroll to compare",
-                        upscaler_label(&model_id),
-                        image.width,
-                        image.height,
-                        duration_ms as f64 / 1000.0
-                    ),
-                );
-            }
-            Err(error) => {
-                let text = error.to_string();
-                if text.contains("cancelled") {
-                    ui.toast.add_toast(adw::Toast::new("Upscaling cancelled."));
-                    finish(&ui, "Cancelled");
-                } else {
-                    tracing::error!(%error, "upscaling failed");
-                    let short = text.lines().next().unwrap_or(&text);
-                    ui.toast
-                        .add_toast(adw::Toast::new(&format!("Upscaling failed: {short}")));
-                    finish(&ui, "Upscaling failed");
-                }
-            }
-        }
-    });
-}
-
-fn finish(ui: &Rc<Ui>, message: &str) {
-    ui.generating.set(false);
-    ui.upscaling.set(false);
-    ui.progress_row.set_visible(false);
-    ui.cancel.set_sensitive(false);
-    ui.progress.set_visible(false);
-    ui.progress.set_fraction(0.0);
-    set_controls_enabled(ui, true);
-    refresh_model(ui);
-    update_image_actions(ui);
-    ui.status.set_text(message);
+    let was_busy = ui.queue.borrow().running().is_some();
+    ui.queue.borrow_mut().push(job);
+    queue_view::rebuild(ui);
+    if was_busy {
+        ui.status.set_text("Upscale added to the queue");
+    }
+    pump_queue(ui);
 }
 
 pub(crate) fn trim_history(ui: &Rc<Ui>) {
@@ -3707,12 +4038,6 @@ pub(crate) fn unix_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
-}
-
-fn upscaler_label(id: &str) -> &str {
-    flux_core::upscaler::upscaler(id)
-        .map(|preset| preset.label)
-        .unwrap_or(id)
 }
 
 /// Build a short, filesystem-friendly name from the prompt.

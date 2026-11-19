@@ -9,13 +9,13 @@ use crate::Ui;
 
 /// Show the upscale dialog for the image currently on screen.
 pub(crate) fn show(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
-    if ui.state.borrow().display.is_none() {
+    let Some(target) = crate::upscale_target(ui) else {
         return;
-    }
-    let (width, height) = ui.image_size.get();
+    };
+    let (width, height) = target.dimensions();
     if width == 0 || height == 0 {
         return;
     }
@@ -71,6 +71,14 @@ pub(crate) fn show(ui: &Rc<Ui>) {
     output_group.add(&size_row);
     output_group.add(&scale_row);
     output_group.add(&warning);
+    let pending_note = gtk::Label::builder()
+        .label("Upscales the running generation's result when it finishes.")
+        .xalign(0.0)
+        .wrap(true)
+        .visible(target.is_pending())
+        .css_classes(["caption", "dim-label"])
+        .build();
+    output_group.add(&pending_note);
     page.add(&output_group);
 
     let model_group = adw::PreferencesGroup::builder().title("Model").build();
@@ -266,12 +274,13 @@ pub(crate) fn show(ui: &Rc<Ui>) {
         let ui = ui.clone();
         let selected_model = selected_model.clone();
         let selected_factor = selected_factor.clone();
+        let target = target.clone();
         let trigger = upscale.clone();
         trigger.connect_clicked(move |_| {
             let preset = &UPSCALERS[*selected_model.borrow()];
             let factor = *selected_factor.borrow();
             dialog.close();
-            crate::start_upscale(&ui, preset, factor);
+            crate::start_upscale(&ui, preset, factor, target.clone());
         });
     }
 
