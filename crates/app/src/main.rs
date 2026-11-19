@@ -718,6 +718,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             refresh_model(&ui);
             // The new preset can require a coarser pixel grid.
             update_size_ui(&ui);
+            // Edit-capable actions depend on the preset: a text-only model
+            // hides them, and switching back must bring them back without
+            // reloading the image.
+            render_reference_strip(&ui);
+            update_image_actions(&ui);
         });
     }
     {
