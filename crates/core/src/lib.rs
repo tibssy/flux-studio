@@ -1,7 +1,9 @@
 pub mod adjust;
 pub mod backend;
 pub mod config;
+pub mod effect_pack;
 pub mod identity;
+pub mod metadata;
 pub mod paths;
 pub mod preset;
 pub mod request;

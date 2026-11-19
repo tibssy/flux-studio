@@ -41,6 +41,8 @@ pub(crate) struct MainView {
     pub save_effect_button: gtk::Button,
     pub custom_effects_section: gtk::Box,
     pub custom_effects_box: gtk::Box,
+    pub effects_import: gtk::Button,
+    pub effects_export: gtk::Button,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
     pub enhance_item: gtk::Button,
@@ -56,6 +58,8 @@ pub(crate) struct MainView {
     pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
+    pub copy_button: gtk::Button,
+    pub folder_button: gtk::Button,
 }
 
 pub(crate) fn build() -> MainView {
@@ -225,6 +229,23 @@ pub(crate) fn build() -> MainView {
     custom_effects_section.append(&custom_scroller);
     effects_box.append(&custom_effects_section);
 
+    let effects_import = gtk::Button::builder()
+        .label("Import…")
+        .tooltip_text("Load effects from a Flux Studio effects file")
+        .css_classes(["flat"])
+        .build();
+    let effects_export = gtk::Button::builder()
+        .label("Export…")
+        .tooltip_text("Save your effects to a file")
+        .css_classes(["flat"])
+        .build();
+    let effects_tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    effects_tools.set_margin_top(4);
+    effects_tools.append(&effects_import);
+    effects_tools.append(&effects_export);
+    effects_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    effects_box.append(&effects_tools);
+
     let effects_popover = gtk::Popover::builder()
         .child(&effects_box)
         .css_classes(["effects-popover"])
@@ -272,6 +293,18 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
+    let copy_button = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy this image")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let folder_button = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .tooltip_text("Show in folder")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
     let image_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     image_actions.set_halign(gtk::Align::End);
     image_actions.set_valign(gtk::Align::Start);
@@ -286,6 +319,8 @@ pub(crate) fn build() -> MainView {
     image_actions.append(&crop_button);
     image_actions.append(&undo_button);
     image_actions.append(&back_button);
+    image_actions.append(&copy_button);
+    image_actions.append(&folder_button);
 
     let image_overlay = gtk::Overlay::builder()
         .child(&scroller_clip)
@@ -528,6 +563,8 @@ pub(crate) fn build() -> MainView {
         save_effect_button,
         custom_effects_section,
         custom_effects_box,
+        effects_import,
+        effects_export,
         colorize_item,
         recover_item,
         enhance_item,
@@ -543,6 +580,8 @@ pub(crate) fn build() -> MainView {
         nav_down_button,
         crop_button,
         undo_button,
+        copy_button,
+        folder_button,
     }
 }
 

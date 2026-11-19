@@ -146,8 +146,9 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
         collapsed.retain(|id| by_id.contains_key(id));
     }
     let collapsed = ui.collapsed_groups.borrow().clone();
+    let expand_all = crate::history_filter_active(ui);
     for entry in ui.entries.borrow().iter() {
-        if hidden_by_collapse(entry, &by_id, &collapsed) {
+        if !expand_all && hidden_by_collapse(entry, &by_id, &collapsed) {
             continue;
         }
         let depth = depth_of(entry, &by_id);
@@ -157,8 +158,15 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
             .and_then(|root| ordered.group_sizes.get(root))
             .copied()
             .unwrap_or(1);
-        let is_collapsed = depth == 0 && collapsed.contains(&entry.id);
-        add_row(ui, entry, depth.min(3), group_size, is_collapsed);
+        let is_collapsed = !expand_all && depth == 0 && collapsed.contains(&entry.id);
+        add_row(
+            ui,
+            entry,
+            depth.min(3),
+            group_size,
+            is_collapsed,
+            expand_all,
+        );
     }
 
     if let Some(adjustment) = adjustment {
@@ -216,6 +224,7 @@ pub(crate) fn add_row(
     depth: usize,
     group_size: usize,
     collapsed: bool,
+    expand_all: bool,
 ) {
     let row = gtk::ListBoxRow::new();
     // Row activation resolves entries by id, never by position.
@@ -277,6 +286,22 @@ pub(crate) fn add_row(
 
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 2);
     actions.set_valign(gtk::Align::Center);
+    let favorite_button = gtk::Button::builder()
+        .icon_name(if entry.favorite {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        })
+        .tooltip_text(if entry.favorite {
+            "Remove from favorites"
+        } else {
+            "Add to favorites"
+        })
+        .width_request(26)
+        .height_request(26)
+        .valign(gtk::Align::Center)
+        .css_classes(["flat", "circular"])
+        .build();
     let info_button = gtk::Button::builder()
         .icon_name("dialog-information-symbolic")
         .tooltip_text("Details")
@@ -296,7 +321,8 @@ pub(crate) fn add_row(
 
     row_box.append(&thumbnail);
     row_box.append(&text);
-    if depth == 0 && group_size > 1 {
+    row_box.append(&favorite_button);
+    if depth == 0 && group_size > 1 && !expand_all {
         let toggle = gtk::Button::builder()
             .tooltip_text(if collapsed {
                 "Expand chain"
@@ -375,6 +401,11 @@ pub(crate) fn add_row(
     };
     row.set_tooltip_text(Some(&tooltip));
 
+    {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        favorite_button.connect_clicked(move |_| toggle_favorite(&ui, &entry));
+    }
     {
         let ui = ui.clone();
         let entry = entry.clone();
@@ -479,6 +510,22 @@ pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| entry.image_path.clone());
     ui.status.set_text(&format!("Editing reference · {name}"));
+}
+
+fn toggle_favorite(ui: &Rc<Ui>, entry: &Generation) {
+    let favorite = !entry.favorite;
+    if let Err(error) = ui.history.borrow().set_favorite(entry.id, favorite) {
+        tracing::warn!(%error, id = entry.id, "failed to update favorite");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not update the favorite."));
+        return;
+    }
+    crate::reload_history(ui, true);
+    ui.toast.add_toast(adw::Toast::new(if favorite {
+        "Added to favorites."
+    } else {
+        "Removed from favorites."
+    }));
 }
 
 fn show_info(ui: &Rc<Ui>, entry: &Generation) {
@@ -648,12 +695,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let _ = std::fs::remove_file(thumb_path(entry.id));
 
     ui.entries.borrow_mut().retain(|item| item.id != entry.id);
-    if ui.generating.get() || ui.upscaling.get() {
-        // Keep the sidebar where the user left it while a job runs.
-        rebuild_preserving_scroll(ui);
-    } else {
-        rebuild(ui);
-    }
+    crate::reload_history(ui, ui.generating.get() || ui.upscaling.get());
 
     let path = PathBuf::from(&entry.image_path);
     let is_active = {
@@ -688,6 +730,27 @@ fn row_by_id(list: &gtk::ListBox, id: i64) -> Option<gtk::ListBoxRow> {
         child = next;
     }
     None
+}
+
+/// Highlight the history row for `path` without scrolling to it.
+///
+/// Reloads triggered by search, filters or favorites should not move the
+/// sidebar while the user is reading it.
+pub(crate) fn select_without_reveal(ui: &Rc<Ui>, path: &Path) {
+    let id = ui
+        .entries
+        .borrow()
+        .iter()
+        .find(|entry| Path::new(&entry.image_path) == path)
+        .map(|entry| entry.id);
+    let Some(id) = id else {
+        ui.history_list.unselect_all();
+        return;
+    };
+    match row_by_id(&ui.history_list, id) {
+        Some(row) => ui.history_list.select_row(Some(&row)),
+        None => ui.history_list.unselect_all(),
+    }
 }
 
 /// Highlight the history row for `path` and scroll it into view.
@@ -835,6 +898,7 @@ mod tests {
             kind: "generate".into(),
             source_path: None,
             parent_id: parent,
+            favorite: false,
         }
     }
 

@@ -23,6 +23,9 @@ pub(crate) struct Sidebar {
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
     pub new_button: gtk::Button,
+    pub history_search: gtk::SearchEntry,
+    pub history_filter: gtk::DropDown,
+    pub history_empty: gtk::Label,
     pub history_list: gtk::ListBox,
     pub queue_box: gtk::Box,
     pub queue_list: gtk::ListBox,
@@ -235,6 +238,27 @@ pub(crate) fn build(
     history_header.append(&history_title);
     history_header.append(&new_button);
 
+    let history_search = gtk::SearchEntry::builder()
+        .placeholder_text("Search history")
+        .hexpand(true)
+        .build();
+    history_search.set_tooltip_text(Some("Search prompts, models and seeds (Ctrl+F)"));
+    let history_filter = gtk::DropDown::from_strings(&crate::history::FILTER_LABELS);
+    history_filter.set_hexpand(true);
+    history_filter.set_tooltip_text(Some("Filter history entries"));
+
+    let history_empty = gtk::Label::builder()
+        .label("No images match.")
+        .xalign(0.0)
+        .visible(false)
+        .margin_start(6)
+        .css_classes(["caption", "dim-label"])
+        .build();
+
+    let history_tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    history_tools.append(&history_search);
+    history_tools.append(&history_filter);
+
     let history_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
         .css_classes(["navigation-sidebar"])
@@ -284,6 +308,8 @@ pub(crate) fn build(
     root.append(&separator);
     root.append(&queue_box);
     root.append(&history_header);
+    root.append(&history_tools);
+    root.append(&history_empty);
     root.append(&history_scroller);
 
     Sidebar {
@@ -303,6 +329,9 @@ pub(crate) fn build(
         seed_entry,
         random_button,
         new_button,
+        history_search,
+        history_filter,
+        history_empty,
         history_list,
         queue_box,
         queue_list,

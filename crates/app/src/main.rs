@@ -33,6 +33,8 @@ use history::{Generation, History, NewGeneration};
 use state::{AppState, UndoStack};
 
 const HISTORY_LIMIT: usize = 100;
+/// Upper bound for search results; large enough for a long-lived library.
+const SEARCH_LIMIT: usize = 500;
 
 type CropRect = (f64, f64, f64, f64);
 
@@ -101,6 +103,8 @@ pub(crate) struct Ui {
     pub save_effect_button: gtk::Button,
     pub custom_effects_section: gtk::Box,
     pub custom_effects_box: gtk::Box,
+    pub effects_import: gtk::Button,
+    pub effects_export: gtk::Button,
     pub colorize_item: gtk::Button,
     pub recover_item: gtk::Button,
     pub enhance_item: gtk::Button,
@@ -116,6 +120,8 @@ pub(crate) struct Ui {
     pub nav_down_button: gtk::Button,
     pub crop_button: gtk::ToggleButton,
     pub undo_button: gtk::Button,
+    pub copy_button: gtk::Button,
+    pub folder_button: gtk::Button,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -149,6 +155,10 @@ pub(crate) struct Ui {
     /// Latest preview frame, kept while the canvas shows something else.
     pub live_preview: RefCell<Option<gdk::Texture>>,
     pub new_button: gtk::Button,
+    pub history_search: gtk::SearchEntry,
+    pub history_filter: gtk::DropDown,
+    pub history_empty: gtk::Label,
+    pub history_debounce: RefCell<Option<glib::SourceId>>,
     pub entries: RefCell<Vec<Generation>>,
     /// Chain roots whose descendants are hidden in the sidebar.
     pub collapsed_groups: RefCell<std::collections::HashSet<i64>>,
@@ -445,6 +455,8 @@ fn build_ui(app: &adw::Application) {
         save_effect_button: view.save_effect_button,
         custom_effects_section: view.custom_effects_section,
         custom_effects_box: view.custom_effects_box,
+        effects_import: view.effects_import,
+        effects_export: view.effects_export,
         colorize_item: view.colorize_item,
         recover_item: view.recover_item,
         enhance_item: view.enhance_item,
@@ -460,6 +472,8 @@ fn build_ui(app: &adw::Application) {
         nav_down_button: view.nav_down_button,
         crop_button: view.crop_button,
         undo_button: view.undo_button,
+        copy_button: view.copy_button,
+        folder_button: view.folder_button,
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -485,6 +499,10 @@ fn build_ui(app: &adw::Application) {
         live_view: Cell::new(true),
         live_preview: RefCell::new(None),
         new_button: side.new_button,
+        history_search: side.history_search,
+        history_filter: side.history_filter,
+        history_empty: side.history_empty,
+        history_debounce: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
         collapsed_groups: RefCell::new(std::collections::HashSet::new()),
         model_dropdown: side.model_dropdown,
@@ -523,7 +541,9 @@ fn build_ui(app: &adw::Application) {
 
     wire_events(&ui, &preferences_button);
     install_reference_drop(&ui);
+    install_image_drag(&ui);
     effects::rebuild_menu(&ui);
+    effects::install_tools(&ui);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
 
@@ -635,8 +655,45 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.copy_button.clone().connect_clicked(move |_| {
+            if let Some(path) = ui.state.borrow().display.clone() {
+                copy_image_to_clipboard(&ui, &path, true);
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.folder_button.clone().connect_clicked(move |_| {
+            if let Some(path) = ui.state.borrow().display.clone() {
+                show_in_folder(&ui, &path);
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
         let button = ui.new_button.clone();
         button.connect_clicked(move |_| new_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.history_search.clone().connect_search_changed(move |_| {
+            if let Some(source) = ui.history_debounce.borrow_mut().take() {
+                source.remove();
+            }
+            let ui = ui.clone();
+            let inner = ui.clone();
+            let source = glib::timeout_add_local_once(Duration::from_millis(180), move || {
+                *inner.history_debounce.borrow_mut() = None;
+                reload_history(&inner, true);
+            });
+            *ui.history_debounce.borrow_mut() = Some(source);
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.history_filter
+            .clone()
+            .connect_selected_notify(move |_| reload_history(&ui, true));
     }
     {
         let ui = ui.clone();
@@ -1044,6 +1101,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::b | gdk::Key::B => {
                     split.set_show_sidebar(!split.shows_sidebar());
+                    glib::Propagation::Stop
+                }
+                gdk::Key::f | gdk::Key::F => {
+                    split.set_show_sidebar(true);
+                    ui.history_search.grab_focus();
                     glib::Propagation::Stop
                 }
                 gdk::Key::n | gdk::Key::N => {
@@ -1800,6 +1862,8 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.back_button.set_visible(editing && !foreground);
     ui.undo_button
         .set_visible(editable && stable && ui.undo.borrow().can_undo());
+    ui.copy_button.set_visible(actions && stable);
+    ui.folder_button.set_visible(actions && stable);
     update_zoom_controls(ui);
 
     if composing || !editable {
@@ -2291,6 +2355,22 @@ fn choose_references(ui: &Rc<Ui>) {
         }
         add_references(&ui, paths);
     });
+}
+
+/// Let the displayed image be dragged out as a real file.
+fn install_image_drag(ui: &Rc<Ui>) {
+    let source = gtk::DragSource::new();
+    source.set_actions(gdk::DragAction::COPY);
+    let inner = ui.clone();
+    source.connect_prepare(move |_, _, _| {
+        let path = inner.state.borrow().display.clone()?;
+        if !path.is_file() {
+            return None;
+        }
+        let files = gdk::FileList::from_array(&[gio::File::for_path(&path)]);
+        Some(gdk::ContentProvider::for_value(&files.to_value()))
+    });
+    ui.stack.add_controller(source);
 }
 
 /// Accept reference images dropped onto the canvas.
@@ -3311,17 +3391,14 @@ fn record_upscale(
                 kind: "upscale".into(),
                 source_path,
                 parent_id,
+                favorite: false,
             };
-            ui.entries.borrow_mut().insert(0, entry.clone());
-            trim_history(ui);
+            crate::annotate_image(&image.path, &entry, 0.0, "");
+            reload_history(ui, !follow_live);
             if follow_live {
-                history_view::rebuild(ui);
                 fade_to_image(ui, &image.path);
-            } else {
-                history_view::rebuild_preserving_scroll(ui);
-                if let Some(display) = ui.state.borrow().display.clone() {
-                    history_view::highlight(ui, &display);
-                }
+            } else if let Some(display) = ui.state.borrow().display.clone() {
+                history_view::highlight(ui, &display);
             }
             update_image_actions(ui);
             Some(id)
@@ -3459,18 +3536,19 @@ fn record_history(
                 kind: generate.mode.kind().into(),
                 source_path: generate.source_path.clone(),
                 parent_id,
+                favorite: false,
             };
-            ui.entries.borrow_mut().insert(0, entry.clone());
-            trim_history(ui);
+            crate::annotate_image(
+                Path::new(image_path),
+                &entry,
+                generate.model.cfg,
+                generate.model.sampler.as_str(),
+            );
+            reload_history(ui, !follow_live);
             if follow_live {
-                history_view::rebuild(ui);
-                history_view::highlight(ui, Path::new(&entry.image_path));
-            } else {
-                // Keep the user's place in History while they browse.
-                history_view::rebuild_preserving_scroll(ui);
-                if let Some(display) = ui.state.borrow().display.clone() {
-                    history_view::highlight(ui, &display);
-                }
+                history_view::highlight(ui, Path::new(image_path));
+            } else if let Some(display) = ui.state.borrow().display.clone() {
+                history_view::highlight(ui, &display);
             }
             update_image_actions(ui);
             Some(id)
@@ -3536,15 +3614,74 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
 }
 
 /// Put a finished image on the system clipboard when the user asked for it.
+/// Write prompt and generation metadata into a finished PNG.
+///
+/// Failures are logged only: the image itself is already valid and the history
+/// database still has everything.
+pub(crate) fn annotate_image(path: &Path, entry: &Generation, cfg: f32, sampler: &str) {
+    let metadata = flux_core::metadata::ImageMetadata {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        kind: entry.kind.clone(),
+        prompt: entry.prompt.clone(),
+        model: entry.model.clone(),
+        style: entry.style.clone(),
+        seed: entry.seed.clone(),
+        steps: entry.steps,
+        cfg,
+        sampler: sampler.to_string(),
+        width: entry.width,
+        height: entry.height,
+        references: entry.reference_paths.clone(),
+        source: entry.source_path.clone(),
+        created_at: entry.created_at,
+        duration_ms: entry.duration_ms,
+    };
+    if let Err(error) = flux_core::metadata::write_png(path, &metadata) {
+        tracing::warn!(%error, path = %path.display(), "failed to write PNG metadata");
+    }
+}
+
 pub(crate) fn copy_result_to_clipboard(ui: &Ui, path: &Path) {
     if !ui.config.borrow().copy_result_to_clipboard {
         return;
     }
+    copy_image_to_clipboard(ui, path, false);
+}
+
+/// Put an image on the clipboard, optionally confirming it to the user.
+pub(crate) fn copy_image_to_clipboard(ui: &Ui, path: &Path, notify: bool) {
     match gdk::Texture::from_filename(path) {
-        Ok(texture) => ui.window.clipboard().set_texture(&texture),
-        Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "failed to copy result to clipboard");
+        Ok(texture) => {
+            ui.window.clipboard().set_texture(&texture);
+            if notify {
+                ui.toast
+                    .add_toast(adw::Toast::new("Image copied to the clipboard."));
+            }
         }
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "failed to copy image to clipboard");
+            if notify {
+                ui.toast
+                    .add_toast(adw::Toast::new("Could not copy the image."));
+            }
+        }
+    }
+}
+
+/// Open the directory that contains `path` in the file manager.
+pub(crate) fn show_in_folder(ui: &Ui, path: &Path) {
+    let Some(directory) = path.parent().filter(|directory| directory.is_dir()) else {
+        ui.toast
+            .add_toast(adw::Toast::new("The image folder no longer exists."));
+        return;
+    };
+    let file = gio::File::for_path(directory);
+    if let Err(error) =
+        gio::AppInfo::launch_default_for_uri(&file.uri(), None::<&gio::AppLaunchContext>)
+    {
+        tracing::warn!(%error, path = %directory.display(), "failed to open the folder");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not open the image folder."));
     }
 }
 
@@ -4247,10 +4384,45 @@ pub(crate) fn start_upscale(
     pump_queue(ui);
 }
 
-pub(crate) fn trim_history(ui: &Rc<Ui>) {
-    let mut entries = ui.entries.borrow_mut();
-    while entries.len() > HISTORY_LIMIT {
-        entries.pop();
+/// Whether a search term or kind filter is narrowing the History list.
+pub(crate) fn history_filter_active(ui: &Ui) -> bool {
+    !ui.history_search.text().trim().is_empty()
+        || crate::history::HistoryFilter::from_index(ui.history_filter.selected())
+            != crate::history::HistoryFilter::All
+}
+
+/// Reload History from the database using the current search and filter.
+///
+/// `preserve_scroll` keeps the sidebar where the user left it, which is what
+/// background jobs and favorite toggles should do.
+pub(crate) fn reload_history(ui: &Rc<Ui>, preserve_scroll: bool) {
+    let query = ui.history_search.text().to_string();
+    let filter = crate::history::HistoryFilter::from_index(ui.history_filter.selected());
+    let filtered = !query.trim().is_empty() || filter != crate::history::HistoryFilter::All;
+
+    let result = if filtered {
+        ui.history.borrow().query(filter, &query, SEARCH_LIMIT)
+    } else {
+        ui.history.borrow().recent(HISTORY_LIMIT)
+    };
+    let entries = match result {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::error!(%error, "failed to load history");
+            Vec::new()
+        }
+    };
+    *ui.entries.borrow_mut() = entries;
+    ui.history_empty
+        .set_visible(filtered && ui.entries.borrow().is_empty());
+
+    if preserve_scroll {
+        history_view::rebuild_preserving_scroll(ui);
+    } else {
+        history_view::rebuild(ui);
+    }
+    if let Some(display) = ui.state.borrow().display.clone() {
+        history_view::select_without_reveal(ui, &display);
     }
 }
 
@@ -4539,5 +4711,52 @@ mod tests {
         assert_eq!(duration_label(12_400), "12s");
         assert_eq!(duration_label(65_000), "1m 05s");
         assert_eq!(duration_label(3_600_000), "60m 00s");
+    }
+
+    #[test]
+    fn annotates_generated_images() {
+        // Smallest valid PNG: a 1×1 transparent image.
+        const TINY_PNG: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let path = std::env::temp_dir().join(format!("flux-annotate-{}.png", std::process::id()));
+        std::fs::write(&path, TINY_PNG).unwrap();
+        let entry = super::Generation {
+            id: 7,
+            prompt: "a test lighthouse".into(),
+            model: "flux2-klein-4b".into(),
+            style: "cinematic".into(),
+            width: 608,
+            height: 816,
+            steps: 4,
+            seed: "42".into(),
+            created_at: 1_765_000_000,
+            duration_ms: 12_500,
+            image_path: path.to_string_lossy().into_owned(),
+            reference_path: None,
+            reference_paths: Vec::new(),
+            kind: "generate".into(),
+            source_path: None,
+            parent_id: None,
+            favorite: false,
+        };
+
+        super::annotate_image(&path, &entry, 1.0, "euler");
+
+        let metadata = flux_core::metadata::read_png(&path).unwrap().unwrap();
+        assert_eq!(metadata.prompt, "a test lighthouse");
+        assert_eq!(metadata.model, "flux2-klein-4b");
+        assert_eq!(metadata.seed, "42");
+        assert_eq!(metadata.steps, 4);
+        assert_eq!(metadata.cfg, 1.0);
+        assert_eq!(metadata.sampler, "euler");
+        assert_eq!((metadata.width, metadata.height), (608, 816));
+        assert_eq!(metadata.duration_ms, 12_500);
+        assert_eq!(metadata.app_version, env!("CARGO_PKG_VERSION"));
+        let _ = std::fs::remove_file(path);
     }
 }

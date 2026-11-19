@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use flux_core::config::CustomEffect;
+use flux_core::effect_pack;
 
 use crate::history::Generation;
 use crate::main_view::effect_item;
@@ -221,6 +222,144 @@ fn show_editor(ui: &Rc<Ui>, editing: Option<usize>, initial_name: &str, initial_
     }
 }
 
+/// Wire the import/export buttons in the effects popover.
+pub(crate) fn install_tools(ui: &Rc<Ui>) {
+    {
+        let ui = ui.clone();
+        ui.effects_import.clone().connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            import_effects(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.effects_export.clone().connect_clicked(move |_| {
+            ui.effects_popover.popdown();
+            export_effects(&ui);
+        });
+    }
+}
+
+fn export_effects(ui: &Rc<Ui>) {
+    let effects = ui.config.borrow().custom_effects.clone();
+    if effects.is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("There are no effects to export."));
+        return;
+    }
+
+    let dialog = gtk::FileDialog::builder()
+        .title("Export effects")
+        .modal(true)
+        .build();
+    dialog.set_initial_name(Some("flux-studio-effects.json"));
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Flux Studio effects"));
+    filter.add_pattern("*.json");
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+    dialog.set_default_filter(Some(&filter));
+
+    let ui = ui.clone();
+    let window = ui.window.clone();
+    dialog.save(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+        let Ok(file) = result else {
+            return;
+        };
+        let Some(path) = file.path() else {
+            ui.toast
+                .add_toast(adw::Toast::new("Could not save the effects file."));
+            return;
+        };
+        let text = match effect_pack::to_json(&effects) {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(%error, "failed to serialize effects");
+                ui.toast
+                    .add_toast(adw::Toast::new("Could not write the effects file."));
+                return;
+            }
+        };
+        if let Err(error) = std::fs::write(&path, text) {
+            tracing::warn!(%error, path = %path.display(), "failed to write effects");
+            ui.toast
+                .add_toast(adw::Toast::new("Could not write the effects file."));
+            return;
+        }
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Exported {} effect{}.",
+            effects.len(),
+            if effects.len() == 1 { "" } else { "s" }
+        )));
+    });
+}
+
+fn import_effects(ui: &Rc<Ui>) {
+    let dialog = gtk::FileDialog::builder()
+        .title("Import effects")
+        .modal(true)
+        .build();
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Flux Studio effects"));
+    filter.add_pattern("*.json");
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+    dialog.set_default_filter(Some(&filter));
+
+    let ui = ui.clone();
+    let window = ui.window.clone();
+    dialog.open(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+        let Ok(file) = result else {
+            return;
+        };
+        let Some(path) = file.path() else {
+            ui.toast
+                .add_toast(adw::Toast::new("Could not read that file."));
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "failed to read effects");
+                ui.toast
+                    .add_toast(adw::Toast::new("Could not read that file."));
+                return;
+            }
+        };
+        let incoming = match effect_pack::from_json(&text) {
+            Ok(effects) => effects,
+            Err(message) => {
+                ui.toast.add_toast(adw::Toast::new(&message));
+                return;
+            }
+        };
+
+        let report = {
+            let mut config = ui.config.borrow_mut();
+            let original = config.custom_effects.clone();
+            let report = effect_pack::merge(&mut config.custom_effects, incoming);
+            if let Err(error) = config.save() {
+                config.custom_effects = original;
+                tracing::warn!(%error, "failed to save imported effects");
+                None
+            } else {
+                Some(report)
+            }
+        };
+        match report {
+            Some(report) => {
+                rebuild_menu(&ui);
+                ui.toast.add_toast(adw::Toast::new(&report.summary()));
+            }
+            None => ui
+                .toast
+                .add_toast(adw::Toast::new("Could not save the imported effects.")),
+        }
+    });
+}
+
 /// Rebuild the "Your effects" section from the config.
 pub(crate) fn rebuild_menu(ui: &Rc<Ui>) {
     while let Some(child) = ui.custom_effects_box.first_child() {
@@ -229,6 +368,7 @@ pub(crate) fn rebuild_menu(ui: &Rc<Ui>) {
 
     let effects = ui.config.borrow().custom_effects.clone();
     ui.custom_effects_section.set_visible(!effects.is_empty());
+    ui.effects_export.set_sensitive(!effects.is_empty());
 
     for (index, effect) in effects.iter().enumerate() {
         let button = effect_item(
@@ -365,6 +505,7 @@ mod tests {
             kind: kind.into(),
             source_path: None,
             parent_id: None,
+            favorite: false,
         }
     }
 

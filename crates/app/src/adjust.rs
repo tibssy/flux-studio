@@ -16,8 +16,8 @@ use gtk::glib;
 use crate::history::{Generation, NewGeneration};
 use crate::rounded_paintable::RoundedPaintable;
 use crate::{
-    Ui, active_preset, fade_to_image, history_view, now_millis, slugify, trim_history,
-    unix_seconds, write_thumbnail,
+    Ui, active_preset, annotate_image, fade_to_image, history_view, now_millis, reload_history,
+    slugify, unix_seconds, write_thumbnail,
 };
 
 /// Decoded source pixels plus the texture that was on screen before previewing.
@@ -361,10 +361,10 @@ fn save_adjusted(ui: &Rc<Ui>, preview: &Preview, adjustments: Adjustments, popov
                 kind: "adjust".into(),
                 source_path: Some(source_text),
                 parent_id,
+                favorite: false,
             };
-            ui.entries.borrow_mut().insert(0, entry);
-            trim_history(ui);
-            history_view::rebuild(ui);
+            annotate_image(&output, &entry, 0.0, "");
+            reload_history(ui, false);
             history_view::highlight(ui, &output);
         }
         Err(error) => tracing::error!(%error, "failed to record adjustment"),

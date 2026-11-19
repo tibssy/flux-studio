@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 #[derive(Debug, Clone)]
 pub struct Generation {
@@ -25,6 +26,8 @@ pub struct Generation {
     pub source_path: Option<String>,
     /// Entry whose result was used as the input image, when there is one.
     pub parent_id: Option<i64>,
+    /// Whether the user starred this entry.
+    pub favorite: bool,
 }
 
 pub struct NewGeneration<'a> {
@@ -80,7 +83,8 @@ impl History {
                  reference_path TEXT,
                  reference_paths TEXT,
                  kind        TEXT    NOT NULL DEFAULT 'generate',
-                 source_path TEXT
+                 source_path TEXT,
+                 favorite    INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS generations_created_at
                  ON generations (created_at DESC);",
@@ -107,6 +111,12 @@ impl History {
             "TEXT NOT NULL DEFAULT 'generate'",
         )?;
         ensure_column(&conn, "generations", "source_path", "TEXT")?;
+        ensure_column(
+            &conn,
+            "generations",
+            "favorite",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         let added_parent = ensure_column(&conn, "generations", "parent_id", "INTEGER")?;
         if added_parent {
             // Older rows only kept the input path; resolve it to the entry that
@@ -174,53 +184,107 @@ impl History {
     }
 
     pub fn recent(&self, limit: usize) -> Result<Vec<Generation>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, prompt, model, style, width, height, steps, seed,
-                    created_at, duration_ms, image_path, reference_path,
-                    reference_paths, kind, source_path, parent_id
-             FROM generations
+        let sql = format!(
+            "SELECT {COLUMNS} FROM generations
              ORDER BY created_at DESC, id DESC
-             LIMIT ?1",
-        )?;
-        let rows = statement.query_map([limit as i64], |row| {
-            let reference_path: Option<String> = row.get(11)?;
-            let raw_paths: Option<String> = row.get(12)?;
-            let mut reference_paths = raw_paths
-                .as_deref()
-                .and_then(|paths| serde_json::from_str::<Vec<String>>(paths).ok())
-                .unwrap_or_default();
-            if reference_paths.is_empty() {
-                // Databases written before multi-reference support only kept
-                // the first path.
-                if let Some(path) = reference_path.clone() {
-                    reference_paths.push(path);
-                }
-            }
-            Ok(Generation {
-                id: row.get(0)?,
-                prompt: row.get(1)?,
-                model: row.get(2)?,
-                style: row.get(3)?,
-                width: row.get::<_, i64>(4)? as u32,
-                height: row.get::<_, i64>(5)? as u32,
-                steps: row.get::<_, i64>(6)? as u32,
-                seed: row.get(7)?,
-                created_at: row.get(8)?,
-                duration_ms: row.get(9)?,
-                image_path: row.get(10)?,
-                reference_path,
-                reference_paths,
-                kind: row.get(13)?,
-                source_path: row.get(14)?,
-                parent_id: row.get(15)?,
-            })
-        })?;
-
+             LIMIT ?1"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map([limit as i64], map_row)?;
         let mut generations = Vec::new();
         for row in rows {
             generations.push(row?);
         }
         Ok(generations)
+    }
+
+    /// Search and filter entries in the database.
+    ///
+    /// Search results also include the chain ancestors of every match, so a
+    /// grouped edit still shows the image it came from.
+    pub fn query(
+        &self,
+        filter: HistoryFilter,
+        search: &str,
+        limit: usize,
+    ) -> Result<Vec<Generation>> {
+        let mut clauses: Vec<&str> = Vec::new();
+        match filter {
+            HistoryFilter::All => {}
+            HistoryFilter::Favorites => clauses.push("favorite = 1"),
+            HistoryFilter::TextToImage => clauses
+                .push("kind = 'generate' AND (reference_path IS NULL OR reference_path = '')"),
+            HistoryFilter::Edits => clauses.push(
+                "(kind NOT IN ('generate', 'upscale', 'adjust')
+                  OR (kind = 'generate' AND reference_path IS NOT NULL
+                      AND reference_path != ''))",
+            ),
+            HistoryFilter::Upscales => clauses.push("kind = 'upscale'"),
+            HistoryFilter::Adjustments => clauses.push("kind = 'adjust'"),
+        }
+
+        let term = search.trim();
+        let mut args: Vec<String> = Vec::new();
+        if !term.is_empty() {
+            clauses.push(
+                "(prompt LIKE ? ESCAPE '\\' OR model LIKE ? ESCAPE '\\'
+                  OR seed LIKE ? ESCAPE '\\')",
+            );
+            let pattern = format!("%{}%", escape_like(term));
+            args.push(pattern.clone());
+            args.push(pattern.clone());
+            args.push(pattern);
+        }
+
+        let where_clause = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
+        };
+        args.push(limit.to_string());
+        let sql = format!(
+            "SELECT {COLUMNS} FROM generations {where_clause}
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(args.iter()), map_row)?;
+        let mut generations = Vec::new();
+        for row in rows {
+            generations.push(row?);
+        }
+
+        if !term.is_empty() {
+            let mut seen: HashSet<i64> = generations.iter().map(|entry| entry.id).collect();
+            let mut pending: Vec<i64> = generations
+                .iter()
+                .filter_map(|entry| entry.parent_id)
+                .collect();
+            while let Some(id) = pending.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                if let Some(entry) = self.get(id)? {
+                    pending.extend(entry.parent_id);
+                    generations.push(entry);
+                }
+            }
+        }
+        Ok(generations)
+    }
+
+    fn get(&self, id: i64) -> Result<Option<Generation>> {
+        let sql = format!("SELECT {COLUMNS} FROM generations WHERE id = ?1");
+        Ok(self.conn.query_row(&sql, [id], map_row).optional()?)
+    }
+
+    /// Star or unstar one entry.
+    pub fn set_favorite(&self, id: i64, favorite: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE generations SET favorite = ?1 WHERE id = ?2",
+            params![favorite as i64, id],
+        )?;
+        Ok(())
     }
 
     /// Remove one entry from the database.
@@ -238,6 +302,88 @@ impl History {
             .execute("DELETE FROM generations WHERE id = ?1", [id])?;
         Ok(())
     }
+}
+
+/// Filter chips shown above the History list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HistoryFilter {
+    #[default]
+    All,
+    Favorites,
+    TextToImage,
+    Edits,
+    Upscales,
+    Adjustments,
+}
+
+/// Labels in dropdown order.
+pub const FILTER_LABELS: [&str; 6] = [
+    "All images",
+    "Favorites",
+    "Text to image",
+    "Edits",
+    "Upscales",
+    "Adjustments",
+];
+
+impl HistoryFilter {
+    pub fn from_index(index: u32) -> Self {
+        match index {
+            1 => Self::Favorites,
+            2 => Self::TextToImage,
+            3 => Self::Edits,
+            4 => Self::Upscales,
+            5 => Self::Adjustments,
+            _ => Self::All,
+        }
+    }
+}
+
+/// Column order shared by every query that returns a [`Generation`].
+const COLUMNS: &str = "id, prompt, model, style, width, height, steps, seed,
+                       created_at, duration_ms, image_path, reference_path,
+                       reference_paths, kind, source_path, parent_id, favorite";
+
+fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
+    let reference_path: Option<String> = row.get(11)?;
+    let raw_paths: Option<String> = row.get(12)?;
+    let mut reference_paths = raw_paths
+        .as_deref()
+        .and_then(|paths| serde_json::from_str::<Vec<String>>(paths).ok())
+        .unwrap_or_default();
+    if reference_paths.is_empty() {
+        // Databases written before multi-reference support only kept the first
+        // path.
+        if let Some(path) = reference_path.clone() {
+            reference_paths.push(path);
+        }
+    }
+    Ok(Generation {
+        id: row.get(0)?,
+        prompt: row.get(1)?,
+        model: row.get(2)?,
+        style: row.get(3)?,
+        width: row.get::<_, i64>(4)? as u32,
+        height: row.get::<_, i64>(5)? as u32,
+        steps: row.get::<_, i64>(6)? as u32,
+        seed: row.get(7)?,
+        created_at: row.get(8)?,
+        duration_ms: row.get(9)?,
+        image_path: row.get(10)?,
+        reference_path,
+        reference_paths,
+        kind: row.get(13)?,
+        source_path: row.get(14)?,
+        parent_id: row.get(15)?,
+        favorite: row.get::<_, i64>(16)? != 0,
+    })
+}
+
+/// Escape `LIKE` wildcards so a search for `100%` stays literal.
+fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<bool> {
@@ -516,5 +662,151 @@ mod tests {
         assert_eq!(recent[0].reference_path, None);
         assert_eq!(recent[0].kind, "generate");
         assert_eq!(recent[0].source_path, None);
+        assert!(!recent[0].favorite);
+    }
+
+    #[test]
+    fn favorites_default_to_false_and_toggle() {
+        let history = History::open_in_memory().unwrap();
+        let id = history
+            .insert(&sample("star me", "flux2-klein-4b"))
+            .unwrap()
+            .0;
+        assert!(!history.recent(1).unwrap()[0].favorite);
+
+        history.set_favorite(id, true).unwrap();
+        assert!(history.recent(1).unwrap()[0].favorite);
+        assert_eq!(
+            history
+                .query(HistoryFilter::Favorites, "", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        history.set_favorite(id, false).unwrap();
+        assert!(
+            history
+                .query(HistoryFilter::Favorites, "", 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn filters_by_kind() {
+        let history = History::open_in_memory().unwrap();
+        history
+            .insert(&sample("plain text", "flux2-klein-4b"))
+            .unwrap();
+
+        let mut edit = sample("edit this", "flux2-klein-4b");
+        edit.created_at = 101;
+        edit.reference_path = Some("/tmp/ref.png");
+        history.insert(&edit).unwrap();
+
+        let mut upscale = sample("Upscaled 4×", "mosr-4x");
+        upscale.created_at = 102;
+        upscale.kind = "upscale";
+        upscale.source_path = Some("/tmp/in.png");
+        history.insert(&upscale).unwrap();
+
+        let mut adjust = sample("brightness +10", "flux2-klein-4b");
+        adjust.created_at = 103;
+        adjust.kind = "adjust";
+        adjust.source_path = Some("/tmp/in.png");
+        history.insert(&adjust).unwrap();
+
+        let prompts = |filter| {
+            let mut prompts: Vec<String> = history
+                .query(filter, "", 20)
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.prompt)
+                .collect();
+            prompts.sort();
+            prompts
+        };
+        assert_eq!(prompts(HistoryFilter::All).len(), 4);
+        assert_eq!(prompts(HistoryFilter::TextToImage), ["plain text"]);
+        assert_eq!(prompts(HistoryFilter::Edits), ["edit this"]);
+        assert_eq!(prompts(HistoryFilter::Upscales), ["Upscaled 4×"]);
+        assert_eq!(prompts(HistoryFilter::Adjustments), ["brightness +10"]);
+    }
+
+    #[test]
+    fn searches_prompt_model_and_seed() {
+        let history = History::open_in_memory().unwrap();
+        let mut generation = sample("a red lighthouse", "flux3-klein");
+        generation.seed = "987654";
+        history.insert(&generation).unwrap();
+        history
+            .insert(&sample("a blue harbour", "flux2-klein-4b"))
+            .unwrap();
+
+        let search = |term| {
+            let mut prompts: Vec<String> = history
+                .query(HistoryFilter::All, term, 20)
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.prompt)
+                .collect();
+            prompts.sort();
+            prompts
+        };
+        assert_eq!(search("LIGHTHOUSE"), ["a red lighthouse"]);
+        assert_eq!(search("flux3"), ["a red lighthouse"]);
+        assert_eq!(search("9876"), ["a red lighthouse"]);
+        assert!(search("nothing").is_empty());
+    }
+
+    #[test]
+    fn search_includes_chain_ancestors() {
+        let history = History::open_in_memory().unwrap();
+        let root = history
+            .insert(&sample("root image", "flux2-klein-4b"))
+            .unwrap()
+            .0;
+
+        let mut edit = sample("the edited version", "flux2-klein-4b");
+        edit.created_at = 101;
+        edit.image_path = "/tmp/edit.png";
+        edit.reference_path = Some("/tmp/a.png");
+        history.insert(&edit).unwrap();
+
+        let results = history.query(HistoryFilter::All, "edited", 20).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|entry| entry.id == root));
+    }
+
+    #[test]
+    fn search_escapes_like_wildcards() {
+        let history = History::open_in_memory().unwrap();
+        history
+            .insert(&sample("100% detail", "flux2-klein-4b"))
+            .unwrap();
+        history
+            .insert(&sample("1000 details", "flux2-klein-4b"))
+            .unwrap();
+
+        let results = history.query(HistoryFilter::All, "100%", 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].prompt, "100% detail");
+    }
+
+    #[test]
+    fn filter_index_round_trips() {
+        let filters = [
+            HistoryFilter::All,
+            HistoryFilter::Favorites,
+            HistoryFilter::TextToImage,
+            HistoryFilter::Edits,
+            HistoryFilter::Upscales,
+            HistoryFilter::Adjustments,
+        ];
+        for (index, filter) in filters.into_iter().enumerate() {
+            assert_eq!(HistoryFilter::from_index(index as u32), filter);
+        }
+        assert_eq!(HistoryFilter::from_index(99), HistoryFilter::All);
     }
 }

@@ -5,6 +5,16 @@ rough edges.
 
 ## Unreleased
 
+- **PNG metadata**: every generation, upscale and adjusted copy now carries its
+  prompt, model, style, seed, steps, CFG, sampler, size, references and app
+  version in PNG text chunks, plus an A1111-compatible `parameters` block.
+- **History search, filters and favorites**: search prompts, models and seeds
+  with `Ctrl+F`, filter by text-to-image, edits, upscales or adjustments, and
+  star entries; matching chains stay expanded.
+- **Effects export/import**: save user effects to a JSON pack and merge another
+  pack without overwriting existing effects.
+- **File actions**: copy the displayed image, open its folder, or drag it out
+  of the app as a real PNG.
 - Extra-wide **4:1** and **3:1** aspect-ratio presets for LinkedIn and
   Facebook-style header images.
 - File-picker references keep the prompt composer open and focused.

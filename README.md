@@ -33,7 +33,10 @@ Milestone 3 (packaged desktop app):
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry. Images derived from another result (edits,
   effects and upscales) are grouped under their source with an indent and a
-  collapsible chain counter; chains start collapsed
+  collapsible chain counter; chains start collapsed. **Search** prompts, models
+  and seeds (`Ctrl+F`) and filter by text-to-image, edits, upscales or
+  adjustments; matching chains stay expanded, and a star marks **favorites**
+  for quick access
 - clicking a history image shows it on the canvas with the effects menu,
   upscale, edit and crop actions and restores its prompt, model, style, size
   and seed
@@ -73,7 +76,14 @@ Milestone 3 (packaged desktop app):
 - **image actions** over the canvas: an effects menu (colorize, recover,
   enhance, denoise, photoreal, replace background, day/night, expand),
   save-prompt-as-effect, adjust colors, upscale, edit, crop-to-reference,
-  undo, and back-to-view
+  undo, back-to-view, copy the image, open its folder, and drag it out as a
+  real file
+- **self-describing PNGs**: prompt, model, style, seed, steps, CFG, sampler,
+  size, references and app version are written into every result as PNG text
+  chunks, plus an A1111-compatible `parameters` block for other tools
+- **portable effects**: export user effects to a small JSON pack and import
+  them on another machine; imports merge without overwriting and rename name
+  collisions
 - **manual adjustments** with brightness, contrast and saturation sliders and
   a live canvas preview; saving writes a new PNG that joins the history chain
   without re-running the model
@@ -216,6 +226,12 @@ without leaving the app.
 | Edit an image | pick references with the image button, or open a history row and press Edit |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
+| Favorite an image | star button on the history row |
+| Search history | `Ctrl+F` or the field under **History** |
+| Copy the image | copy button over the canvas |
+| Show the image in its folder | folder button over the canvas |
+| Drag an image out | drag from the canvas into the file manager |
+| Export / import effects | **Effects → Export… / Import…** |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
