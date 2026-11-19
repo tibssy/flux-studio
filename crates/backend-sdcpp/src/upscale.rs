@@ -454,6 +454,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("flux-upscale-test-{}", std::process::id()));
         let server = SdUpscaleServer::new(SdServerConfig {
             cli: PathBuf::from("/bin/false"),
+            lora_dir: dir.join("loras"),
             models_dir: dir,
             backend: None,
         });

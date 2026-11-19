@@ -31,6 +31,8 @@ const JOB_TIMEOUT: Duration = Duration::from_secs(3600);
 pub struct SdServerConfig {
     pub cli: PathBuf,
     pub models_dir: PathBuf,
+    /// Folder scanned by the server for LoRA weights.
+    pub lora_dir: PathBuf,
     /// Optional explicit `--backend` value (cpu, vulkan0, cuda0, ...).
     pub backend: Option<String>,
 }
@@ -256,6 +258,18 @@ impl SdServer {
                 .collect::<Result<Vec<_>>>()?;
             payload["ref_images"] = json!(images);
         }
+        if !request.loras.is_empty() {
+            payload["lora"] = json!(
+                request
+                    .loras
+                    .iter()
+                    .map(|lora| json!({
+                        "path": lora.path,
+                        "multiplier": lora.weight,
+                    }))
+                    .collect::<Vec<_>>()
+            );
+        }
 
         let submit_url = format!("http://127.0.0.1:{port}/sdcpp/v1/img_gen");
         let response = client
@@ -457,6 +471,7 @@ impl Inner {
         if offload {
             command.arg("--offload-to-cpu");
         }
+        command.arg("--lora-model-dir").arg(&self.config.lora_dir);
         command
             .arg("--listen-ip")
             .arg("127.0.0.1")

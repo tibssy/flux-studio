@@ -4,6 +4,7 @@ mod compare_view;
 mod effects;
 mod history;
 mod history_view;
+mod lora;
 mod main_view;
 mod preferences;
 mod prompt_ai;
@@ -192,6 +193,10 @@ pub(crate) struct Ui {
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
     pub batch_spin: gtk::SpinButton,
+    pub lora_button: gtk::Button,
+    pub lora_summary: gtk::Label,
+    /// Resolved folder scanned for LoRA weights.
+    pub lora_dir: PathBuf,
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
     pub upscaling: Cell<bool>,
@@ -360,8 +365,14 @@ fn build_ui(app: &adw::Application) {
         && std::env::var_os("FLUX_SD_SERVER").is_none()
         && !server_starts(&sd_server);
 
+    let lora_dir = config
+        .lora_dir
+        .clone()
+        .unwrap_or_else(|| models_dir.join("loras"));
+    let _ = std::fs::create_dir_all(&lora_dir);
     let backend: Arc<dyn Backend> = Arc::new(SdServer::new(SdServerConfig {
         cli: sd_server,
+        lora_dir: lora_dir.clone(),
         models_dir: models_dir.clone(),
         backend: config.backend.clone(),
     }));
@@ -547,6 +558,9 @@ fn build_ui(app: &adw::Application) {
         seed_entry: side.seed_entry,
         random_button: side.random_button,
         batch_spin: side.batch_spin,
+        lora_button: side.lora_button,
+        lora_summary: side.lora_summary,
+        lora_dir,
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
         upscaling: Cell::new(false),
@@ -570,6 +584,7 @@ fn build_ui(app: &adw::Application) {
     install_image_drag(&ui);
     effects::rebuild_menu(&ui);
     effects::install_tools(&ui);
+    lora::update_summary(&ui);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
     setup_compare_overlay(&ui);
@@ -726,6 +741,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         ui.variation_button
             .clone()
             .connect_clicked(move |_| generate_variation(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.lora_button
+            .clone()
+            .connect_clicked(move |_| lora::show_dialog(&ui));
     }
     {
         let ui = ui.clone();
@@ -3247,6 +3268,16 @@ fn generate(
         let config = ui.config.borrow();
         (config.offload, config.show_previews)
     };
+    let loras = ui
+        .config
+        .borrow()
+        .loras
+        .iter()
+        .map(|lora| flux_core::LoraConfig {
+            path: lora.path.clone(),
+            weight: lora.weight,
+        })
+        .collect::<Vec<_>>();
 
     let batch = batch_override
         .unwrap_or_else(|| ui.batch_spin.value().round().clamp(1.0, 4.0) as usize)
@@ -3294,6 +3325,7 @@ fn generate(
         request.sampler = model.sampler;
         request.offload = offload;
         request.previews = previews;
+        request.loras = loras.clone();
 
         // The queue keeps its own copies: a crop in the cache or a history
         // entry can disappear before this job starts. The originals stay in
@@ -3860,7 +3892,7 @@ fn record_upscale(
                 parent_id,
                 favorite: false,
             };
-            crate::annotate_image(&image.path, &entry, 0.0, "");
+            crate::annotate_image(&image.path, &entry, 0.0, "", &[]);
             reload_history(ui, !follow_live);
             if follow_live {
                 fade_to_image(ui, &image.path);
@@ -4010,6 +4042,7 @@ fn record_history(
                 &entry,
                 generate.model.cfg,
                 generate.model.sampler.as_str(),
+                &generate.request.loras,
             );
             reload_history(ui, !follow_live);
             if follow_live {
@@ -4088,7 +4121,13 @@ pub(crate) fn update_queue_bubble(ui: &Ui) {
 ///
 /// Failures are logged only: the image itself is already valid and the history
 /// database still has everything.
-pub(crate) fn annotate_image(path: &Path, entry: &Generation, cfg: f32, sampler: &str) {
+pub(crate) fn annotate_image(
+    path: &Path,
+    entry: &Generation,
+    cfg: f32,
+    sampler: &str,
+    loras: &[flux_core::LoraConfig],
+) {
     let metadata = flux_core::metadata::ImageMetadata {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         kind: entry.kind.clone(),
@@ -4102,6 +4141,10 @@ pub(crate) fn annotate_image(path: &Path, entry: &Generation, cfg: f32, sampler:
         width: entry.width,
         height: entry.height,
         references: entry.reference_paths.clone(),
+        loras: loras
+            .iter()
+            .map(|lora| format!("{} @ {:.2}", lora.path, lora.weight))
+            .collect(),
         source: entry.source_path.clone(),
         created_at: entry.created_at,
         duration_ms: entry.duration_ms,
@@ -5231,7 +5274,7 @@ mod tests {
             favorite: false,
         };
 
-        super::annotate_image(&path, &entry, 1.0, "euler");
+        super::annotate_image(&path, &entry, 1.0, "euler", &[]);
 
         let metadata = flux_core::metadata::read_png(&path).unwrap().unwrap();
         assert_eq!(metadata.prompt, "a test lighthouse");

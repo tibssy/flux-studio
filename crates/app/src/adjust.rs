@@ -363,7 +363,7 @@ fn save_adjusted(ui: &Rc<Ui>, preview: &Preview, adjustments: Adjustments, popov
                 parent_id,
                 favorite: false,
             };
-            annotate_image(&output, &entry, 0.0, "");
+            annotate_image(&output, &entry, 0.0, "", &[]);
             reload_history(ui, false);
             history_view::highlight(ui, &output);
         }

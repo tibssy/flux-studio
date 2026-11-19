@@ -25,6 +25,7 @@ fn request(prompt: &str, output: &str, references: Vec<PathBuf>) -> GenerateRequ
         sampler: Sampler::Euler,
         offload: true,
         reference_images: references,
+        loras: Vec::new(),
         previews: true,
         output: PathBuf::from(output),
     }
@@ -65,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "vendor/stable-diffusion.cpp/build/bin/sd-server".into());
     let backend = SdServer::new(SdServerConfig {
         cli: PathBuf::from(cli),
+        lora_dir: PathBuf::from(&models_dir).join("loras"),
         models_dir: PathBuf::from(models_dir),
         backend: None,
     });

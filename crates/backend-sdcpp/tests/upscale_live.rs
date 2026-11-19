@@ -23,6 +23,7 @@ fn upscales_at_4x_and_2x() {
 
     let server = SdUpscaleServer::new(SdServerConfig {
         cli,
+        lora_dir: models_dir.join("loras"),
         models_dir,
         backend: None,
     });

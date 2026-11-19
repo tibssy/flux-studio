@@ -12,6 +12,19 @@ pub struct CustomEffect {
     pub prompt: String,
 }
 
+/// A LoRA the user enabled for generation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoraSelection {
+    /// Path relative to the LoRA directory.
+    pub path: String,
+    #[serde(default = "default_lora_weight")]
+    pub weight: f32,
+}
+
+fn default_lora_weight() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -77,6 +90,10 @@ pub struct Config {
     pub draft_prompt: String,
     /// User-saved prompts shown at the bottom of the effects menu.
     pub custom_effects: Vec<CustomEffect>,
+    /// Optional override for the folder scanned for LoRA weights.
+    pub lora_dir: Option<PathBuf>,
+    /// LoRAs applied to generations, in order.
+    pub loras: Vec<LoraSelection>,
 }
 
 impl Default for Config {
@@ -117,6 +134,8 @@ impl Default for Config {
             last_image: None,
             draft_prompt: String::new(),
             custom_effects: Vec::new(),
+            lora_dir: None,
+            loras: Vec::new(),
         }
     }
 }
@@ -141,6 +160,13 @@ impl Config {
             }
             _ => size::reduce_ratio(self.default_width.max(1), self.default_height.max(1)),
         }
+    }
+
+    /// Folder scanned for LoRA weights.
+    pub fn lora_dir(&self) -> PathBuf {
+        self.lora_dir
+            .clone()
+            .unwrap_or_else(|| self.models_dir.join("loras"))
     }
 
     pub fn load() -> Self {
@@ -197,6 +223,9 @@ mod tests {
         assert!(config.session_restore);
         assert!(config.last_image.is_none());
         assert!(config.draft_prompt.is_empty());
+        assert!(config.loras.is_empty());
+        assert!(config.lora_dir.is_none());
+        assert_eq!(config.lora_dir(), PathBuf::from("/models").join("loras"));
         assert_eq!(config.upscaler_id, crate::upscaler::default_upscaler().id);
         assert_eq!(config.upscale_factor, crate::upscaler::NATIVE_SCALE);
         assert!((config.mp() - 0.589824).abs() < 1e-6);
@@ -245,5 +274,31 @@ mod tests {
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&text).unwrap();
         assert_eq!(parsed.custom_effects, config.custom_effects);
+    }
+
+    #[test]
+    fn round_trips_lora_selections() {
+        let mut config = Config::default();
+        config.loras.push(LoraSelection {
+            path: "styles/watercolor.safetensors".into(),
+            weight: 0.8,
+        });
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.loras, config.loras);
+    }
+
+    #[test]
+    fn older_lora_entries_get_unit_weight() {
+        let config: Config = toml::from_str(
+            r#"
+            models_dir = "/models"
+            output_dir = "/out"
+            [[loras]]
+            path = "style.safetensors"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.loras[0].weight, 1.0);
     }
 }

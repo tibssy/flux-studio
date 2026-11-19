@@ -86,6 +86,10 @@ Milestone 3 (packaged desktop app):
 - **portable effects**: export user effects to a small JSON pack and import
   them on another machine; imports merge without overwriting and rename name
   collisions
+- **LoRA support**: the **LoRAs…** button lists `.safetensors` (and `.ckpt`,
+  `.gguf`, `.sft`) weights from `models/loras`, with per-weight strength and a
+  live sidebar summary; active LoRAs apply to generations and effects and are
+  recorded in PNG metadata
 - **manual adjustments** with brightness, contrast and saturation sliders and
   a live canvas preview; saving writes a new PNG that joins the history chain
   without re-running the model
@@ -196,6 +200,18 @@ Upscaled images are saved to the output folder and appear in history with their
 source path, upscaler and output size. Deleting an upscale never deletes the
 source image, and deleting any history row works while a job is running.
 
+## LoRAs
+
+Put LoRA weights in `models/loras` (the folder shown by **LoRAs…** in the
+sidebar), press **Rescan folder**, then enable the weights you want and set
+their strength. Selections are stored in `config.toml` and applied to every
+generation, edit and effect through the server's `lora` request field. The
+active count is shown next to the button, and the weights are embedded in the
+PNG metadata.
+
+LoRAs are model-specific: use weights trained for the active model family
+(FLUX, Qwen, …). An incompatible weight fails when the server loads it.
+
 ## Day/night helper
 
 The optional **LFM2.5-VL-450M** vision helper (~332 MB: Q4_K_M weights plus a
@@ -251,6 +267,7 @@ without leaving the app.
 | Reorder waiting jobs | up/down arrows on a waiting queue row |
 | Duplicate a queued prompt | copy button on a waiting queue row |
 | Recall a previous prompt | `Alt+Up` / `Alt+Down` in the composer |
+| Choose LoRAs | **LoRAs…** in the sidebar |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
@@ -327,6 +344,7 @@ Data locations:
 |---|---|
 | `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
 | `~/.local/share/flux-studio/models/` | downloaded model files |
+| `<models folder>/loras/` | LoRA weights, shown by **LoRAs…** |
 | `~/.local/share/flux-studio/backends/` | downloaded `sd-server` backends |
 | `~/.local/share/flux-studio/backends/llama/` | downloaded `llama-cli` backends |
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
