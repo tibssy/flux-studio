@@ -4,6 +4,9 @@
 *.part
 *.log
 
+# local working notes
+/notes/
+
 # makepkg artifacts
 /packaging/src
 /packaging/pkg
