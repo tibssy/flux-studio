@@ -62,7 +62,7 @@ pub(crate) struct MainView {
     pub copy_button: gtk::Button,
     pub folder_button: gtk::Button,
     pub compare_button: gtk::ToggleButton,
-    pub compare_area: gtk::DrawingArea,
+    pub compare_area: crate::compare_view::CompareView,
 }
 
 pub(crate) fn build() -> MainView {
@@ -320,13 +320,14 @@ pub(crate) fn build() -> MainView {
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
-    let compare_area = gtk::DrawingArea::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .visible(false)
-        .can_target(true)
-        .css_classes(["compare-overlay"])
-        .build();
+    let compare_area = crate::compare_view::CompareView::new();
+    compare_area.set_hexpand(true);
+    compare_area.set_vexpand(true);
+    compare_area.set_halign(gtk::Align::Fill);
+    compare_area.set_valign(gtk::Align::Fill);
+    compare_area.set_visible(false);
+    compare_area.set_can_target(true);
+    compare_area.add_css_class("compare-overlay");
     let image_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     image_actions.set_halign(gtk::Align::End);
     image_actions.set_valign(gtk::Align::Start);

@@ -1,5 +1,6 @@
 mod adjust;
 mod backends;
+mod compare_view;
 mod effects;
 mod history;
 mod history_view;
@@ -124,9 +125,7 @@ pub(crate) struct Ui {
     pub copy_button: gtk::Button,
     pub folder_button: gtk::Button,
     pub compare_button: gtk::ToggleButton,
-    pub compare_area: gtk::DrawingArea,
-    pub compare_surfaces: RefCell<Option<(gtk::cairo::ImageSurface, gtk::cairo::ImageSurface)>>,
-    pub compare_split: Cell<f64>,
+    pub compare_area: crate::compare_view::CompareView,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -495,8 +494,6 @@ fn build_ui(app: &adw::Application) {
         folder_button: view.folder_button,
         compare_button: view.compare_button,
         compare_area: view.compare_area,
-        compare_surfaces: RefCell::new(None),
-        compare_split: Cell::new(0.5),
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -2281,42 +2278,6 @@ fn image_surface(image: &image::DynamicImage) -> anyhow::Result<gtk::cairo::Imag
 
 /// Draw the current image and its source either side of a draggable split.
 fn setup_compare_overlay(ui: &Rc<Ui>) {
-    {
-        let inner = ui.clone();
-        let area = ui.compare_area.clone();
-        area.set_draw_func(move |_area, cr, width, height| {
-            let surfaces = inner.compare_surfaces.borrow();
-            let Some((after, before)) = surfaces.as_ref() else {
-                return;
-            };
-            let width = width as f64;
-            let height = height as f64;
-            let split = inner.compare_split.get().clamp(0.0, 1.0) * width;
-
-            // The current image fills the canvas; the source replaces the
-            // left side so the split reads as before/after.
-            draw_contained(cr, after, width, height);
-            let _ = cr.save();
-            cr.rectangle(0.0, 0.0, split, height);
-            cr.clip();
-            draw_contained(cr, before, width, height);
-            let _ = cr.restore();
-
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
-            cr.rectangle(split - 1.0, 0.0, 2.0, height);
-            let _ = cr.fill();
-            cr.arc(split, height / 2.0, 13.0, 0.0, std::f64::consts::TAU);
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.35);
-            let _ = cr.fill();
-            cr.arc(split, height / 2.0, 11.0, 0.0, std::f64::consts::TAU);
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.85);
-            let _ = cr.fill();
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
-            cr.set_line_width(1.5);
-            let _ = cr.stroke();
-        });
-    }
-
     let drag = gtk::GestureDrag::new();
     {
         let ui = ui.clone();
@@ -2326,9 +2287,7 @@ fn setup_compare_overlay(ui: &Rc<Ui>) {
             };
             let width = ui.compare_area.width() as f64;
             if width > 0.0 {
-                ui.compare_split
-                    .set(((start_x + offset_x) / width).clamp(0.0, 1.0));
-                ui.compare_area.queue_draw();
+                ui.compare_area.set_split((start_x + offset_x) / width);
             }
         });
     }
@@ -2341,8 +2300,7 @@ fn setup_compare_overlay(ui: &Rc<Ui>) {
         click.connect_pressed(move |_, _, x, _| {
             let width = ui.compare_area.width() as f64;
             if width > 0.0 {
-                ui.compare_split.set((x / width).clamp(0.0, 1.0));
-                ui.compare_area.queue_draw();
+                ui.compare_area.set_split(x / width);
             }
         });
     }
@@ -2355,31 +2313,6 @@ fn setup_compare_overlay(ui: &Rc<Ui>) {
     }
 }
 
-fn draw_contained(
-    cr: &gtk::cairo::Context,
-    surface: &gtk::cairo::ImageSurface,
-    area_width: f64,
-    area_height: f64,
-) {
-    let width = surface.width() as f64;
-    let height = surface.height() as f64;
-    if width <= 0.0 || height <= 0.0 || area_width <= 0.0 || area_height <= 0.0 {
-        return;
-    }
-    let scale = (area_width / width).min(area_height / height);
-    let scaled_width = width * scale;
-    let scaled_height = height * scale;
-    let _ = cr.save();
-    cr.translate(
-        (area_width - scaled_width) / 2.0,
-        (area_height - scaled_height) / 2.0,
-    );
-    cr.scale(scale, scale);
-    let _ = cr.set_source_surface(surface, 0.0, 0.0);
-    let _ = cr.paint();
-    let _ = cr.restore();
-}
-
 fn compare_source(entry: &Generation) -> Option<PathBuf> {
     entry
         .source_path
@@ -2389,15 +2322,10 @@ fn compare_source(entry: &Generation) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn load_compare_surface(path: &Path) -> Option<gtk::cairo::ImageSurface> {
-    let image = image::open(path).ok()?;
-    image_surface(&image).ok()
-}
-
 fn set_compare_mode(ui: &Rc<Ui>, active: bool) {
     if !active {
         ui.compare_area.set_visible(false);
-        *ui.compare_surfaces.borrow_mut() = None;
+        ui.compare_area.clear();
         update_zoom_controls(ui);
         return;
     }
@@ -2412,23 +2340,30 @@ fn set_compare_mode(ui: &Rc<Ui>, active: bool) {
         ui.compare_button.set_active(false);
         return;
     };
-    let Some(after) = load_compare_surface(Path::new(&entry.image_path)) else {
-        ui.toast
-            .add_toast(adw::Toast::new("Could not load this image."));
-        ui.compare_button.set_active(false);
-        return;
+    let after = match gdk::Texture::from_filename(Path::new(&entry.image_path)) {
+        Ok(texture) => texture,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load the compare image");
+            ui.toast
+                .add_toast(adw::Toast::new("Could not load this image."));
+            ui.compare_button.set_active(false);
+            return;
+        }
     };
-    let Some(before) = load_compare_surface(&source) else {
-        ui.toast
-            .add_toast(adw::Toast::new("Could not load the source image."));
-        ui.compare_button.set_active(false);
-        return;
+    let before = match gdk::Texture::from_filename(&source) {
+        Ok(texture) => texture,
+        Err(error) => {
+            tracing::warn!(%error, path = %source.display(), "failed to load the compare source");
+            ui.toast
+                .add_toast(adw::Toast::new("Could not load the source image."));
+            ui.compare_button.set_active(false);
+            return;
+        }
     };
 
-    *ui.compare_surfaces.borrow_mut() = Some((after, before));
-    ui.compare_split.set(0.5);
+    ui.compare_area.set_images(after, before);
+    ui.compare_area.set_split(0.5);
     ui.compare_area.set_visible(true);
-    ui.compare_area.queue_draw();
     reset_zoom(ui);
     update_zoom_controls(ui);
     ui.status.set_text("Comparing with the source");
