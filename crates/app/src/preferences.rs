@@ -257,6 +257,29 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     performance_group.add(&previews_row);
     general.add(&performance_group);
 
+    let notifications_group = adw::PreferencesGroup::builder()
+        .title("Notifications")
+        .build();
+    let notify_row = adw::SwitchRow::builder()
+        .title("Desktop notifications")
+        .subtitle("Show a notification when a job finishes while the window is in the background")
+        .active(ui.config.borrow().notify_on_finish)
+        .build();
+    {
+        let ui = ui.clone();
+        notify_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            let mut config = ui.config.borrow_mut();
+            if config.notify_on_finish == active {
+                return;
+            }
+            config.notify_on_finish = active;
+            let _ = config.save();
+        });
+    }
+    notifications_group.add(&notify_row);
+    general.add(&notifications_group);
+
     dialog.add(&general);
 
     let models_page = adw::PreferencesPage::builder()

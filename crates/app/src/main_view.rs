@@ -15,6 +15,8 @@ pub(crate) struct MainView {
     pub generate: gtk::Button,
     pub progress_row: gtk::Box,
     pub progress: gtk::ProgressBar,
+    /// Number of jobs waiting behind the running one.
+    pub queue_status: gtk::Label,
     pub cancel: gtk::Button,
     pub status: gtk::Label,
     pub crop_overlay: gtk::DrawingArea,
@@ -426,7 +428,12 @@ pub(crate) fn build() -> MainView {
         .build();
     let progress_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     progress_row.set_visible(false);
+    let queue_status = gtk::Label::builder()
+        .visible(false)
+        .css_classes(["caption", "dim-label"])
+        .build();
     progress_row.append(&progress);
+    progress_row.append(&queue_status);
     progress_row.append(&cancel);
 
     let status = gtk::Label::builder()
@@ -465,6 +472,7 @@ pub(crate) fn build() -> MainView {
         generate,
         progress_row,
         progress,
+        queue_status,
         cancel,
         status,
         crop_overlay,

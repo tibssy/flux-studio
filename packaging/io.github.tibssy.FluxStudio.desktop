@@ -10,3 +10,4 @@ Categories=Graphics;2DGraphics;
 Keywords=AI;image;generation;diffusion;FLUX;stable-diffusion;
 StartupNotify=true
 StartupWMClass=io.github.tibssy.FluxStudio
+X-GNOME-UsesNotifications=true

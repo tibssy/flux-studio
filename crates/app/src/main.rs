@@ -6,6 +6,8 @@ mod history_view;
 mod main_view;
 mod preferences;
 mod prompt_ai;
+mod queue;
+mod queue_view;
 mod rounded_clip;
 mod rounded_paintable;
 mod sidebar;
@@ -25,7 +27,7 @@ use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
 use flux_core::style::STYLES;
 use flux_core::upscaler::{self, UpscaleRequest, UpscalerPreset};
 use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 
 use history::{Generation, History, NewGeneration};
 use state::{AppState, UndoStack};
@@ -123,6 +125,18 @@ pub(crate) struct Ui {
     pub config: RefCell<Config>,
     pub history: RefCell<History>,
     pub history_list: gtk::ListBox,
+    /// Jobs waiting behind the running one.
+    pub queue: RefCell<queue::JobQueue>,
+    pub queue_box: gtk::Box,
+    pub queue_list: gtk::ListBox,
+    pub queue_waiting: gtk::Label,
+    pub queue_clear: gtk::Button,
+    pub queue_running_row: RefCell<Option<adw::ActionRow>>,
+    pub queue_tick: RefCell<Option<glib::SourceId>>,
+    /// Pending count next to the progress bar.
+    pub queue_status: gtk::Label,
+    /// Set once the user confirmed quitting with jobs still queued.
+    pub quitting: Cell<bool>,
     pub new_button: gtk::Button,
     pub entries: RefCell<Vec<Generation>>,
     /// Chain roots whose descendants are hidden in the sidebar.
@@ -429,6 +443,15 @@ fn build_ui(app: &adw::Application) {
         config: RefCell::new(config),
         history: RefCell::new(history),
         history_list: side.history_list,
+        queue: RefCell::new(queue::JobQueue::default()),
+        queue_box: side.queue_box,
+        queue_list: side.queue_list,
+        queue_waiting: side.queue_waiting,
+        queue_clear: side.queue_clear,
+        queue_running_row: RefCell::new(None),
+        queue_tick: RefCell::new(None),
+        queue_status: view.queue_status,
+        quitting: Cell::new(false),
         new_button: side.new_button,
         entries: RefCell::new(Vec::new()),
         collapsed_groups: RefCell::new(std::collections::HashSet::new()),
@@ -471,6 +494,31 @@ fn build_ui(app: &adw::Application) {
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
 
+    // Notification clicks land here: focus the window and show that result.
+    {
+        let action = gio::SimpleAction::new("show-generation", Some(glib::VariantTy::INT64));
+        let ui = ui.clone();
+        action.connect_activate(move |_, parameter| {
+            let Some(id) = parameter.and_then(|value| value.get::<i64>()) else {
+                return;
+            };
+            ui.window.present();
+            let entry = ui
+                .entries
+                .borrow()
+                .iter()
+                .find(|entry| entry.id == id)
+                .cloned();
+            if let Some(entry) = entry {
+                history_view::load_entry(&ui, &entry);
+            }
+        });
+        app.add_action(&action);
+    }
+
+    // Reference copies belong to queued jobs only; nothing survives a restart.
+    let _ = std::fs::remove_dir_all(paths::cache_dir().join("queue"));
+
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         *ui.entries.borrow_mut() = entries;
         history_view::collapse_all_groups(&ui);
@@ -506,18 +554,22 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.cancel.clone();
         button.connect_clicked(move |_| {
-            let upscaling = ui.upscaling.get();
-            let result = if upscaling {
-                ui.backend.cancel_upscale()
+            if ui.upscaling.get() {
+                if let Err(error) = ui.backend.cancel_upscale() {
+                    ui.toast
+                        .add_toast(adw::Toast::new(&format!("Cancel failed: {error}")));
+                }
+                ui.status.set_text("Cancelling…");
             } else {
-                ui.backend.cancel()
-            };
-            if let Err(error) = result {
-                ui.toast
-                    .add_toast(adw::Toast::new(&format!("Cancel failed: {error}")));
+                queue_view::cancel_running(&ui);
             }
-            ui.status.set_text("Cancelling…");
         });
+    }
+    {
+        let ui = ui.clone();
+        ui.queue_clear
+            .clone()
+            .connect_clicked(move |_| queue_view::clear_pending(&ui));
     }
     {
         let ui = ui.clone();
@@ -614,7 +666,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let list = ui.history_list.clone();
         list.connect_row_activated(move |_, row| {
-            if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+            if ui.upscaling.get() || ui.classifying.get() {
                 return;
             }
             let Ok(id) = row.widget_name().parse::<i64>() else {
@@ -881,9 +933,42 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     {
         let ui = ui.clone();
         let window = ui.window.clone();
-        window.connect_close_request(move |_| {
+        window.connect_close_request(move |window| {
             let _ = ui.config.borrow().save();
-            glib::Propagation::Proceed
+            if ui.quitting.get() {
+                return glib::Propagation::Proceed;
+            }
+            let (running, waiting) = {
+                let queue = ui.queue.borrow();
+                (queue.running().is_some(), queue.pending_len())
+            };
+            if !running && waiting == 0 {
+                return glib::Propagation::Proceed;
+            }
+            let body = match (running, waiting) {
+                (true, 0) => "A job is still running.".to_string(),
+                (true, 1) => "A job is still running and 1 more is waiting.".to_string(),
+                (true, count) => format!("A job is still running and {count} more are waiting."),
+                (false, 1) => "1 job is still waiting.".to_string(),
+                (false, count) => format!("{count} jobs are still waiting."),
+            };
+            let dialog = adw::AlertDialog::builder()
+                .heading("Quit Flux Studio?")
+                .body(format!("{body} Quitting cancels the queue."))
+                .close_response("cancel")
+                .default_response("cancel")
+                .build();
+            dialog.add_response("cancel", "Keep running");
+            dialog.add_response("quit", "Quit");
+            dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+            let ui = ui.clone();
+            dialog.connect_response(Some("quit"), move |_, _| {
+                ui.quitting.set(true);
+                let _ = ui.backend.cancel();
+                ui.window.destroy();
+            });
+            dialog.present(Some(window));
+            glib::Propagation::Stop
         });
     }
 
@@ -967,8 +1052,7 @@ pub(crate) fn refresh_model_list(ui: &Rc<Ui>) {
     ui.model_dropdown.set_model(Some(&list));
 
     let is_empty = ui.models.borrow().is_empty();
-    ui.model_dropdown
-        .set_sensitive(!is_empty && !ui.generating.get());
+    ui.model_dropdown.set_sensitive(!is_empty);
 
     if is_empty {
         ui.model_dropdown.set_selected(gtk::INVALID_LIST_POSITION);
@@ -1039,9 +1123,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
             model.total_bytes() as f64 / 1e9
         ));
         ui.model_hint.remove_css_class("error");
-        if !ui.generating.get() {
-            ui.generate.set_sensitive(true);
-        }
+        ui.generate.set_sensitive(true);
     } else {
         let names: Vec<&str> = missing.iter().map(|file| file.rel_path).collect();
         ui.model_hint.set_text(&format!(
@@ -1057,7 +1139,7 @@ pub(crate) fn refresh_model(ui: &Rc<Ui>) {
             .llm_encoder()
             .map(|file| ui.models_dir.join(file.rel_path));
         let encoder_ready = encoder.as_ref().map(|path| path.exists()).unwrap_or(false);
-        if !ui.generating.get() && !ui.improving.get() {
+        if !ui.improving.get() {
             ui.improve_button.set_sensitive(encoder_ready);
         }
         let tooltip = match encoder {
@@ -1562,11 +1644,11 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
     let classifying = ui.classifying.get();
-    let busy = generating || upscaling || zooming || classifying;
+    let foreground = upscaling || zooming || classifying;
     let position = history_position(ui);
-    let actions = has_image && !busy;
+    let actions = has_image && !foreground;
     let editable = actions && active_preset(ui).supports_edit;
-    let navigation = actions && !editing;
+    let navigation = actions && !editing && !generating;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
@@ -1575,17 +1657,17 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.effects_button.set_visible(editable);
     ui.save_effect_button
-        .set_visible(actions && effects::current_savable_prompt(ui).is_some());
+        .set_visible(actions && !generating && effects::current_savable_prompt(ui).is_some());
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
-    ui.upscale_button.set_visible(actions);
-    ui.adjust_button.set_visible(actions);
+    ui.upscale_button.set_visible(actions && !generating);
+    ui.adjust_button.set_visible(actions && !generating);
     ui.edit_button.set_visible(editable && !composing);
-    ui.crop_button.set_visible(editable);
-    ui.back_button.set_visible(editing && !busy);
+    ui.crop_button.set_visible(editable && !generating);
+    ui.back_button.set_visible(editing && !foreground);
     ui.undo_button
-        .set_visible(editable && ui.undo.borrow().can_undo());
+        .set_visible(editable && !generating && ui.undo.borrow().can_undo());
     update_zoom_controls(ui);
 
     if composing || !editable {
@@ -1597,7 +1679,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
 }
 
 fn edit_current_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.classifying.get() {
         return;
     }
     if !active_preset(ui).supports_edit {
@@ -2002,7 +2084,7 @@ pub(crate) fn cancel_zoom(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn new_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -2173,7 +2255,7 @@ fn remove_reference(ui: &Rc<Ui>, path: &Path) {
 }
 
 fn references_busy(ui: &Rc<Ui>) -> bool {
-    ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get()
+    ui.upscaling.get() || ui.zooming.get() || ui.classifying.get()
 }
 
 /// A 48×48 cover-scaled texture for a reference thumbnail.
@@ -2204,7 +2286,7 @@ fn same_file(left: &Path, right: &Path) -> bool {
 }
 
 fn improve_prompt(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.improving.get() {
+    if ui.improving.get() {
         return;
     }
 
@@ -2252,13 +2334,6 @@ fn improve_prompt(ui: &Rc<Ui>) {
 
         match result {
             Ok(Ok(improved)) => {
-                if ui.generating.get() {
-                    ui.status.set_text("Improvement discarded");
-                    ui.toast.add_toast(adw::Toast::new(
-                        "Generation started; improvement discarded.",
-                    ));
-                    return;
-                }
                 if current_prompt(&ui).trim() != original {
                     ui.status.set_text("Prompt changed");
                     ui.toast
@@ -2335,6 +2410,14 @@ pub(crate) enum GenerationMode {
 }
 
 impl GenerationMode {
+    pub(crate) fn queue_label(self) -> &'static str {
+        match self {
+            Self::Generate => "Generate",
+            Self::Edit => "Edit",
+            _ => "Effect",
+        }
+    }
+
     fn keeps_reference(self) -> bool {
         self == Self::Edit
     }
@@ -2416,13 +2499,19 @@ fn generate(
             .add_toast(adw::Toast::new("The backend is still installing."));
         return;
     }
-    if ui.generating.get()
-        || ui.upscaling.get()
+    if ui.upscaling.get()
         || ui.zooming.get()
         || ui.classifying.get()
         || !ui.generate.is_sensitive()
         || (require_composer && !ui.composer.reveals_child())
     {
+        return;
+    }
+    if ui.queue.borrow().is_full() {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "The queue is full ({} jobs). Wait for one to finish.",
+            queue::LIMIT
+        )));
         return;
     }
 
@@ -2466,7 +2555,6 @@ fn generate(
 
     let (width, height) = target_size(ui);
     let references = ui.state.borrow().references.clone();
-    let keep_reference = mode.keeps_reference();
     let output_dir = ui.config.borrow().output_dir.clone();
     let (offload, previews) = {
         let config = ui.config.borrow();
@@ -2486,51 +2574,123 @@ fn generate(
     request.sampler = model.sampler;
     request.offload = offload;
     request.previews = previews;
-    request.reference_images = references.clone();
+
+    // The queue keeps its own copies: a crop in the cache or a history entry
+    // can disappear before this job starts. The originals stay in the job for
+    // History's parent lookup.
+    let id = ui.queue.borrow_mut().next_id();
+    let (copies, reference_dir) = match copy_references(id, &references) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            ui.toast.add_toast(adw::Toast::new(&format!(
+                "Could not prepare the references: {error}"
+            )));
+            return;
+        }
+    };
+    request.reference_images = copies;
+
+    let job = queue::Job {
+        id,
+        request,
+        mode,
+        prompt: base_prompt,
+        style: style_id.to_string(),
+        model,
+        width,
+        height,
+        seed,
+        steps: model.steps,
+        reference_paths: references,
+        source_path,
+        seed_text,
+        reference_dir,
+    };
+
+    let was_busy = ui.queue.borrow().running().is_some();
+    ui.queue.borrow_mut().push(job);
+    queue_view::rebuild(ui);
+    if was_busy {
+        ui.status.set_text("Added to the queue");
+    }
+    pump_queue(ui);
+}
+
+/// Copy the selected references into a per-job folder.
+fn copy_references(
+    id: u64,
+    references: &[PathBuf],
+) -> Result<(Vec<PathBuf>, Option<PathBuf>), String> {
+    if references.is_empty() {
+        return Ok((Vec::new(), None));
+    }
+    let dir = paths::cache_dir().join("queue").join(id.to_string());
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        return Err(format!("could not create {}: {error}", dir.display()));
+    }
+
+    let mut copies = Vec::with_capacity(references.len());
+    for (index, source) in references.iter().enumerate() {
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("png");
+        let target = dir.join(format!("ref-{}.{extension}", index + 1));
+        if let Err(error) = std::fs::copy(source, &target) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(format!("could not copy {}: {error}", source.display()));
+        }
+        copies.push(target);
+    }
+    Ok((copies, Some(dir)))
+}
+
+/// Start the next waiting job when the worker is idle.
+///
+/// Returns whether a job is now running.
+fn pump_queue(ui: &Rc<Ui>) -> bool {
+    if ui.queue.borrow().running().is_some() {
+        return true;
+    }
+    let Some(job) = ui.queue.borrow_mut().take_next() else {
+        return false;
+    };
+    ui.queue.borrow_mut().start(job.clone());
 
     ui.generating.set(true);
-    set_controls_enabled(ui, false);
-    ui.composer.set_reveal_child(false);
+    ui.generate
+        .set_tooltip_text(Some("Add to queue (Ctrl+Enter)"));
     ui.progress_row.set_visible(true);
     ui.cancel.set_sensitive(true);
     ui.progress.set_visible(true);
     ui.progress.set_fraction(0.0);
     ui.progress.set_text(Some("Loading models…"));
     ui.status.set_text("Loading models…");
-    reset_zoom(ui);
     update_image_actions(ui);
 
     let (sender, receiver) = async_channel::unbounded();
     if ui
         .worker
         .jobs
-        .send_blocking((request.clone(), sender))
+        .send_blocking((job.request.clone(), sender))
         .is_err()
     {
-        ui.toast
-            .add_toast(adw::Toast::new("Generation worker is unavailable."));
-        finish(ui, "Generation failed");
-        show_composer(ui, true);
-        return;
+        tracing::error!("generation worker is unavailable");
+        complete_job(
+            ui,
+            &job,
+            Outcome::Failed("The generation worker is unavailable.".into()),
+            0,
+        );
+        ui.queue.borrow_mut().clear_running();
+        return pump_queue(ui);
     }
 
+    queue_view::rebuild(ui);
     let ui = ui.clone();
-    let prompt_for_history = base_prompt;
-    let model_for_history = model.id.to_string();
-    let style_for_history = style_id.to_string();
-    let seed_for_history = seed.to_string();
-    let steps_for_history = request.steps;
-    let reference_for_history = references
-        .first()
-        .map(|path| path.to_string_lossy().into_owned());
-    let reference_paths_for_history: Vec<String> = references
-        .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
-    let source_path_for_history = source_path;
-    let started = Instant::now();
-
     glib::spawn_future_local(async move {
+        let started = Instant::now();
+        let mut finished = false;
         while let Ok(message) = receiver.recv().await {
             match message {
                 Progress::Loading => {
@@ -2542,6 +2702,7 @@ fn generate(
                     ui.progress
                         .set_text(Some(&format!("Step {current}/{total}")));
                     ui.status.set_text(&format!("Step {current}/{total}"));
+                    queue_view::set_step(&ui, current, total);
                 }
                 Progress::Preview { step, total, png } => {
                     let bytes = glib::Bytes::from(&png);
@@ -2552,123 +2713,268 @@ fn generate(
                     ui.progress.set_fraction(step as f64 / total.max(1) as f64);
                     ui.progress.set_text(Some(&format!("Step {step}/{total}")));
                     ui.status.set_text(&format!("Step {step}/{total}"));
+                    queue_view::set_step(&ui, step, total);
                 }
                 Progress::Log(line) => tracing::debug!(target: "sd-cli", "{line}"),
                 Progress::Cancelled => {
-                    ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
-                    finish(&ui, "Cancelled");
-                    after_generation_stopped(&ui, mode);
+                    let duration_ms = started.elapsed().as_millis() as i64;
+                    complete_job(&ui, &job, Outcome::Cancelled, duration_ms);
+                    finished = true;
                     break;
                 }
                 Progress::Done(path) => {
                     let duration_ms = started.elapsed().as_millis() as i64;
-                    let image_path = path.to_string_lossy().into_owned();
-                    let created_at = unix_seconds();
-
-                    ui.undo.borrow_mut().clear();
-                    ui.state
-                        .borrow_mut()
-                        .on_result(path.clone(), keep_reference);
-                    update_image_view(&ui);
-
-                    let inserted = ui.history.borrow().insert(&NewGeneration {
-                        prompt: &prompt_for_history,
-                        model: &model_for_history,
-                        style: &style_for_history,
-                        width,
-                        height,
-                        steps: steps_for_history,
-                        seed: &seed_for_history,
-                        created_at,
-                        duration_ms,
-                        image_path: &image_path,
-                        reference_path: reference_for_history.as_deref(),
-                        reference_paths: &reference_paths_for_history,
-                        kind: mode.kind(),
-                        source_path: source_path_for_history.as_deref(),
-                    });
-
-                    match inserted {
-                        Ok((id, parent_id)) => {
-                            if let Err(error) = write_thumbnail(&path, id) {
-                                tracing::warn!(%error, "failed to write thumbnail");
-                            }
-                            let entry = Generation {
-                                id,
-                                prompt: prompt_for_history.clone(),
-                                model: model_for_history.clone(),
-                                style: style_for_history.clone(),
-                                width,
-                                height,
-                                steps: steps_for_history,
-                                seed: seed_for_history.clone(),
-                                created_at,
-                                duration_ms,
-                                image_path,
-                                reference_path: reference_for_history.clone(),
-                                reference_paths: reference_paths_for_history.clone(),
-                                kind: mode.kind().into(),
-                                source_path: source_path_for_history.clone(),
-                                parent_id,
-                            };
-                            ui.entries.borrow_mut().insert(0, entry.clone());
-                            trim_history(&ui);
-                            history_view::rebuild(&ui);
-                            history_view::highlight(&ui, Path::new(&entry.image_path));
-                            update_image_actions(&ui);
-                        }
-                        Err(error) => {
-                            tracing::error!(%error, "failed to record history");
-                        }
-                    }
-
-                    ui.seed_entry.set_text(&seed_for_history);
-                    ui.toast.add_toast(adw::Toast::new(mode.done_message()));
-                    finish(
-                        &ui,
-                        &format!(
-                            "{} · {width} × {height} · seed {seed_for_history}",
-                            preset_label(&model_for_history)
-                        ),
-                    );
-                    if mode == GenerationMode::Edit {
-                        show_composer(&ui, true);
-                    }
+                    complete_job(&ui, &job, Outcome::Done(path), duration_ms);
+                    finished = true;
                     break;
                 }
                 Progress::Failed(error) => {
-                    let short = error.lines().next().unwrap_or(&error);
-                    tracing::error!(%error, "generation failed");
-                    ui.toast
-                        .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
-                    finish(&ui, "Generation failed");
-                    after_generation_stopped(&ui, mode);
+                    let duration_ms = started.elapsed().as_millis() as i64;
+                    complete_job(&ui, &job, Outcome::Failed(error), duration_ms);
+                    finished = true;
                     break;
                 }
             }
         }
+        if !finished {
+            let duration_ms = started.elapsed().as_millis() as i64;
+            complete_job(
+                &ui,
+                &job,
+                Outcome::Failed("The generation worker stopped unexpectedly.".into()),
+                duration_ms,
+            );
+        }
+        finish_job(&ui);
     });
+    true
 }
 
-fn after_generation_stopped(ui: &Rc<Ui>, mode: GenerationMode) {
-    // Replace any live preview frame with the state's current image again.
-    update_image_view(ui);
-    match mode {
-        GenerationMode::Custom
-        | GenerationMode::Colorize
-        | GenerationMode::Recover
-        | GenerationMode::Enhance
-        | GenerationMode::Denoise
-        | GenerationMode::Photoreal
-        | GenerationMode::Background
-        | GenerationMode::Night
-        | GenerationMode::Day
-        | GenerationMode::Expand => {
-            ui.state.borrow_mut().references.clear();
+enum Outcome {
+    Done(PathBuf),
+    Failed(String),
+    Cancelled,
+}
+
+/// Record a finished job in History, show it, and notify if asked.
+fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i64) {
+    if let Some(dir) = &job.reference_dir
+        && let Err(error) = std::fs::remove_dir_all(dir)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, path = %dir.display(), "failed to remove queued references");
+    }
+
+    match outcome {
+        Outcome::Done(path) => {
+            let image_path = path.to_string_lossy().into_owned();
+
+            // Only touch the references when the user has not changed them
+            // since queueing; otherwise they belong to the next composition.
+            let references = references_after_result(
+                &ui.state.borrow().references,
+                &job.reference_paths,
+                job.mode,
+                &path,
+            );
+            ui.undo.borrow_mut().clear();
+            {
+                let mut state = ui.state.borrow_mut();
+                match references {
+                    Some(_) => state.on_result(path.clone(), job.mode.keeps_reference()),
+                    None => state.display = Some(path.clone()),
+                }
+            }
             update_image_view(ui);
-            show_composer(ui, false);
+
+            let history_id = record_history(ui, job, &image_path, duration_ms);
+            // Do not overwrite the seed field while more jobs are waiting: it
+            // belongs to the next composition, not to this result.
+            if ui.queue.borrow().pending_len() == 0 && ui.seed_entry.text().trim() == job.seed_text
+            {
+                ui.seed_entry.set_text(&job.seed.to_string());
+            }
+
+            ui.toast.add_toast(adw::Toast::new(job.mode.done_message()));
+            ui.status.set_text(&format!(
+                "{} · {} × {} · seed {}",
+                job.model.label, job.width, job.height, job.seed
+            ));
+            notify_finished(ui, job, history_id, duration_ms, None);
         }
-        GenerationMode::Generate | GenerationMode::Edit => show_composer(ui, true),
+        Outcome::Failed(error) => {
+            let short = error.lines().next().unwrap_or(&error).to_string();
+            tracing::error!(%error, "generation failed");
+            update_image_view(ui);
+            ui.toast
+                .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
+            ui.status.set_text("Generation failed");
+            notify_finished(ui, job, None, duration_ms, Some(&short));
+        }
+        Outcome::Cancelled => {
+            update_image_view(ui);
+            ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
+            ui.status.set_text("Cancelled");
+        }
+    }
+}
+
+/// References to apply after a result.
+///
+/// `None` means the user changed the strip after queueing, so the result must
+/// not replace it. Otherwise edits promote the result to the next reference
+/// and everything else clears the strip, as in a single-job run.
+fn references_after_result(
+    current: &[PathBuf],
+    queued: &[PathBuf],
+    mode: GenerationMode,
+    result: &Path,
+) -> Option<Vec<PathBuf>> {
+    if current != queued {
+        return None;
+    }
+    Some(if mode.keeps_reference() {
+        vec![result.to_path_buf()]
+    } else {
+        Vec::new()
+    })
+}
+
+fn record_history(
+    ui: &Rc<Ui>,
+    job: &queue::Job,
+    image_path: &str,
+    duration_ms: i64,
+) -> Option<i64> {
+    let seed = job.seed.to_string();
+    let reference_paths = job.reference_strings();
+    let reference_path = reference_paths.first().cloned();
+    let created_at = unix_seconds();
+
+    let inserted = ui.history.borrow().insert(&NewGeneration {
+        prompt: &job.prompt,
+        model: job.model.id,
+        style: &job.style,
+        width: job.width,
+        height: job.height,
+        steps: job.steps,
+        seed: &seed,
+        created_at,
+        duration_ms,
+        image_path,
+        reference_path: reference_path.as_deref(),
+        reference_paths: &reference_paths,
+        kind: job.mode.kind(),
+        source_path: job.source_path.as_deref(),
+    });
+
+    match inserted {
+        Ok((id, parent_id)) => {
+            if let Err(error) = write_thumbnail(Path::new(image_path), id) {
+                tracing::warn!(%error, "failed to write thumbnail");
+            }
+            let entry = Generation {
+                id,
+                prompt: job.prompt.clone(),
+                model: job.model.id.to_string(),
+                style: job.style.clone(),
+                width: job.width,
+                height: job.height,
+                steps: job.steps,
+                seed,
+                created_at,
+                duration_ms,
+                image_path: image_path.to_string(),
+                reference_path,
+                reference_paths,
+                kind: job.mode.kind().into(),
+                source_path: job.source_path.clone(),
+                parent_id,
+            };
+            ui.entries.borrow_mut().insert(0, entry.clone());
+            trim_history(ui);
+            history_view::rebuild(ui);
+            history_view::highlight(ui, Path::new(&entry.image_path));
+            update_image_actions(ui);
+            Some(id)
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to record history");
+            None
+        }
+    }
+}
+
+/// Drop the finished job and start the next one, or return to idle.
+fn finish_job(ui: &Rc<Ui>) {
+    ui.queue.borrow_mut().clear_running();
+    if !pump_queue(ui) {
+        ui.generating.set(false);
+        ui.generate.set_tooltip_text(Some("Generate (Ctrl+Enter)"));
+        ui.progress_row.set_visible(false);
+        ui.cancel.set_sensitive(false);
+        ui.progress.set_visible(false);
+        ui.progress.set_fraction(0.0);
+    }
+    refresh_model(ui);
+    queue_view::rebuild(ui);
+    update_image_actions(ui);
+}
+
+/// Report a finished job through the desktop notification daemon.
+///
+/// Notifications are for background work: the progress bar already covers the
+/// focused window. Both the setting and the focus check are cheap, so callers
+/// do not need to duplicate them.
+fn notify_finished(
+    ui: &Rc<Ui>,
+    job: &queue::Job,
+    history_id: Option<i64>,
+    duration_ms: i64,
+    error: Option<&str>,
+) {
+    if !ui.config.borrow().notify_on_finish || ui.window.is_active() {
+        return;
+    }
+    let Some(application) = ui.window.application() else {
+        return;
+    };
+    let app: &gio::Application = application.upcast_ref();
+
+    let title = match error {
+        Some(_) => "Generation failed",
+        None => "Generation finished",
+    };
+    let body = match error {
+        Some(error) => format!("{}\n{error}", job.snippet()),
+        None => format!(
+            "{}\n{} × {} · {}",
+            job.snippet(),
+            job.width,
+            job.height,
+            duration_label(duration_ms)
+        ),
+    };
+
+    let notification = gio::Notification::new(title);
+    notification.set_body(Some(&body));
+    notification.set_icon(&gio::ThemedIcon::new(flux_core::APP_ID));
+    if error.is_some() {
+        notification.set_priority(gio::NotificationPriority::High);
+    }
+    if let Some(id) = history_id {
+        notification
+            .set_default_action_and_target_value("app.show-generation", Some(&id.to_variant()));
+    }
+    app.send_notification(Some(&format!("flux-job-{}", job.id)), &notification);
+}
+
+fn duration_label(duration_ms: i64) -> String {
+    let seconds = (duration_ms.max(0) as f64 / 1000.0).round() as u64;
+    if seconds >= 60 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -2687,7 +2993,7 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
 }
 
 pub(crate) fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !active_preset(ui).supports_edit {
@@ -2776,7 +3082,7 @@ fn replace_background_image(ui: &Rc<Ui>) {
 }
 
 fn convert_lighting(ui: &Rc<Ui>, to_night: bool) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -2875,7 +3181,7 @@ fn auto_lighting(ui: &Rc<Ui>) {
 }
 
 fn expand_image(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -2921,7 +3227,7 @@ fn expand_image(ui: &Rc<Ui>) {
 }
 
 fn back_to_view(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -3296,10 +3602,6 @@ pub(crate) fn unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-fn preset_label(id: &str) -> &str {
-    preset(id).map(|preset| preset.label).unwrap_or(id)
-}
-
 fn upscaler_label(id: &str) -> &str {
     flux_core::upscaler::upscaler(id)
         .map(|preset| preset.label)
@@ -3345,9 +3647,10 @@ pub(crate) fn slugify(prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        contain_rect, crop_rect_from_drag, fit_scale_for, lerp_rect, max_zoom_for, slugify,
-        zoom_percent,
+        GenerationMode, contain_rect, crop_rect_from_drag, duration_label, fit_scale_for,
+        lerp_rect, max_zoom_for, references_after_result, slugify, zoom_percent,
     };
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn slugifies_prompts() {
@@ -3462,5 +3765,41 @@ mod tests {
         assert_eq!(zoom_percent(0.5, 1.0), "50%");
         assert_eq!(zoom_percent(0.5, 2.0), "100%");
         assert_eq!(zoom_percent(0.625, 1.0), "62%");
+    }
+
+    #[test]
+    fn queued_results_only_replace_untouched_references() {
+        let queued = vec![PathBuf::from("/tmp/ref.png")];
+        let result = Path::new("/tmp/out.png");
+        assert_eq!(
+            references_after_result(&queued, &queued, GenerationMode::Edit, result),
+            Some(vec![PathBuf::from("/tmp/out.png")])
+        );
+        assert_eq!(
+            references_after_result(&queued, &queued, GenerationMode::Custom, result),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            references_after_result(&queued, &queued, GenerationMode::Generate, result),
+            Some(Vec::new())
+        );
+        // The user picked new references for the next job.
+        let changed = vec![PathBuf::from("/tmp/other.png")];
+        assert_eq!(
+            references_after_result(&changed, &queued, GenerationMode::Edit, result),
+            None
+        );
+        assert_eq!(
+            references_after_result(&[], &[], GenerationMode::Generate, result),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn formats_notification_durations() {
+        assert_eq!(duration_label(0), "0s");
+        assert_eq!(duration_label(12_400), "12s");
+        assert_eq!(duration_label(65_000), "1m 05s");
+        assert_eq!(duration_label(3_600_000), "60m 00s");
     }
 }

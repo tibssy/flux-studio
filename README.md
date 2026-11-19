@@ -36,9 +36,18 @@ Milestone 3 (packaged desktop app):
 - clicking a history image shows it on the canvas with the effects menu,
   upscale, edit and crop actions and restores its prompt, model, style, size
   and seed
+- **job queue**: press Generate while a job is running to queue another one.
+  Each request snapshots its prompt, model, size, seed and references, so the
+  composer stays editable while earlier jobs run. The sidebar lists waiting and
+  running jobs with per-row remove/cancel, the progress bar shows how many are
+  waiting, and closing the window asks before discarding the queue. Jobs run
+  one at a time because the server holds a single model in VRAM
 - **live step previews** on the canvas: `sd-server` streams a TAE-decoded frame
   for each sampling step and the canvas crossfades between them, with a
   Preferences toggle and ~11 MB optional preview weights per model family
+- **desktop notifications** when a job finishes while the window is in the
+  background, with a Preferences toggle; clicking the notification opens that
+  result in History
 - **model caching**: `sd-server` keeps the loaded model for 60 s of idle time
   and releases it immediately when you switch models
 - **prompt improvement** through llama.cpp using the active text encoder,

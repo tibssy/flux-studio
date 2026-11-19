@@ -444,7 +444,7 @@ pub(crate) fn status_label(entry: &Generation) -> String {
 /// Show a history entry on the canvas with the image actions, without making
 /// it the edit reference.
 pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() || ui.upscaling.get() {
+    if ui.upscaling.get() {
         return;
     }
     cancel_zoom(ui);
@@ -462,7 +462,7 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
 
 /// Load a history entry as the edit reference and bring the composer back.
 pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
-    if ui.generating.get() || ui.upscaling.get() {
+    if ui.upscaling.get() {
         return;
     }
     cancel_zoom(ui);

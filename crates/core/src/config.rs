@@ -62,6 +62,9 @@ pub struct Config {
     pub accepted_licenses: Vec<String>,
     /// Show live step previews on the canvas while sampling.
     pub show_previews: bool,
+    /// Show a desktop notification when a job finishes while the window is in
+    /// the background.
+    pub notify_on_finish: bool,
     /// User-saved prompts shown at the bottom of the effects menu.
     pub custom_effects: Vec<CustomEffect>,
 }
@@ -96,6 +99,7 @@ impl Default for Config {
             llama_custom_cli: None,
             accepted_licenses: Vec::new(),
             show_previews: true,
+            notify_on_finish: true,
             custom_effects: Vec::new(),
         }
     }

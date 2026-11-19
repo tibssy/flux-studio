@@ -24,6 +24,10 @@ pub(crate) struct Sidebar {
     pub random_button: gtk::Button,
     pub new_button: gtk::Button,
     pub history_list: gtk::ListBox,
+    pub queue_box: gtk::Box,
+    pub queue_list: gtk::ListBox,
+    pub queue_waiting: gtk::Label,
+    pub queue_clear: gtk::Button,
 }
 
 pub(crate) fn build(
@@ -240,9 +244,45 @@ pub(crate) fn build(
         .vexpand(true)
         .build();
 
+    let queue_title = gtk::Label::builder()
+        .label("Queue")
+        .xalign(0.0)
+        .css_classes(["heading"])
+        .build();
+    let queue_waiting = gtk::Label::builder()
+        .xalign(1.0)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    let queue_clear = gtk::Button::builder()
+        .icon_name("edit-clear-symbolic")
+        .tooltip_text("Remove all waiting jobs")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let queue_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    queue_header.append(&queue_title);
+    queue_header.append(&queue_waiting);
+    queue_header.append(&queue_clear);
+
+    let queue_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    let queue_scroller = gtk::ScrolledWindow::builder()
+        .child(&queue_list)
+        .propagate_natural_height(true)
+        .max_content_height(170)
+        .vexpand(false)
+        .build();
+    let queue_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    queue_box.set_visible(false);
+    queue_box.append(&queue_header);
+    queue_box.append(&queue_scroller);
+
     root.append(&setup_title);
     root.append(&setup);
     root.append(&separator);
+    root.append(&queue_box);
     root.append(&history_header);
     root.append(&history_scroller);
 
@@ -264,6 +304,10 @@ pub(crate) fn build(
         random_button,
         new_button,
         history_list,
+        queue_box,
+        queue_list,
+        queue_waiting,
+        queue_clear,
     }
 }
 
