@@ -226,6 +226,10 @@ fn install_styles() {
          .prompt-field:focus-within {
              border-color: @card_bg_color;
          }
+         .drop-active {
+             box-shadow: inset 0 0 0 2px @accent_color;
+             border-radius: 16px;
+         }
          .queue-bubble {
              background-image: none;
              background-color: alpha(@window_bg_color, 0.92);
@@ -518,6 +522,7 @@ fn build_ui(app: &adw::Application) {
         .build();
 
     wire_events(&ui, &preferences_button);
+    install_reference_drop(&ui);
     effects::rebuild_menu(&ui);
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
@@ -1047,6 +1052,39 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::u | gdk::Key::U => {
                     upscale_dialog::show(&ui);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::v | gdk::Key::V => {
+                    let formats = ui.window.clipboard().formats();
+                    let has_image = [
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp",
+                        "image/tiff",
+                        "image/gif",
+                        "image/bmp",
+                    ]
+                    .iter()
+                    .any(|mime| formats.contain_mime_type(mime));
+                    if !has_image {
+                        // Let the focused text view paste ordinary text.
+                        return glib::Propagation::Proceed;
+                    }
+                    let ui = ui.clone();
+                    glib::spawn_future_local(async move {
+                        match ui.window.clipboard().read_texture_future().await {
+                            Ok(Some(texture)) => add_reference_texture(&ui, &texture),
+                            Ok(None) => {
+                                ui.toast
+                                    .add_toast(adw::Toast::new("The clipboard has no image."));
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to read a clipboard image");
+                                ui.toast
+                                    .add_toast(adw::Toast::new("Could not paste the image."));
+                            }
+                        }
+                    });
                     glib::Propagation::Stop
                 }
                 gdk::Key::comma => {
@@ -2229,6 +2267,70 @@ fn choose_references(ui: &Rc<Ui>) {
         }
         add_references(&ui, paths);
     });
+}
+
+/// Accept reference images dropped onto the canvas.
+fn install_reference_drop(ui: &Rc<Ui>) {
+    let target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+    target.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
+
+    {
+        let overlay = ui.stack.clone();
+        target.connect_enter(move |_, _, _| {
+            overlay.add_css_class("drop-active");
+            gdk::DragAction::COPY
+        });
+    }
+    {
+        let overlay = ui.stack.clone();
+        target.connect_leave(move |_| overlay.remove_css_class("drop-active"));
+    }
+    {
+        let ui = ui.clone();
+        target.connect_drop(move |_, value, _, _| {
+            ui.stack.remove_css_class("drop-active");
+            if let Ok(files) = value.get::<gdk::FileList>() {
+                let paths: Vec<PathBuf> = files
+                    .files()
+                    .iter()
+                    .filter_map(|file| file.path())
+                    .filter(|path| path.is_file())
+                    .filter(|path| image::image_dimensions(path).is_ok())
+                    .collect();
+                if paths.is_empty() {
+                    ui.toast
+                        .add_toast(adw::Toast::new("No images in the dropped files."));
+                    return false;
+                }
+                add_references(&ui, paths);
+                return true;
+            }
+            if let Ok(texture) = value.get::<gdk::Texture>() {
+                add_reference_texture(&ui, &texture);
+                return true;
+            }
+            false
+        });
+    }
+    ui.stack.add_controller(target);
+}
+
+fn add_reference_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
+    let directory = paths::cache_dir().join("references");
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Could not save the pasted image: {error}"
+        )));
+        return;
+    }
+    let path = directory.join(format!("paste-{}.png", now_millis()));
+    if let Err(error) = gdk::prelude::TextureExt::save_to_png(texture, &path) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "Could not save the pasted image: {error}"
+        )));
+        return;
+    }
+    add_references(ui, vec![path]);
 }
 
 /// Append picked images to the edit reference set.
