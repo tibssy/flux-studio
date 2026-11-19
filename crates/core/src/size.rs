@@ -13,7 +13,9 @@ pub const MP_MIN: f64 = 0.01;
 pub const MP_MAX: f64 = 2.0;
 
 /// Preset aspect ratios offered in the sidebar.
-pub const RATIOS: [(u32, u32); 12] = [
+pub const RATIOS: [(u32, u32); 14] = [
+    (4, 1),
+    (3, 1),
     (21, 9),
     (2, 1),
     (16, 9),
@@ -251,11 +253,27 @@ mod tests {
 
     #[test]
     fn reports_common_aspects() {
+        assert_eq!(aspect_label(1200, 300), "4:1");
+        assert_eq!(aspect_label(960, 320), "3:1");
         assert_eq!(aspect_label(1024, 768), "4:3");
         assert_eq!(aspect_label(768, 768), "1:1");
         assert_eq!(aspect_label(832, 768), "13:12");
         assert_eq!(aspect_label(1280, 640), "2:1");
         assert_eq!(aspect_label(1216, 832), "19:13");
+    }
+
+    #[test]
+    fn offers_extra_wide_header_ratios() {
+        assert!(RATIOS.contains(&(4, 1)));
+        assert!(RATIOS.contains(&(3, 1)));
+        assert_eq!(
+            ratio_for_size(1200, 300),
+            RatioMatch::Preset(RATIOS.iter().position(|ratio| *ratio == (4, 1)).unwrap())
+        );
+        assert_eq!(
+            ratio_for_size(960, 320),
+            RatioMatch::Preset(RATIOS.iter().position(|ratio| *ratio == (3, 1)).unwrap())
+        );
     }
 
     #[test]
@@ -267,6 +285,8 @@ mod tests {
 
     #[test]
     fn converts_mp_to_snapped_sizes() {
+        assert_eq!(size_for_mp(0.5, (4, 1)), (1408, 352));
+        assert_eq!(size_for_mp(0.5, (3, 1)), (1232, 416));
         assert_eq!(size_for_mp(0.59, (16, 9)), (1024, 576));
         assert_eq!(size_for_mp(0.60, (4, 3)), (896, 672));
         assert_eq!(size_for_mp(1.0, (4, 3)), (1152, 864));
@@ -302,9 +322,17 @@ mod tests {
 
     #[test]
     fn matches_preset_and_custom_ratios() {
-        assert_eq!(ratio_for_size(1024, 768), RatioMatch::Preset(4));
-        assert_eq!(ratio_for_size(1344, 752), RatioMatch::Preset(2));
-        assert_eq!(ratio_for_size(2048, 880), RatioMatch::Preset(0));
+        let index = |ratio| {
+            RatioMatch::Preset(
+                RATIOS
+                    .iter()
+                    .position(|candidate| *candidate == ratio)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(ratio_for_size(1024, 768), index((4, 3)));
+        assert_eq!(ratio_for_size(1344, 752), index((16, 9)));
+        assert_eq!(ratio_for_size(2048, 880), index((21, 9)));
         assert_eq!(ratio_for_size(1216, 832), RatioMatch::Custom((19, 13)));
         assert_eq!(ratio_for_size(176, 128), RatioMatch::Custom((11, 8)));
     }

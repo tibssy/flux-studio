@@ -14,8 +14,9 @@ image-to-image share the same weights.
 Milestone 3 (packaged desktop app):
 
 - **hideable sidebar** with a Setup section and a History section
-- **megapixel + aspect-ratio target** (0.01–2.00 MP, 12 landscape/portrait
-  presets, 128–2048 px sides on a 16 px grid, 32 px for Qwen) with a live
+- **megapixel + aspect-ratio target** (0.01–2.00 MP, 14 landscape/portrait
+  presets including 3:1 and 4:1 headers, 128–2048 px sides on a 16 px grid,
+  32 px for Qwen) with a live
   aspect-ratio preview
   that overlays the current image's aspect when it differs from the target,
   plus a snapped-size readout

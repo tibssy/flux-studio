@@ -3,6 +3,14 @@
 All notable changes to Flux Studio. Alpha builds are test releases; expect
 rough edges.
 
+## Unreleased
+
+- Extra-wide **4:1** and **3:1** aspect-ratio presets for LinkedIn and
+  Facebook-style header images.
+- File-picker references keep the prompt composer open and focused.
+- **Drag and drop** images onto the canvas and paste clipboard images or copied
+  image files with **Ctrl+V**; both add references and keep the composer open.
+
 ## 0.1.0-alpha.2 — 2026-11-19
 
 Changes since `v0.1.0-alpha.1`.
