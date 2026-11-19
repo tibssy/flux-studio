@@ -447,6 +447,7 @@ pub(crate) fn load_entry(ui: &Rc<Ui>, entry: &Generation) {
     if ui.upscaling.get() {
         return;
     }
+    crate::pause_live_view(ui);
     cancel_zoom(ui);
     restore_settings(ui, entry);
 
@@ -465,6 +466,7 @@ pub(crate) fn use_as_reference(ui: &Rc<Ui>, entry: &Generation) {
     if ui.upscaling.get() {
         return;
     }
+    crate::pause_live_view(ui);
     cancel_zoom(ui);
     restore_settings(ui, entry);
 

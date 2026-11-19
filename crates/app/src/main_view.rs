@@ -24,6 +24,8 @@ pub(crate) struct MainView {
     pub edit_button: gtk::Button,
     pub upscale_button: gtk::Button,
     pub adjust_button: gtk::Button,
+    /// Returns from a history image to the running job's live preview.
+    pub live_button: gtk::Button,
     pub zoom_scroller: gtk::ScrolledWindow,
     pub zoom_controls: gtk::Box,
     pub zoom_out_button: gtk::Button,
@@ -123,6 +125,12 @@ pub(crate) fn build() -> MainView {
     let adjust_button = gtk::Button::builder()
         .icon_name("preferences-color-symbolic")
         .tooltip_text("Adjust colors")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let live_button = gtk::Button::builder()
+        .icon_name("view-reveal-symbolic")
+        .tooltip_text("Show the running job's live preview")
         .visible(false)
         .css_classes(["osd", "circular"])
         .build();
@@ -265,6 +273,7 @@ pub(crate) fn build() -> MainView {
     image_actions.set_valign(gtk::Align::Start);
     image_actions.set_margin_top(12);
     image_actions.set_margin_end(12);
+    image_actions.append(&live_button);
     image_actions.append(&effects_button);
     image_actions.append(&save_effect_button);
     image_actions.append(&adjust_button);
@@ -486,6 +495,7 @@ pub(crate) fn build() -> MainView {
         zoom_fit_button,
         edit_button,
         upscale_button,
+        live_button,
         effects_button,
         effects_popover,
         save_effect_button,

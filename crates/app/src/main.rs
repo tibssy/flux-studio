@@ -137,6 +137,13 @@ pub(crate) struct Ui {
     pub queue_status: gtk::Label,
     /// Set once the user confirmed quitting with jobs still queued.
     pub quitting: Cell<bool>,
+    /// Returns from a history image to the running job's live preview.
+    pub live_button: gtk::Button,
+    /// Whether the canvas follows the running job's step previews. Browsing
+    /// History turns this off; the queue row or the live button turns it on.
+    pub live_view: Cell<bool>,
+    /// Latest preview frame, kept while the canvas shows something else.
+    pub live_preview: RefCell<Option<gdk::Texture>>,
     pub new_button: gtk::Button,
     pub entries: RefCell<Vec<Generation>>,
     /// Chain roots whose descendants are hidden in the sidebar.
@@ -452,6 +459,9 @@ fn build_ui(app: &adw::Application) {
         queue_tick: RefCell::new(None),
         queue_status: view.queue_status,
         quitting: Cell::new(false),
+        live_button: view.live_button,
+        live_view: Cell::new(true),
+        live_preview: RefCell::new(None),
         new_button: side.new_button,
         entries: RefCell::new(Vec::new()),
         collapsed_groups: RefCell::new(std::collections::HashSet::new()),
@@ -570,6 +580,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         ui.queue_clear
             .clone()
             .connect_clicked(move |_| queue_view::clear_pending(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.live_button
+            .clone()
+            .connect_clicked(move |_| show_live(&ui));
     }
     {
         let ui = ui.clone();
@@ -1574,6 +1590,7 @@ fn render_reference_strip(ui: &Rc<Ui>) {
                 if references_busy(&ui) {
                     return;
                 }
+                pause_live_view(&ui);
                 ui.state.borrow_mut().select_display(path.clone());
                 update_image_view(&ui);
                 ui.status.set_text(&format!(
@@ -1663,6 +1680,8 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.night_item.set_visible(!vision_ready);
     ui.upscale_button.set_visible(actions && !generating);
     ui.adjust_button.set_visible(actions && !generating);
+    ui.live_button
+        .set_visible(generating && !ui.live_view.get());
     ui.edit_button.set_visible(editable && !composing);
     ui.crop_button.set_visible(editable && !generating);
     ui.back_button.set_visible(editing && !foreground);
@@ -1682,6 +1701,7 @@ fn edit_current_image(ui: &Rc<Ui>) {
     if ui.upscaling.get() || ui.classifying.get() {
         return;
     }
+    pause_live_view(ui);
     if !active_preset(ui).supports_edit {
         ui.toast.add_toast(adw::Toast::new(&format!(
             "{} cannot edit images.",
@@ -2087,6 +2107,7 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
     if ui.upscaling.get() || ui.classifying.get() {
         return;
     }
+    pause_live_view(ui);
     cancel_zoom(ui);
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
@@ -2160,6 +2181,7 @@ fn add_references(ui: &Rc<Ui>, paths: Vec<PathBuf>) {
     if references_busy(ui) {
         return;
     }
+    pause_live_view(ui);
     let max = active_preset(ui).max_references as usize;
     if max == 0 {
         ui.toast.add_toast(adw::Toast::new(&format!(
@@ -2228,6 +2250,7 @@ fn remove_reference(ui: &Rc<Ui>, path: &Path) {
     if references_busy(ui) {
         return;
     }
+    pause_live_view(ui);
     let (removed, count) = {
         let mut state = ui.state.borrow_mut();
         let before = state.references.len();
@@ -2608,6 +2631,9 @@ fn generate(
     };
 
     let was_busy = ui.queue.borrow().running().is_some();
+    if !was_busy {
+        ui.live_view.set(true);
+    }
     ui.queue.borrow_mut().push(job);
     queue_view::rebuild(ui);
     if was_busy {
@@ -2658,14 +2684,17 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
     ui.queue.borrow_mut().start(job.clone());
 
     ui.generating.set(true);
+    ui.live_preview.borrow_mut().take();
     ui.generate
         .set_tooltip_text(Some("Add to queue (Ctrl+Enter)"));
-    ui.progress_row.set_visible(true);
     ui.cancel.set_sensitive(true);
     ui.progress.set_visible(true);
     ui.progress.set_fraction(0.0);
     ui.progress.set_text(Some("Loading models…"));
-    ui.status.set_text("Loading models…");
+    if ui.live_view.get() {
+        ui.status.set_text("Loading models…");
+    }
+    sync_live_controls(ui);
     update_image_actions(ui);
 
     let (sender, receiver) = async_channel::unbounded();
@@ -2701,18 +2730,27 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
                     ui.progress.set_fraction(current as f64 / total as f64);
                     ui.progress
                         .set_text(Some(&format!("Step {current}/{total}")));
-                    ui.status.set_text(&format!("Step {current}/{total}"));
+                    if ui.live_view.get() {
+                        ui.status.set_text(&format!("Step {current}/{total}"));
+                    }
                     queue_view::set_step(&ui, current, total);
                 }
                 Progress::Preview { step, total, png } => {
                     let bytes = glib::Bytes::from(&png);
                     match gdk::Texture::from_bytes(&bytes) {
-                        Ok(texture) => crossfade_to_texture(&ui, &texture),
+                        Ok(texture) => {
+                            ui.live_preview.replace(Some(texture.clone()));
+                            if ui.live_view.get() {
+                                crossfade_to_texture(&ui, &texture);
+                            }
+                        }
                         Err(error) => tracing::warn!(%error, "invalid preview frame"),
                     }
                     ui.progress.set_fraction(step as f64 / total.max(1) as f64);
                     ui.progress.set_text(Some(&format!("Step {step}/{total}")));
-                    ui.status.set_text(&format!("Step {step}/{total}"));
+                    if ui.live_view.get() {
+                        ui.status.set_text(&format!("Step {step}/{total}"));
+                    }
                     queue_view::set_step(&ui, step, total);
                 }
                 Progress::Log(line) => tracing::debug!(target: "sd-cli", "{line}"),
@@ -2768,6 +2806,7 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
     match outcome {
         Outcome::Done(path) => {
             let image_path = path.to_string_lossy().into_owned();
+            let follow_live = ui.live_view.get();
 
             // Only touch the references when the user has not changed them
             // since queueing; otherwise they belong to the next composition.
@@ -2780,14 +2819,23 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
             ui.undo.borrow_mut().clear();
             {
                 let mut state = ui.state.borrow_mut();
-                match references {
-                    Some(_) => state.on_result(path.clone(), job.mode.keeps_reference()),
-                    None => state.display = Some(path.clone()),
+                if follow_live {
+                    match references {
+                        Some(_) => state.on_result(path.clone(), job.mode.keeps_reference()),
+                        None => state.display = Some(path.clone()),
+                    }
+                } else if let Some(references) = references {
+                    state.references = references;
                 }
             }
-            update_image_view(ui);
+            if follow_live {
+                update_image_view(ui);
+            } else {
+                render_reference_strip(ui);
+                update_image_actions(ui);
+            }
 
-            let history_id = record_history(ui, job, &image_path, duration_ms);
+            let history_id = record_history(ui, job, &image_path, duration_ms, follow_live);
             // Do not overwrite the seed field while more jobs are waiting: it
             // belongs to the next composition, not to this result.
             if ui.queue.borrow().pending_len() == 0 && ui.seed_entry.text().trim() == job.seed_text
@@ -2796,25 +2844,36 @@ fn complete_job(ui: &Rc<Ui>, job: &queue::Job, outcome: Outcome, duration_ms: i6
             }
 
             ui.toast.add_toast(adw::Toast::new(job.mode.done_message()));
-            ui.status.set_text(&format!(
-                "{} · {} × {} · seed {}",
-                job.model.label, job.width, job.height, job.seed
-            ));
+            if follow_live {
+                ui.status.set_text(&format!(
+                    "{} · {} × {} · seed {}",
+                    job.model.label, job.width, job.height, job.seed
+                ));
+            } else {
+                ui.status.set_text(&format!(
+                    "Result added to History · {} × {}",
+                    job.width, job.height
+                ));
+            }
             notify_finished(ui, job, history_id, duration_ms, None);
         }
         Outcome::Failed(error) => {
             let short = error.lines().next().unwrap_or(&error).to_string();
             tracing::error!(%error, "generation failed");
-            update_image_view(ui);
+            if ui.live_view.get() {
+                update_image_view(ui);
+                ui.status.set_text("Generation failed");
+            }
             ui.toast
                 .add_toast(adw::Toast::new(&format!("Generation failed: {short}")));
-            ui.status.set_text("Generation failed");
             notify_finished(ui, job, None, duration_ms, Some(&short));
         }
         Outcome::Cancelled => {
-            update_image_view(ui);
+            if ui.live_view.get() {
+                update_image_view(ui);
+                ui.status.set_text("Cancelled");
+            }
             ui.toast.add_toast(adw::Toast::new("Generation cancelled."));
-            ui.status.set_text("Cancelled");
         }
     }
 }
@@ -2845,6 +2904,7 @@ fn record_history(
     job: &queue::Job,
     image_path: &str,
     duration_ms: i64,
+    follow_live: bool,
 ) -> Option<i64> {
     let seed = job.seed.to_string();
     let reference_paths = job.reference_strings();
@@ -2893,8 +2953,16 @@ fn record_history(
             };
             ui.entries.borrow_mut().insert(0, entry.clone());
             trim_history(ui);
-            history_view::rebuild(ui);
-            history_view::highlight(ui, Path::new(&entry.image_path));
+            if follow_live {
+                history_view::rebuild(ui);
+                history_view::highlight(ui, Path::new(&entry.image_path));
+            } else {
+                // Keep the user's place in History while they browse.
+                history_view::rebuild_preserving_scroll(ui);
+                if let Some(display) = ui.state.borrow().display.clone() {
+                    history_view::highlight(ui, &display);
+                }
+            }
             update_image_actions(ui);
             Some(id)
         }
@@ -2910,14 +2978,52 @@ fn finish_job(ui: &Rc<Ui>) {
     ui.queue.borrow_mut().clear_running();
     if !pump_queue(ui) {
         ui.generating.set(false);
+        ui.live_preview.borrow_mut().take();
         ui.generate.set_tooltip_text(Some("Generate (Ctrl+Enter)"));
-        ui.progress_row.set_visible(false);
+        sync_live_controls(ui);
         ui.cancel.set_sensitive(false);
         ui.progress.set_visible(false);
         ui.progress.set_fraction(0.0);
     }
     refresh_model(ui);
     queue_view::rebuild(ui);
+    update_image_actions(ui);
+}
+
+/// Keep the progress row and the "show live" button in sync with the view.
+fn sync_live_controls(ui: &Ui) {
+    if ui.upscaling.get() {
+        return;
+    }
+    let running = ui.generating.get();
+    let live = ui.live_view.get();
+    ui.progress_row.set_visible(running && live);
+    ui.live_button.set_visible(running && !live);
+}
+
+/// Follow the running job's previews again.
+///
+/// The latest frame is kept while the user browses History, so returning is
+/// instant even between sampling steps.
+pub(crate) fn show_live(ui: &Rc<Ui>) {
+    ui.live_view.set(true);
+    if let Some(texture) = ui.live_preview.borrow().clone() {
+        crossfade_to_texture(ui, &texture);
+    }
+    if ui.generating.get() {
+        ui.status.set_text("Live preview");
+    }
+    sync_live_controls(ui);
+    update_image_actions(ui);
+}
+
+/// Stop painting the running job's previews over a history image.
+pub(crate) fn pause_live_view(ui: &Rc<Ui>) {
+    if !ui.live_view.get() {
+        return;
+    }
+    ui.live_view.set(false);
+    sync_live_controls(ui);
     update_image_actions(ui);
 }
 
@@ -3230,6 +3336,7 @@ fn back_to_view(ui: &Rc<Ui>) {
     if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
         return;
     }
+    pause_live_view(ui);
     cancel_zoom(ui);
     set_crop_mode(ui, false);
     ui.crop_button.set_active(false);

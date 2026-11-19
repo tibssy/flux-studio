@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gdk, glib};
 
 use crate::Ui;
 use crate::queue;
@@ -70,11 +70,35 @@ fn running_row(ui: &Rc<Ui>, running: &queue::Running) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
         .title(running.job.snippet())
         .subtitle(running_subtitle(running))
-        .activatable(false)
+        .activatable(true)
         .build();
     row.set_title_lines(1);
     row.set_subtitle_lines(1);
+    row.set_tooltip_text(Some("Show the running job's live preview"));
     row.add_prefix(&spinner);
+    {
+        let activated_ui = ui.clone();
+        row.connect_activated(move |_| crate::show_live(&activated_ui));
+        // ActionRow does not emit `activated` for plain clicks outside a
+        // preferences window, so treat a click anywhere on the row as well.
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_PRIMARY);
+        let click_ui = ui.clone();
+        click.connect_released(move |_, _, _, _| crate::show_live(&click_ui));
+        row.add_controller(click);
+    }
+
+    let show = gtk::Button::builder()
+        .icon_name("view-reveal-symbolic")
+        .tooltip_text("Show the running job's live preview")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat", "circular"])
+        .build();
+    {
+        let ui = ui.clone();
+        show.connect_clicked(move |_| crate::show_live(&ui));
+    }
+    row.add_suffix(&show);
 
     let cancel = gtk::Button::builder()
         .icon_name("process-stop-symbolic")
