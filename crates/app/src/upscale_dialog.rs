@@ -9,7 +9,7 @@ use crate::Ui;
 
 /// Show the upscale dialog for the image currently on screen.
 pub(crate) fn show(ui: &Rc<Ui>) {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     let Some(target) = crate::upscale_target(ui) else {

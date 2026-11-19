@@ -37,8 +37,9 @@ Milestone 3 (packaged desktop app):
   upscale, edit and crop actions and restores its prompt, model, style, size
   and seed
 - **job queue**: press Generate while a job is running to queue another one.
-  Each request snapshots its prompt, model, size, seed and references, so the
-  composer stays editable while earlier jobs run. The sidebar lists waiting and
+  Each request snapshots its prompt, model, size, seed and references. The
+  composer closes when a job is submitted; use New (`Ctrl+N`) or Edit to
+  compose and queue the next one while earlier jobs run. The sidebar lists waiting and
   running jobs with per-row remove/cancel, the progress bar shows how many are
   waiting, and closing the window asks before discarding the queue. Jobs run
   one at a time because the server holds a single model in VRAM. Browsing

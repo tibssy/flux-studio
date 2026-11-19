@@ -1505,6 +1505,17 @@ fn reset_zoom(ui: &Ui) {
 ///
 /// The stack has two picture children so consecutive updates animate instead
 /// of snapping, which makes step previews and history navigation feel smooth.
+fn set_empty_page(ui: &Ui, title: &str, description: &str) {
+    if let Some(page) = ui
+        .stack
+        .child_by_name("empty")
+        .and_downcast::<adw::StatusPage>()
+    {
+        page.set_title(title);
+        page.set_description(Some(description));
+    }
+}
+
 fn crossfade_to_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
     let rounded = rounded_paintable::RoundedPaintable::new(texture);
     let (target, picture) = match ui.stack.visible_child_name().as_deref() {
@@ -1530,6 +1541,11 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
                 tracing::warn!(%error, path = %path.display(), "failed to load image");
                 ui.image_size.set((0, 0));
                 ui.picture.set_paintable(gdk::Paintable::NONE);
+                set_empty_page(
+                    ui,
+                    "No image yet",
+                    "Describe an image below, then press Generate.",
+                );
                 ui.stack.set_visible_child_name("empty");
             }
         },
@@ -1537,6 +1553,11 @@ pub(crate) fn update_image_view(ui: &Rc<Ui>) {
             ui.image_size.set((0, 0));
             ui.picture.set_paintable(gdk::Paintable::NONE);
             ui.picture_back.set_paintable(gdk::Paintable::NONE);
+            set_empty_page(
+                ui,
+                "No image yet",
+                "Describe an image below, then press Generate.",
+            );
             ui.stack.set_visible_child_name("empty");
         }
     }
@@ -1656,11 +1677,14 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
     let classifying = ui.classifying.get();
-    let foreground = upscaling || zooming || classifying;
+    let foreground = zooming || classifying;
     let position = history_position(ui);
     let actions = has_image && !foreground;
     let editable = actions && active_preset(ui).supports_edit;
     let navigation = has_image && !editing && !zooming && !classifying;
+    // A running upscale leaves a real image on the canvas; only a generation
+    // can be showing a low-resolution preview.
+    let stable = !generating || upscaling;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
@@ -1669,21 +1693,22 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
         .set_visible(navigation && position.is_some_and(|(index, count)| index + 1 < count));
     ui.effects_button.set_visible(editable);
     ui.save_effect_button
-        .set_visible(actions && !generating && effects::current_savable_prompt(ui).is_some());
+        .set_visible(actions && stable && effects::current_savable_prompt(ui).is_some());
     ui.auto_lighting_item.set_visible(vision_ready);
     ui.daylight_item.set_visible(!vision_ready);
     ui.night_item.set_visible(!vision_ready);
-    let upscale_ready =
-        !foreground && (ui.state.borrow().display.is_some() || (generating && ui.live_view.get()));
+    let upscale_ready = !foreground
+        && (ui.state.borrow().display.is_some()
+            || (generating && !upscaling && ui.live_view.get()));
     ui.upscale_button.set_visible(upscale_ready);
-    ui.adjust_button.set_visible(actions && !generating);
+    ui.adjust_button.set_visible(actions && stable);
     ui.live_button
         .set_visible(generating && !upscaling && !ui.live_view.get());
     ui.edit_button.set_visible(editable && !composing);
-    ui.crop_button.set_visible(editable && !generating);
+    ui.crop_button.set_visible(editable && stable);
     ui.back_button.set_visible(editing && !foreground);
     ui.undo_button
-        .set_visible(editable && !generating && ui.undo.borrow().can_undo());
+        .set_visible(editable && stable && ui.undo.borrow().can_undo());
     update_zoom_controls(ui);
 
     if composing || !editable {
@@ -1695,7 +1720,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
 }
 
 fn edit_current_image(ui: &Rc<Ui>) {
-    if ui.upscaling.get() || ui.classifying.get() {
+    if ui.classifying.get() {
         return;
     }
     pause_live_view(ui);
@@ -1732,6 +1757,9 @@ fn edit_current_image(ui: &Rc<Ui>) {
 }
 
 fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
+    if active {
+        pause_live_view(ui);
+    }
     ui.crop_mode.set(active);
     ui.crop_overlay.set_visible(active);
     *ui.crop_rect.borrow_mut() = None;
@@ -1749,7 +1777,7 @@ fn set_crop_mode(ui: &Rc<Ui>, active: bool) {
 }
 
 fn undo_crop(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.classifying.get() {
+    if (ui.generating.get() && !ui.upscaling.get()) || ui.classifying.get() {
         return;
     }
     cancel_zoom(ui);
@@ -2101,7 +2129,7 @@ pub(crate) fn cancel_zoom(ui: &Rc<Ui>) {
 }
 
 pub(crate) fn new_image(ui: &Rc<Ui>) {
-    if ui.upscaling.get() || ui.classifying.get() {
+    if ui.classifying.get() {
         return;
     }
     pause_live_view(ui);
@@ -2275,7 +2303,7 @@ fn remove_reference(ui: &Rc<Ui>, path: &Path) {
 }
 
 fn references_busy(ui: &Rc<Ui>) -> bool {
-    ui.upscaling.get() || ui.zooming.get() || ui.classifying.get()
+    ui.zooming.get() || ui.classifying.get()
 }
 
 /// A 48×48 cover-scaled texture for a reference thumbnail.
@@ -2635,6 +2663,7 @@ fn generate(
     ui.queue.borrow_mut().push(job);
     refresh_history_locks(ui);
     queue_view::rebuild(ui);
+    show_composer(ui, false);
     if was_busy {
         ui.status.set_text("Added to the queue");
     }
@@ -3299,11 +3328,30 @@ pub(crate) fn show_live(ui: &Rc<Ui>) {
         return;
     }
     ui.live_view.set(true);
-    if let Some(texture) = ui.live_preview.borrow().clone() {
+    let preview = ui.live_preview.borrow().clone();
+    if let Some(texture) = preview {
         crossfade_to_texture(ui, &texture);
+    } else if ui.generating.get() {
+        // The model is still loading or the first sampling step has not
+        // finished. Do not leave the last history image looking like the live
+        // job.
+        set_empty_page(
+            ui,
+            "Waiting for the first preview…",
+            "The model is loading; frames will appear here as soon as sampling starts.",
+        );
+        ui.image_size.set((0, 0));
+        ui.picture.set_paintable(gdk::Paintable::NONE);
+        ui.picture_back.set_paintable(gdk::Paintable::NONE);
+        ui.stack.set_visible_child_name("empty");
     }
+    ui.history_list.unselect_all();
     if ui.generating.get() {
-        ui.status.set_text("Live preview");
+        ui.status.set_text(if ui.live_preview.borrow().is_some() {
+            "Live preview"
+        } else {
+            "Waiting for the first preview…"
+        });
     }
     sync_live_controls(ui);
     update_image_actions(ui);
@@ -3439,7 +3487,7 @@ fn can_start_image_action(ui: &Rc<Ui>) -> bool {
 }
 
 pub(crate) fn start_effect(ui: &Rc<Ui>, mode: GenerationMode, prompt: &str, empty_message: &str) {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !active_preset(ui).supports_edit {
@@ -3528,7 +3576,7 @@ fn replace_background_image(ui: &Rc<Ui>) {
 }
 
 fn convert_lighting(ui: &Rc<Ui>, to_night: bool) {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -3565,7 +3613,7 @@ fn start_lighting_conversion(ui: &Rc<Ui>, source: PathBuf, to_night: bool) {
 }
 
 fn auto_lighting(ui: &Rc<Ui>) {
-    if ui.generating.get() || ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if (ui.generating.get() && !ui.upscaling.get()) || ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -3627,7 +3675,7 @@ fn auto_lighting(ui: &Rc<Ui>) {
 }
 
 fn expand_image(ui: &Rc<Ui>) {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     if !can_start_image_action(ui) {
@@ -3673,7 +3721,7 @@ fn expand_image(ui: &Rc<Ui>) {
 }
 
 fn back_to_view(ui: &Rc<Ui>) {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     pause_live_view(ui);
@@ -3780,10 +3828,10 @@ impl UpscaleTargetView {
 /// Watching a running generation means "upscale this result when it finishes";
 /// browsing History means "upscale the image I am looking at".
 pub(crate) fn upscale_target(ui: &Rc<Ui>) -> Option<UpscaleTargetView> {
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return None;
     }
-    if ui.generating.get() && ui.live_view.get() {
+    if ui.generating.get() && !ui.upscaling.get() && ui.live_view.get() {
         let queue = ui.queue.borrow();
         let running = queue.running()?;
         let generate = running.job.generate()?;
@@ -3815,7 +3863,7 @@ pub(crate) fn start_upscale(
             .add_toast(adw::Toast::new("The backend is still installing."));
         return;
     }
-    if ui.upscaling.get() || ui.zooming.get() || ui.classifying.get() {
+    if ui.zooming.get() || ui.classifying.get() {
         return;
     }
     // The dialog may have been open when its target generation finished (or
