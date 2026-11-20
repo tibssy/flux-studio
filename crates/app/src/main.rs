@@ -302,17 +302,6 @@ fn install_styles() {
          .prompt-field:focus-within {
              border-color: @card_bg_color;
          }
-         .drop-active {
-             box-shadow: inset 0 0 0 2px @accent_color;
-             border-radius: 16px;
-         }
-         /* The theme paints every drop target with :drop(active). The canvas
-            uses .drop-active instead, so external drops keep one border and
-            our own drags keep none. */
-         .canvas:drop(active) {
-             box-shadow: none;
-             border-color: transparent;
-         }
          .compare-overlay {
              background-color: @window_bg_color;
          }
@@ -2952,20 +2941,31 @@ fn install_image_drag(ui: &Rc<Ui>) {
         if !path.is_file() {
             return None;
         }
-        // Set before the drag enters any target, so our own drag does not
-        // light up the canvas as a drop zone.
+        // Set before the drag enters any target, so our own drag is not
+        // accepted by the canvas drop target.
         inner.internal_drag.set(true);
-        // The target can fire `enter` before `prepare`; undo its highlight.
-        inner.stack.remove_css_class("drop-active");
         let files = gdk::FileList::from_array(&[gio::File::for_path(&path)]);
         Some(gdk::ContentProvider::for_value(&files.to_value()))
     });
     {
         let ui = ui.clone();
-        source.connect_drag_end(move |_, _, _| {
-            ui.internal_drag.set(false);
-            ui.stack.remove_css_class("drop-active");
-        });
+        source.connect_drag_end(move |_, _, _| ui.internal_drag.set(false));
+    }
+    {
+        // Mark the drag as our own as soon as the press lands, before the
+        // drag source gets a chance to start; `enter` can fire before
+        // `prepare`, which would otherwise accept our own drag.
+        let press = gtk::GestureClick::new();
+        press.set_button(gdk::BUTTON_PRIMARY);
+        {
+            let ui = ui.clone();
+            press.connect_pressed(move |_, _, _, _| ui.internal_drag.set(true));
+        }
+        {
+            let ui = ui.clone();
+            press.connect_released(move |_, _, _, _| ui.internal_drag.set(false));
+        }
+        ui.stack.add_controller(press);
     }
     ui.stack.add_controller(source.clone());
     ui.image_drag.replace(Some(source));
@@ -2992,30 +2992,24 @@ fn sync_image_drag(ui: &Ui) {
 
 /// Accept reference images dropped onto the canvas.
 fn install_reference_drop(ui: &Rc<Ui>) {
-    ui.stack.add_css_class("canvas");
     let target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     target.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
 
     {
-        let overlay = ui.stack.clone();
         let ui = ui.clone();
         target.connect_enter(move |_, _, _| {
-            // Our own drag would otherwise light up the canvas for the whole
-            // gesture.
-            if !ui.internal_drag.get() {
-                overlay.add_css_class("drop-active");
+            // Do not accept our own drag, so the theme does not paint the
+            // canvas as an external drop target.
+            if ui.internal_drag.get() {
+                gdk::DragAction::empty()
+            } else {
+                gdk::DragAction::COPY
             }
-            gdk::DragAction::COPY
         });
-    }
-    {
-        let overlay = ui.stack.clone();
-        target.connect_leave(move |_| overlay.remove_css_class("drop-active"));
     }
     {
         let ui = ui.clone();
         target.connect_drop(move |_, value, _, _| {
-            ui.stack.remove_css_class("drop-active");
             if let Ok(files) = value.get::<gdk::FileList>() {
                 let mut paths: Vec<PathBuf> = files
                     .files()
