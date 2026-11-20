@@ -19,10 +19,12 @@ struct OrderedHistory {
     entries: Vec<Generation>,
     roots: HashMap<i64, i64>,
     group_sizes: HashMap<i64, usize>,
+    /// Newest member of each chain, used as the collapsed header row.
+    headers: HashMap<i64, i64>,
 }
 
 /// Order entries so each chain is contiguous: groups by newest activity, and
-/// inside a group the root first followed by its descendants oldest-to-newest.
+/// inside a group the newest image first with the original root at the bottom.
 fn order_entries(entries: Vec<Generation>) -> OrderedHistory {
     let by_id: HashMap<i64, Generation> = entries
         .iter()
@@ -60,10 +62,17 @@ fn order_entries(entries: Vec<Generation>) -> OrderedHistory {
     let mut group_list: Vec<(i64, i64, Vec<Generation>)> = groups
         .into_iter()
         .map(|(root, mut members)| {
-            members.sort_by_key(|entry| (entry.created_at, entry.id));
+            // Newest first so the chain reads like a stack; then put the
+            // original root at the bottom.
+            members.sort_by_key(|entry| {
+                (
+                    std::cmp::Reverse(entry.created_at),
+                    std::cmp::Reverse(entry.id),
+                )
+            });
             if let Some(position) = members.iter().position(|entry| entry.id == root) {
                 let root_entry = members.remove(position);
-                members.insert(0, root_entry);
+                members.push(root_entry);
             }
             let newest = members
                 .iter()
@@ -77,8 +86,12 @@ fn order_entries(entries: Vec<Generation>) -> OrderedHistory {
 
     let mut ordered = Vec::with_capacity(entries.len());
     let mut group_sizes: HashMap<i64, usize> = HashMap::new();
+    let mut headers: HashMap<i64, i64> = HashMap::new();
     for (root, _, members) in group_list {
         group_sizes.insert(root, members.len());
+        if let Some(header) = members.first() {
+            headers.insert(root, header.id);
+        }
         ordered.extend(members);
     }
 
@@ -86,6 +99,7 @@ fn order_entries(entries: Vec<Generation>) -> OrderedHistory {
         entries: ordered,
         roots,
         group_sizes,
+        headers,
     }
 }
 
@@ -132,7 +146,7 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
     }
 
     let ordered = order_entries(ui.entries.borrow().clone());
-    *ui.entries.borrow_mut() = ordered.entries;
+    *ui.entries.borrow_mut() = ordered.entries.clone();
 
     let by_id: HashMap<i64, Generation> = ui
         .entries
@@ -148,24 +162,25 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
     let collapsed = ui.collapsed_groups.borrow().clone();
     let expand_all = crate::history_filter_active(ui);
     for entry in ui.entries.borrow().iter() {
-        if !expand_all && hidden_by_collapse(entry, &by_id, &collapsed) {
+        if !entry_visible(entry, &ordered, &collapsed, expand_all) {
             continue;
         }
-        let depth = depth_of(entry, &by_id);
-        let group_size = ordered
-            .roots
-            .get(&entry.id)
-            .and_then(|root| ordered.group_sizes.get(root))
-            .copied()
-            .unwrap_or(1);
-        let is_collapsed = !expand_all && depth == 0 && collapsed.contains(&entry.id);
+        let root = ordered.roots.get(&entry.id).copied().unwrap_or(entry.id);
+        let header = ordered.headers.get(&root).copied().unwrap_or(root);
+        let group_size = ordered.group_sizes.get(&root).copied().unwrap_or(1);
+        let is_header = entry.id == header;
+        let depth = if group_size > 1 && !is_header { 1 } else { 0 };
+        let is_collapsed = !expand_all && is_header && group_size > 1 && collapsed.contains(&root);
+        let toggle_root = (!expand_all && is_header && group_size > 1).then_some(root);
+        let first_in_chain = group_size > 1 && entry.id == root;
         add_row(
             ui,
             entry,
-            depth.min(3),
+            depth,
             group_size,
             is_collapsed,
-            expand_all,
+            toggle_root,
+            first_in_chain,
         );
     }
 
@@ -177,45 +192,28 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
             adjustment.set_value(offset.min(max));
         });
     }
+    if let Some(display) = ui.state.borrow().display.clone() {
+        select_without_reveal(ui, &display);
+    }
 }
 
-fn hidden_by_collapse(
+/// Whether an entry is rendered at all.
+///
+/// A collapsed chain shows only its newest row (the header); everything else
+/// appears below it when expanded. Filtering forces every chain open.
+fn entry_visible(
     entry: &Generation,
-    by_id: &HashMap<i64, Generation>,
+    ordered: &OrderedHistory,
     collapsed: &HashSet<i64>,
+    expand_all: bool,
 ) -> bool {
-    let mut current = entry;
-    let mut guard = 0;
-    while let Some(parent_id) = current.parent_id {
-        if collapsed.contains(&parent_id) {
-            return true;
-        }
-        let Some(parent) = by_id.get(&parent_id) else {
-            break;
-        };
-        current = parent;
-        guard += 1;
-        if guard > by_id.len() {
-            break;
-        }
+    let root = ordered.roots.get(&entry.id).copied().unwrap_or(entry.id);
+    let group_size = ordered.group_sizes.get(&root).copied().unwrap_or(1);
+    if group_size <= 1 || expand_all {
+        return true;
     }
-    false
-}
-
-fn depth_of(entry: &Generation, by_id: &HashMap<i64, Generation>) -> usize {
-    let mut depth = 0;
-    let mut current = entry;
-    while let Some(parent_id) = current.parent_id {
-        let Some(parent) = by_id.get(&parent_id) else {
-            break;
-        };
-        depth += 1;
-        current = parent;
-        if depth > 8 {
-            break;
-        }
-    }
-    depth
+    let header = ordered.headers.get(&root).copied().unwrap_or(root);
+    entry.id == header || !collapsed.contains(&root)
 }
 
 pub(crate) fn add_row(
@@ -224,7 +222,8 @@ pub(crate) fn add_row(
     depth: usize,
     group_size: usize,
     collapsed: bool,
-    expand_all: bool,
+    toggle_root: Option<i64>,
+    first_in_chain: bool,
 ) {
     let row = gtk::ListBoxRow::new();
     // Row activation resolves entries by id, never by position.
@@ -269,13 +268,18 @@ pub(crate) fn add_row(
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .max_width_chars(18)
         .build();
+    let mut meta = String::new();
+    if first_in_chain {
+        meta.push_str("first · ");
+    }
+    meta.push_str(&format!(
+        "{} · {}×{}",
+        entry_model_label(entry),
+        entry.width,
+        entry.height
+    ));
     let meta_label = gtk::Label::builder()
-        .label(format!(
-            "{} · {}×{}",
-            entry_model_label(entry),
-            entry.width,
-            entry.height
-        ))
+        .label(meta)
         .xalign(0.0)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .max_width_chars(22)
@@ -322,7 +326,7 @@ pub(crate) fn add_row(
     row_box.append(&thumbnail);
     row_box.append(&text);
     row_box.append(&favorite_button);
-    if depth == 0 && group_size > 1 && !expand_all {
+    if let Some(root) = toggle_root {
         let toggle = gtk::Button::builder()
             .tooltip_text(if collapsed {
                 "Expand chain"
@@ -348,7 +352,6 @@ pub(crate) fn add_row(
         toggle.set_child(Some(&content));
         {
             let ui = ui.clone();
-            let root = entry.id;
             toggle.connect_clicked(move |_| {
                 {
                     let mut collapsed = ui.collapsed_groups.borrow_mut();
@@ -367,7 +370,7 @@ pub(crate) fn add_row(
     row_box.append(&actions);
     row.set_child(Some(&row_box));
 
-    let tooltip = if kind_label(&entry.kind).is_some() {
+    let mut tooltip = if kind_label(&entry.kind).is_some() {
         format!(
             "{}\n{} · {} × {} · {:.1}s{}",
             entry.prompt,
@@ -399,6 +402,12 @@ pub(crate) fn add_row(
             }
         )
     };
+    if group_size > 1 {
+        tooltip.push_str(&format!("\nchain: {group_size} images"));
+    }
+    if first_in_chain {
+        tooltip.push_str("\nfirst image in chain");
+    }
     row.set_tooltip_text(Some(&tooltip));
 
     {
@@ -774,7 +783,16 @@ pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
         return;
     };
 
-    // A hidden row cannot be selected: expand any collapsed ancestor first.
+    // The newest row of a collapsed chain is rendered as the header, so most
+    // selections are already visible. Select it without expanding the chain.
+    if let Some(row) = row_by_id(&ui.history_list, id) {
+        ui.history_list.select_row(Some(&row));
+        reveal_row(&ui.history_list, &row);
+        return;
+    }
+
+    // An older hidden row cannot be selected: expand its chain (and any
+    // collapsed ancestors) first.
     let mut expanded = false;
     {
         let entries = ui.entries.borrow();
@@ -793,6 +811,10 @@ pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
             if guard > entries.len() {
                 break;
             }
+        }
+        // Selecting the chain root itself should also open the chain.
+        if collapsed.remove(&id) {
+            expanded = true;
         }
     }
     if expanded {
@@ -917,16 +939,18 @@ mod tests {
     }
 
     #[test]
-    fn groups_chains_and_keeps_root_first() {
+    fn groups_chains_newest_first_with_root_last() {
         let ordered = order_entries(vec![
             entry(3, Some(2), 300),
             entry(2, Some(1), 200),
             entry(1, None, 100),
             entry(4, None, 250),
         ]);
-        assert_eq!(ids(&ordered.entries), vec![1, 2, 3, 4]);
+        assert_eq!(ids(&ordered.entries), vec![3, 2, 1, 4]);
         assert_eq!(ordered.group_sizes.get(&1), Some(&3));
         assert_eq!(ordered.group_sizes.get(&4), Some(&1));
+        assert_eq!(ordered.headers.get(&1), Some(&3));
+        assert_eq!(ordered.headers.get(&4), Some(&4));
     }
 
     #[test]
@@ -936,7 +960,8 @@ mod tests {
             entry(2, Some(1), 400),
             entry(3, None, 300),
         ]);
-        assert_eq!(ids(&ordered.entries), vec![1, 2, 3]);
+        assert_eq!(ids(&ordered.entries), vec![2, 1, 3]);
+        assert_eq!(ordered.headers.get(&1), Some(&2));
     }
 
     #[test]
@@ -947,15 +972,51 @@ mod tests {
     }
 
     #[test]
-    fn branches_stay_under_their_root() {
+    fn branches_are_newest_first_under_their_root() {
         let ordered = order_entries(vec![
             entry(4, Some(1), 400),
             entry(1, None, 100),
             entry(3, Some(1), 300),
             entry(2, Some(1), 200),
         ]);
-        assert_eq!(ids(&ordered.entries), vec![1, 2, 3, 4]);
+        assert_eq!(ids(&ordered.entries), vec![4, 3, 2, 1]);
         assert_eq!(ordered.group_sizes.get(&1), Some(&4));
+        assert_eq!(ordered.headers.get(&1), Some(&4));
+    }
+
+    fn visible_ids(
+        ordered: &OrderedHistory,
+        collapsed: &HashSet<i64>,
+        expand_all: bool,
+    ) -> Vec<i64> {
+        ordered
+            .entries
+            .iter()
+            .filter(|entry| entry_visible(entry, ordered, collapsed, expand_all))
+            .map(|entry| entry.id)
+            .collect()
+    }
+
+    #[test]
+    fn collapsed_chains_show_only_their_newest_header() {
+        let ordered = order_entries(vec![
+            entry(1, None, 100),
+            entry(2, Some(1), 200),
+            entry(3, Some(2), 300),
+            entry(4, None, 400),
+        ]);
+        assert_eq!(ids(&ordered.entries), vec![4, 3, 2, 1]);
+
+        let collapsed: HashSet<i64> = [1].into_iter().collect();
+        assert_eq!(visible_ids(&ordered, &collapsed, false), vec![4, 3]);
+        assert_eq!(
+            visible_ids(&ordered, &collapsed, true),
+            vec![4, 3, 2, 1],
+            "filters force chains open"
+        );
+
+        let collapsed: HashSet<i64> = HashSet::new();
+        assert_eq!(visible_ids(&ordered, &collapsed, false), vec![4, 3, 2, 1]);
     }
 
     #[test]
@@ -965,36 +1026,5 @@ mod tests {
         imported.model = "import".into();
         assert_eq!(kind_label("import"), Some("Opened"));
         assert_eq!(entry_model_label(&imported), "Imported image");
-    }
-
-    #[test]
-    fn collapsed_root_hides_descendants() {
-        let entries = [
-            entry(1, None, 100),
-            entry(2, Some(1), 200),
-            entry(3, Some(2), 300),
-            entry(4, None, 400),
-        ];
-        let by_id: HashMap<_, _> = entries
-            .iter()
-            .cloned()
-            .map(|entry| (entry.id, entry))
-            .collect();
-
-        let collapsed: HashSet<i64> = [1].into_iter().collect();
-        let visible: Vec<i64> = entries
-            .iter()
-            .filter(|entry| !hidden_by_collapse(entry, &by_id, &collapsed))
-            .map(|entry| entry.id)
-            .collect();
-        assert_eq!(visible, vec![1, 4]);
-
-        let collapsed: HashSet<i64> = [2].into_iter().collect();
-        let visible: Vec<i64> = entries
-            .iter()
-            .filter(|entry| !hidden_by_collapse(entry, &by_id, &collapsed))
-            .map(|entry| entry.id)
-            .collect();
-        assert_eq!(visible, vec![1, 2, 4]);
     }
 }

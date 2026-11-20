@@ -5,6 +5,9 @@ rough edges.
 
 ## Unreleased
 
+- **History chains read newest-first**: a collapsed chain shows its newest
+  image and opens it when clicked; expanding reveals older iterations below,
+  with the original image at the bottom marked **first**.
 - **Open images from disk**: `Ctrl+O` (or the folder button next to **New**)
   imports a copy into the output folder and History, ready to edit, upscale or
   use as a reference.
