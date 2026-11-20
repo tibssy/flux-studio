@@ -35,13 +35,16 @@ Milestone 3 (packaged desktop app):
   effects upscales) are grouped under their source with an indent and a
   collapsible chain counter; chains start collapsed and read newest-first: the
   newest image is the group header, older iterations expand below it, and the
-  original sits at the bottom marked **first**. **Search** prompts, models
-  and seeds (`Ctrl+F`) and filter by text-to-image, edits, upscales or
-  adjustments; matching chains stay expanded, and a star marks **favorites**
+  original sits at the bottom marked **first**. The **Select** button switches
+  History to checkboxes for bulk deletion. The search button toggles the
+  search field (`Ctrl+F`), which matches prompts, models and seeds; the filter
+  button in the History header narrows the list to text-to-image, edits,
+  upscales or adjustments; matching chains stay expanded, and a star marks
+  **favorites**
   for quick access
 - clicking a history image shows it on the canvas with the effects menu,
-  upscale, edit and crop actions and restores its prompt, model, style, size
-  and seed
+  upscale, edit and crop actions and restores its model, style, size and seed;
+  the prompt picker loads its prompt when needed
 - **job queue**: press Generate while a job is running to queue another one.
   Each request snapshots its prompt, model, size, seed and references. The
   composer closes when a job is submitted; use New (`Ctrl+N`, starts with an
@@ -97,8 +100,9 @@ Milestone 3 (packaged desktop app):
 - **before/after compare**: the split button over the canvas shows the source
   of an edit, upscale or adjustment beside the result; drag the divider or
   click a side to move it
-- **prompt history**: `Alt+Up` / `Alt+Down` recalls submitted prompts and keeps
-  the draft you were writing
+- **prompt history**: the history button in the prompt field lists saved
+  prompts, and `Alt+Up` / `Alt+Down` recall them while keeping the draft you
+  were writing
 - **session restore**: optionally reopen the last image and draft prompt on
   launch (**Preferences → General**, on by default)
 - **view-only zoom** with a bottom-right pill: zoom in/out, real-pixel scale
@@ -239,13 +243,14 @@ without leaving the app.
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
 | Open an image from disk | `Ctrl+O` or the folder button at the top of History |
+| Select multiple images | **Select** at the top of History, then check rows and **Delete** |
 | Add reference images | image button in the prompt field, or `+` in the reference strip (multi-select) |
 | Preview / remove a reference | click its thumbnail / click the × on the thumbnail |
 | Edit an image | pick references with the image button, or open a history row and press Edit |
 | Delete an image | trash button on the history row (permanent, with confirmation) |
 | Image details | info button on the history row |
 | Favorite an image | star button on the history row |
-| Search history | `Ctrl+F` or the field under **History** |
+| Search history | `Ctrl+F` or the search button in the **History** header |
 | Copy the image | copy button over the canvas |
 | Show the image in its folder | folder button over the canvas |
 | Drag an image out | drag from the canvas into the file manager |
@@ -256,23 +261,25 @@ without leaving the app.
 | Pause / resume the queue | pause button in the **Queue** header |
 | Reorder waiting jobs | up/down arrows on a waiting queue row |
 | Duplicate a queued prompt | copy button on a waiting queue row |
-| Recall a previous prompt | `Alt+Up` / `Alt+Down` in the composer |
+| Recall a previous prompt | history button in the prompt field, or `Alt+Up` / `Alt+Down` |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
 
 Editing is iterative: the first edit uses the selected references, and each
 following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
-leave edit mode and generate from text alone; the prompt is kept.
+leave edit mode and generate from text alone. The composer opens empty; the
+history button in its top-right corner loads an earlier prompt.
 
-After a generation the prompt field slides away. Use the pencil button on the
-image (or `New`) to bring it back; with no references selected, the pencil makes
-the current image the edit reference. **Back** leaves edit mode without clearing
-the image. The selection button crops a region of the image with an animated
-zoom and uses the crop as the new reference; undo plays the same zoom in
-reverse. Selecting references or cropping keeps the action toolbar visible and
-leaves the composer closed; press **Edit** when you want to type a prompt.
-`Ctrl+B` toggles the sidebar.
+After a generation the prompt field slides away and is cleared. Use the pencil
+button on the image (or `New`) to bring it back; with no references selected,
+the pencil makes the current image the edit reference. The history button in
+the prompt field loads a previous prompt if you want to reuse it. **Back**
+leaves edit mode without clearing the image. The selection button crops a
+region of the image with an animated zoom and uses the crop as the new
+reference; undo plays the same zoom in reverse. Selecting references or
+cropping keeps the action toolbar visible and leaves the composer closed;
+press **Edit** when you want to type a prompt. `Ctrl+B` toggles the sidebar.
 
 The reference strip above the canvas is the multi-image workspace: add images
 with the `+` tile or the image button, click a thumbnail to show it on the

@@ -5,6 +5,19 @@ rough edges.
 
 ## Unreleased
 
+- **Prompt picker**: the prompt field has a history button in its top-right
+  corner that lists saved prompts, and the field is cleared after each
+  generation request.
+- **Search toggle**: a search button in the History header shows or hides the
+  search field (`Ctrl+F` still opens it).
+- **History filter button**: the funnel icon in the History header opens a
+  compact filter list for favorites, text-to-image, edits, upscales and
+  adjustments.
+- **Stable History scroll**: deleting an image no longer jumps the sidebar back
+  to the top.
+- **Bulk delete**: a **Select** button turns History rows into checkboxes with
+  Select all, a selection count and one confirmation for the whole batch.
+  Images used by queued jobs are skipped.
 - **History chains read newest-first**: a collapsed chain shows its newest
   image and opens it when clicked; expanding reveals older iterations below,
   with the original image at the bottom marked **first**.

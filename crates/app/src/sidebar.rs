@@ -25,8 +25,17 @@ pub(crate) struct Sidebar {
     pub batch_spin: gtk::SpinButton,
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
+    pub select_button: gtk::Button,
+    pub search_button: gtk::ToggleButton,
+    pub selection_bar: gtk::Box,
+    pub selection_label: gtk::Label,
+    pub selection_all: gtk::Button,
+    pub selection_delete: gtk::Button,
+    pub selection_cancel: gtk::Button,
     pub history_search: gtk::SearchEntry,
-    pub history_filter: gtk::DropDown,
+    pub history_filter: Rc<Cell<u32>>,
+    pub history_filter_button: gtk::MenuButton,
+    pub history_filter_buttons: Vec<gtk::CheckButton>,
     pub history_empty: gtk::Label,
     pub history_list: gtk::ListBox,
     pub queue_box: gtk::Box,
@@ -259,19 +268,57 @@ pub(crate) fn build(
         .tooltip_text("Open an image from disk (Ctrl+O)")
         .css_classes(["flat"])
         .build();
+    let select_button = gtk::Button::builder()
+        .icon_name("selection-mode-symbolic")
+        .tooltip_text("Select multiple images to delete")
+        .css_classes(["flat"])
+        .build();
+    let search_button = gtk::ToggleButton::builder()
+        .icon_name("system-search-symbolic")
+        .tooltip_text("Search history (Ctrl+F)")
+        .css_classes(["flat"])
+        .build();
+
+    let filter_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    filter_box.set_margin_top(6);
+    filter_box.set_margin_bottom(6);
+    filter_box.set_margin_start(6);
+    filter_box.set_margin_end(6);
+    let mut history_filter_buttons = Vec::with_capacity(crate::history::FILTER_LABELS.len());
+    let mut group_leader: Option<gtk::CheckButton> = None;
+    for (index, label) in crate::history::FILTER_LABELS.iter().enumerate() {
+        let check = gtk::CheckButton::with_label(label);
+        check.set_active(index == 0);
+        if let Some(leader) = &group_leader {
+            check.set_group(Some(leader));
+        } else {
+            group_leader = Some(check.clone());
+        }
+        filter_box.append(&check);
+        history_filter_buttons.push(check);
+    }
+    let filter_popover = gtk::Popover::builder().child(&filter_box).build();
+    let history_filter_button = gtk::MenuButton::builder()
+        .icon_name("view-filter-symbolic")
+        .tooltip_text("Filter history: All images")
+        .popover(&filter_popover)
+        .css_classes(["flat"])
+        .build();
+
     let history_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     history_header.append(&history_title);
+    history_header.append(&search_button);
+    history_header.append(&history_filter_button);
+    history_header.append(&select_button);
     history_header.append(&open_button);
     history_header.append(&new_button);
 
     let history_search = gtk::SearchEntry::builder()
         .placeholder_text("Search history")
         .hexpand(true)
+        .visible(false)
         .build();
     history_search.set_tooltip_text(Some("Search prompts, models and seeds (Ctrl+F)"));
-    let history_filter = gtk::DropDown::from_strings(&crate::history::FILTER_LABELS);
-    history_filter.set_hexpand(true);
-    history_filter.set_tooltip_text(Some("Filter history entries"));
 
     let history_empty = gtk::Label::builder()
         .label("No images match.")
@@ -281,9 +328,35 @@ pub(crate) fn build(
         .css_classes(["caption", "dim-label"])
         .build();
 
-    let history_tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    history_tools.append(&history_search);
-    history_tools.append(&history_filter);
+    let selection_label = gtk::Label::builder()
+        .label("0 selected")
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["caption"])
+        .build();
+    let selection_all = gtk::Button::builder()
+        .label("All")
+        .tooltip_text("Select every visible image")
+        .css_classes(["flat"])
+        .build();
+    let selection_delete = gtk::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Delete selected images")
+        .sensitive(false)
+        .css_classes(["flat", "destructive-action"])
+        .build();
+    let selection_cancel = gtk::Button::builder()
+        .icon_name("window-close-symbolic")
+        .tooltip_text("Cancel selection")
+        .css_classes(["flat"])
+        .build();
+    let selection_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    selection_bar.add_css_class("selection-bar");
+    selection_bar.set_visible(false);
+    selection_bar.append(&selection_label);
+    selection_bar.append(&selection_all);
+    selection_bar.append(&selection_delete);
+    selection_bar.append(&selection_cancel);
 
     let history_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
@@ -341,7 +414,8 @@ pub(crate) fn build(
     root.append(&separator);
     root.append(&queue_box);
     root.append(&history_header);
-    root.append(&history_tools);
+    root.append(&history_search);
+    root.append(&selection_bar);
     root.append(&history_empty);
     root.append(&history_scroller);
 
@@ -364,8 +438,17 @@ pub(crate) fn build(
         batch_spin,
         new_button,
         open_button,
+        select_button,
+        search_button,
+        selection_bar,
+        selection_label,
+        selection_all,
+        selection_delete,
+        selection_cancel,
         history_search,
-        history_filter,
+        history_filter: Rc::new(Cell::new(0)),
+        history_filter_button,
+        history_filter_buttons,
         history_empty,
         history_list,
         queue_box,

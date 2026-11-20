@@ -9,6 +9,8 @@ pub(crate) struct MainView {
     pub reference_thumbs: gtk::Box,
     pub reference_add: gtk::Button,
     pub prompt: gtk::TextView,
+    pub prompt_history_button: gtk::MenuButton,
+    pub prompt_history_list: gtk::ListBox,
     pub composer: gtk::Revealer,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
@@ -455,7 +457,7 @@ pub(crate) fn build() -> MainView {
         .top_margin(8)
         .bottom_margin(8)
         .left_margin(8)
-        .right_margin(8)
+        .right_margin(48)
         .build();
 
     let prompt_scroller = gtk::ScrolledWindow::builder()
@@ -465,6 +467,34 @@ pub(crate) fn build() -> MainView {
         .max_content_height(120)
         .propagate_natural_height(true)
         .build();
+
+    let prompt_history_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    let prompt_history_scroller = gtk::ScrolledWindow::builder()
+        .child(&prompt_history_list)
+        .propagate_natural_height(true)
+        .max_content_height(280)
+        .min_content_width(320)
+        .build();
+    let prompt_history_popover = gtk::Popover::builder()
+        .child(&prompt_history_scroller)
+        .build();
+    let prompt_history_button = gtk::MenuButton::builder()
+        .icon_name("document-open-recent-symbolic")
+        .tooltip_text("Load a previous prompt")
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(4)
+        .margin_end(20)
+        .css_classes(["flat", "circular", "prompt-history"])
+        .popover(&prompt_history_popover)
+        .build();
+
+    let prompt_overlay = gtk::Overlay::new();
+    prompt_overlay.set_child(Some(&prompt_scroller));
+    prompt_overlay.add_overlay(&prompt_history_button);
 
     let reference_button = gtk::Button::builder()
         .icon_name("image-x-generic-symbolic")
@@ -501,7 +531,7 @@ pub(crate) fn build() -> MainView {
     let prompt_field = gtk::Box::new(gtk::Orientation::Vertical, 0);
     prompt_field.add_css_class("prompt-field");
     prompt_field.set_hexpand(true);
-    prompt_field.append(&prompt_scroller);
+    prompt_field.append(&prompt_overlay);
     prompt_field.append(&actions);
 
     let composer = gtk::Revealer::builder()
@@ -560,6 +590,8 @@ pub(crate) fn build() -> MainView {
         reference_thumbs,
         reference_add,
         prompt,
+        prompt_history_button,
+        prompt_history_list,
         composer,
         reference_button,
         improve_button,
