@@ -63,6 +63,14 @@ pub(crate) struct MainView {
     pub folder_button: gtk::Button,
     pub compare_button: gtk::ToggleButton,
     pub compare_area: crate::compare_view::CompareView,
+    pub mask_button: gtk::ToggleButton,
+    pub outpaint_button: gtk::Button,
+    pub mask_overlay: gtk::DrawingArea,
+    pub mask_controls: gtk::Box,
+    pub mask_brush: gtk::Scale,
+    pub mask_clear: gtk::Button,
+    pub mask_cancel: gtk::Button,
+    pub mask_apply: gtk::Button,
 }
 
 pub(crate) fn build() -> MainView {
@@ -328,6 +336,58 @@ pub(crate) fn build() -> MainView {
     compare_area.set_visible(false);
     compare_area.set_can_target(true);
     compare_area.add_css_class("compare-overlay");
+    let mask_button = gtk::ToggleButton::builder()
+        .icon_name("draw-freehand-symbolic")
+        .tooltip_text("Paint a mask to inpaint")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let outpaint_button = gtk::Button::builder()
+        .icon_name("zoom-fit-best-symbolic")
+        .tooltip_text("Extend the canvas and inpaint the new border")
+        .visible(false)
+        .css_classes(["osd", "circular"])
+        .build();
+    let mask_overlay = gtk::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .can_target(true)
+        .build();
+    let mask_brush = gtk::Scale::with_range(gtk::Orientation::Horizontal, 5.0, 120.0, 1.0);
+    mask_brush.set_value(36.0);
+    mask_brush.set_draw_value(false);
+    mask_brush.set_width_request(110);
+    mask_brush.set_tooltip_text(Some("Brush size"));
+    let mask_clear = gtk::Button::builder()
+        .label("Clear")
+        .css_classes(["flat"])
+        .build();
+    let mask_cancel = gtk::Button::builder()
+        .label("Cancel")
+        .css_classes(["flat"])
+        .build();
+    let mask_apply = gtk::Button::builder()
+        .label("Inpaint")
+        .css_classes(["suggested-action"])
+        .build();
+    let mask_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    mask_controls.add_css_class("osd");
+    mask_controls.add_css_class("mask-controls");
+    mask_controls.set_halign(gtk::Align::Center);
+    mask_controls.set_valign(gtk::Align::End);
+    mask_controls.set_margin_bottom(18);
+    mask_controls.set_visible(false);
+    let brush_label = gtk::Label::builder()
+        .label("Brush")
+        .css_classes(["caption", "dim-label"])
+        .build();
+    mask_controls.append(&brush_label);
+    mask_controls.append(&mask_brush);
+    mask_controls.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    mask_controls.append(&mask_clear);
+    mask_controls.append(&mask_cancel);
+    mask_controls.append(&mask_apply);
     let image_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     image_actions.set_halign(gtk::Align::End);
     image_actions.set_valign(gtk::Align::Start);
@@ -346,6 +406,8 @@ pub(crate) fn build() -> MainView {
     image_actions.append(&copy_button);
     image_actions.append(&folder_button);
     image_actions.append(&compare_button);
+    image_actions.append(&mask_button);
+    image_actions.append(&outpaint_button);
 
     let image_overlay = gtk::Overlay::builder()
         .child(&scroller_clip)
@@ -418,9 +480,11 @@ pub(crate) fn build() -> MainView {
     image_overlay.add_overlay(&crop_overlay);
     image_overlay.add_overlay(&zoom_overlay);
     image_overlay.add_overlay(&compare_area);
+    image_overlay.add_overlay(&mask_overlay);
     image_overlay.add_overlay(&image_actions);
     image_overlay.add_overlay(&nav_actions);
     image_overlay.add_overlay(&zoom_controls);
+    image_overlay.add_overlay(&mask_controls);
     image_overlay.add_overlay(&queue_bubble);
 
     let reference_thumbs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -611,6 +675,14 @@ pub(crate) fn build() -> MainView {
         folder_button,
         compare_button,
         compare_area,
+        mask_button,
+        outpaint_button,
+        mask_overlay,
+        mask_controls,
+        mask_brush,
+        mask_clear,
+        mask_cancel,
+        mask_apply,
     }
 }
 

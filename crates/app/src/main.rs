@@ -6,6 +6,7 @@ mod history;
 mod history_view;
 mod lora;
 mod main_view;
+mod mask;
 mod preferences;
 mod prompt_ai;
 mod queue;
@@ -127,6 +128,17 @@ pub(crate) struct Ui {
     pub folder_button: gtk::Button,
     pub compare_button: gtk::ToggleButton,
     pub compare_area: crate::compare_view::CompareView,
+    pub mask_button: gtk::ToggleButton,
+    pub outpaint_button: gtk::Button,
+    pub mask_overlay: gtk::DrawingArea,
+    pub mask_controls: gtk::Box,
+    pub mask_brush: gtk::Scale,
+    pub mask_clear: gtk::Button,
+    pub mask_cancel: gtk::Button,
+    pub mask_apply: gtk::Button,
+    /// Whether the mask brush is active.
+    pub mask_mode: Cell<bool>,
+    pub mask_strokes: RefCell<Vec<mask::MaskStroke>>,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -261,6 +273,10 @@ fn install_styles() {
          }
          .compare-overlay {
              background-color: @window_bg_color;
+         }
+         .mask-controls {
+             padding: 6px 10px;
+             border-radius: 12px;
          }
          .queue-bubble {
              background-image: none;
@@ -505,6 +521,16 @@ fn build_ui(app: &adw::Application) {
         folder_button: view.folder_button,
         compare_button: view.compare_button,
         compare_area: view.compare_area,
+        mask_button: view.mask_button,
+        outpaint_button: view.outpaint_button,
+        mask_overlay: view.mask_overlay,
+        mask_controls: view.mask_controls,
+        mask_brush: view.mask_brush,
+        mask_clear: view.mask_clear,
+        mask_cancel: view.mask_cancel,
+        mask_apply: view.mask_apply,
+        mask_mode: Cell::new(false),
+        mask_strokes: RefCell::new(Vec::new()),
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -588,6 +614,7 @@ fn build_ui(app: &adw::Application) {
     setup_crop_overlay(&ui);
     setup_zoom_overlay(&ui);
     setup_compare_overlay(&ui);
+    setup_mask_overlay(&ui);
 
     // Notification clicks land here: focus the window and show that result.
     {
@@ -613,6 +640,8 @@ fn build_ui(app: &adw::Application) {
 
     // Reference copies belong to queued jobs only; nothing survives a restart.
     let _ = std::fs::remove_dir_all(paths::cache_dir().join("queue"));
+    // Mask PNGs are copied into the queue folder when a job is submitted.
+    let _ = std::fs::remove_dir_all(paths::cache_dir().join("masks"));
 
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         *ui.entries.borrow_mut() = entries;
@@ -1188,6 +1217,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let split = ui.split.clone();
         key_controller.connect_key_pressed(move |_, key, _, state| {
+            if key == gdk::Key::Escape && ui.mask_mode.get() {
+                ui.mask_button.set_active(false);
+                return glib::Propagation::Stop;
+            }
             if key == gdk::Key::Escape && ui.crop_mode.get() {
                 ui.crop_button.set_active(false);
                 return glib::Propagation::Stop;
@@ -1683,6 +1716,7 @@ fn update_zoom_controls(ui: &Ui) {
         || ui.upscaling.get()
         || ui.zooming.get()
         || ui.classifying.get()
+        || ui.mask_mode.get()
         || ui.compare_button.is_active();
     let visible = has_image && !busy && !ui.crop_mode.get();
     ui.zoom_controls.set_visible(visible);
@@ -1803,6 +1837,9 @@ fn crossfade_to_texture(ui: &Rc<Ui>, texture: &gdk::Texture) {
 pub(crate) fn update_image_view(ui: &Rc<Ui>) {
     if ui.compare_button.is_active() {
         ui.compare_button.set_active(false);
+    }
+    if ui.mask_mode.get() {
+        ui.mask_button.set_active(false);
     }
     let display = ui.state.borrow().display.clone();
 
@@ -1953,14 +1990,21 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let upscaling = ui.upscaling.get();
     let zooming = ui.zooming.get();
     let classifying = ui.classifying.get();
-    let foreground = zooming || classifying;
+    let masking = ui.mask_mode.get();
+    let foreground = zooming || classifying || masking;
     let position = history_position(ui);
     let actions = has_image && !foreground;
     let editable = actions && active_preset(ui).supports_edit;
-    let navigation = has_image && !editing && !zooming && !classifying;
+    let navigation = has_image && !editing && !zooming && !classifying && !masking;
     // A running upscale leaves a real image on the canvas; only a generation
     // can be showing a low-resolution preview.
     let stable = !generating || upscaling;
+    let inpaintable = has_image
+        && !generating
+        && !zooming
+        && !classifying
+        && !ui.crop_mode.get()
+        && active_preset(ui).supports_inpaint;
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
@@ -1999,6 +2043,11 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     ui.compare_button.set_visible(comparable);
     if !comparable && ui.compare_button.is_active() {
         ui.compare_button.set_active(false);
+    }
+    ui.mask_button.set_visible(inpaintable || masking);
+    ui.outpaint_button.set_visible(inpaintable && !masking);
+    if !inpaintable && masking {
+        ui.mask_button.set_active(false);
     }
     update_zoom_controls(ui);
 
@@ -2343,6 +2392,296 @@ fn compare_source(entry: &Generation) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
+fn setup_mask_overlay(ui: &Rc<Ui>) {
+    {
+        let inner = ui.clone();
+        let overlay = ui.mask_overlay.clone();
+        overlay.set_draw_func(move |_area, cr, width, height| {
+            mask::draw_overlay(
+                cr,
+                width as f64,
+                height as f64,
+                inner.image_size.get(),
+                &inner.mask_strokes.borrow(),
+            );
+        });
+    }
+
+    let drag = gtk::GestureDrag::new();
+    {
+        let ui = ui.clone();
+        drag.connect_drag_begin(move |_, x, y| {
+            add_mask_stroke(&ui, x, y);
+        });
+    }
+    {
+        let ui = ui.clone();
+        drag.connect_drag_update(move |gesture, offset_x, offset_y| {
+            if !ui.mask_mode.get() {
+                return;
+            }
+            let Some((start_x, start_y)) = gesture.start_point() else {
+                return;
+            };
+            let area = (
+                ui.mask_overlay.width() as f64,
+                ui.mask_overlay.height() as f64,
+            );
+            let image = ui.image_size.get();
+            let Some((x, y)) = mask::point_to_image(
+                area.0,
+                area.1,
+                image,
+                start_x + offset_x,
+                start_y + offset_y,
+            ) else {
+                return;
+            };
+            if let Some(stroke) = ui.mask_strokes.borrow_mut().last_mut() {
+                stroke.points.push((x, y));
+                ui.mask_overlay.queue_draw();
+            }
+        });
+    }
+    ui.mask_overlay.add_controller(drag);
+
+    let click = gtk::GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
+    {
+        let ui = ui.clone();
+        click.connect_released(move |_, _, x, y| add_mask_stroke(&ui, x, y));
+    }
+    ui.mask_overlay.add_controller(click);
+
+    {
+        let ui = ui.clone();
+        ui.mask_button
+            .clone()
+            .connect_toggled(move |button| set_mask_mode(&ui, button.is_active()));
+    }
+    {
+        let ui = ui.clone();
+        ui.mask_clear.clone().connect_clicked(move |_| {
+            ui.mask_strokes.borrow_mut().clear();
+            ui.mask_overlay.queue_draw();
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.mask_cancel
+            .clone()
+            .connect_clicked(move |_| ui.mask_button.set_active(false));
+    }
+    {
+        let ui = ui.clone();
+        ui.mask_apply
+            .clone()
+            .connect_clicked(move |_| apply_mask(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.outpaint_button
+            .clone()
+            .connect_clicked(move |_| start_outpaint(&ui));
+    }
+}
+
+fn mask_scale(ui: &Ui) -> f64 {
+    let image = ui.image_size.get();
+    let area = (
+        ui.mask_overlay.width() as f64,
+        ui.mask_overlay.height() as f64,
+    );
+    let rect = contain_rect(area, (image.0 as f64, image.1 as f64));
+    if image.0 == 0 {
+        return 1.0;
+    }
+    (rect.2 / image.0 as f64).max(0.001)
+}
+
+fn add_mask_stroke(ui: &Rc<Ui>, x: f64, y: f64) {
+    if !ui.mask_mode.get() {
+        return;
+    }
+    let area = (
+        ui.mask_overlay.width() as f64,
+        ui.mask_overlay.height() as f64,
+    );
+    let image = ui.image_size.get();
+    let Some((x, y)) = mask::point_to_image(area.0, area.1, image, x, y) else {
+        return;
+    };
+    let radius = (ui.mask_brush.value() / mask_scale(ui)).max(1.0);
+    ui.mask_strokes.borrow_mut().push(mask::MaskStroke {
+        points: vec![(x, y)],
+        radius,
+    });
+    ui.mask_overlay.queue_draw();
+}
+
+fn set_mask_mode(ui: &Rc<Ui>, active: bool) {
+    if active {
+        if ui.state.borrow().display.is_none() || !active_preset(ui).supports_inpaint {
+            ui.mask_button.set_active(false);
+            ui.toast
+                .add_toast(adw::Toast::new("Pick an inpainting model to use the mask."));
+            return;
+        }
+        if ui.compare_button.is_active() {
+            ui.compare_button.set_active(false);
+        }
+        pause_live_view(ui);
+        cancel_zoom(ui);
+        reset_zoom(ui);
+        ui.mask_strokes.borrow_mut().clear();
+        ui.mask_mode.set(true);
+        ui.mask_overlay.set_visible(true);
+        ui.mask_controls.set_visible(true);
+        ui.status
+            .set_text("Paint the area to replace, then press Inpaint");
+    } else {
+        ui.mask_mode.set(false);
+        ui.mask_overlay.set_visible(false);
+        ui.mask_controls.set_visible(false);
+        ui.mask_strokes.borrow_mut().clear();
+        ui.mask_overlay.queue_draw();
+    }
+    update_image_actions(ui);
+    update_zoom_controls(ui);
+}
+
+fn apply_mask(ui: &Rc<Ui>) {
+    let strokes = ui.mask_strokes.borrow().clone();
+    if strokes.is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("Paint the area to replace first."));
+        return;
+    }
+    let (width, height) = ui.image_size.get();
+    if width == 0 || height == 0 {
+        return;
+    }
+    let Some(source) = ui.state.borrow().display.clone() else {
+        return;
+    };
+    let path = paths::cache_dir()
+        .join("masks")
+        .join(format!("mask-{}.png", now_millis()));
+    if let Err(error) = mask::render_mask(width, height, &strokes, &path) {
+        tracing::error!(%error, "failed to render the mask");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not prepare the mask."));
+        return;
+    }
+
+    {
+        let mut state = ui.state.borrow_mut();
+        state.inpaint = Some(state::PendingInpaint {
+            source,
+            mask: path,
+            width,
+            height,
+        });
+        state.references.clear();
+    }
+    ui.mask_button.set_active(false);
+    render_reference_strip(ui);
+    show_composer(ui, true);
+    ui.status
+        .set_text("Describe what should replace the masked area, then Generate");
+}
+
+fn start_outpaint(ui: &Rc<Ui>) {
+    let Some(source) = ui.state.borrow().display.clone() else {
+        return;
+    };
+    let image = match image::open(&source) {
+        Ok(image) => image.to_rgba8(),
+        Err(error) => {
+            tracing::warn!(%error, path = %source.display(), "failed to open the outpaint source");
+            ui.toast
+                .add_toast(adw::Toast::new("Could not read this image."));
+            return;
+        }
+    };
+    let (source_width, source_height) = image.dimensions();
+    let (target_width, target_height) = target_size(ui);
+    if target_width <= source_width && target_height <= source_height {
+        ui.toast.add_toast(adw::Toast::new(
+            "Choose a larger size or a different ratio to extend the canvas.",
+        ));
+        return;
+    }
+
+    // Keep the source at its native size when it fits; only shrink if the
+    // target is smaller in one dimension.
+    let scale = if source_width > target_width || source_height > target_height {
+        (target_width as f64 / source_width as f64).min(target_height as f64 / source_height as f64)
+    } else {
+        1.0
+    };
+    let width = ((source_width as f64 * scale).round() as u32).clamp(1, target_width);
+    let height = ((source_height as f64 * scale).round() as u32).clamp(1, target_height);
+    let scaled = if (width, height) == (source_width, source_height) {
+        image
+    } else {
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Lanczos3)
+    };
+    let x0 = (target_width - width) / 2;
+    let y0 = (target_height - height) / 2;
+
+    let mut init = image::RgbaImage::new(target_width, target_height);
+    let mut mask = image::GrayImage::new(target_width, target_height);
+    for y in 0..target_height {
+        for x in 0..target_width {
+            let inside = x >= x0 && x < x0 + width && y >= y0 && y < y0 + height;
+            let sx = x.saturating_sub(x0).min(width - 1);
+            let sy = y.saturating_sub(y0).min(height - 1);
+            init.put_pixel(x, y, *scaled.get_pixel(sx, sy));
+            mask.put_pixel(x, y, image::Luma([if inside { 0 } else { 255 }]));
+        }
+    }
+
+    let directory = paths::cache_dir().join("masks");
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        tracing::warn!(%error, path = %directory.display(), "failed to create the mask folder");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not prepare the outpaint canvas."));
+        return;
+    }
+    let stamp = now_millis();
+    let init_path = directory.join(format!("outpaint-{stamp}-init.png"));
+    let mask_path = directory.join(format!("outpaint-{stamp}-mask.png"));
+    let saved = init.save(&init_path).and_then(|()| mask.save(&mask_path));
+    if let Err(error) = saved {
+        tracing::error!(%error, "failed to save the outpaint canvas");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not prepare the outpaint canvas."));
+        return;
+    }
+
+    if ui.mask_mode.get() {
+        ui.mask_button.set_active(false);
+    }
+    pause_live_view(ui);
+    cancel_zoom(ui);
+    reset_zoom(ui);
+    {
+        let mut state = ui.state.borrow_mut();
+        state.inpaint = Some(state::PendingInpaint {
+            source,
+            mask: mask_path,
+            width: target_width,
+            height: target_height,
+        });
+        state.references.clear();
+    }
+    render_reference_strip(ui);
+    show_composer(ui, true);
+    ui.status
+        .set_text("Describe what should fill the new border, then Generate");
+}
+
 fn set_compare_mode(ui: &Rc<Ui>, active: bool) {
     if !active {
         ui.compare_area.set_visible(false);
@@ -2422,7 +2761,7 @@ fn setup_zoom_overlay(ui: &Rc<Ui>) {
         });
 }
 
-fn contain_rect(area: (f64, f64), image: (f64, f64)) -> CropRect {
+pub(crate) fn contain_rect(area: (f64, f64), image: (f64, f64)) -> CropRect {
     if area.0 <= 0.0 || area.1 <= 0.0 || image.0 <= 0.0 || image.1 <= 0.0 {
         return (0.0, 0.0, area.0.max(0.0), area.1.max(0.0));
     }
@@ -3067,6 +3406,7 @@ pub(crate) enum GenerationMode {
     Night,
     Day,
     Expand,
+    Inpaint,
 }
 
 impl GenerationMode {
@@ -3074,6 +3414,7 @@ impl GenerationMode {
         match self {
             Self::Generate => "Generate",
             Self::Edit => "Edit",
+            Self::Inpaint => "Inpaint",
             _ => "Effect",
         }
     }
@@ -3094,6 +3435,7 @@ impl GenerationMode {
             Self::Night => "night",
             Self::Day => "day",
             Self::Expand => "expand",
+            Self::Inpaint => "inpaint",
             Self::Generate | Self::Edit => "generate",
         }
     }
@@ -3110,6 +3452,7 @@ impl GenerationMode {
             Self::Night => "Converted to night.",
             Self::Day => "Converted to day.",
             Self::Expand => "Image expanded.",
+            Self::Inpaint => "Masked area inpainted.",
             Self::Generate | Self::Edit => "Image generated.",
         }
     }
@@ -3123,7 +3466,15 @@ fn current_style_id(ui: &Rc<Ui>) -> &'static str {
 }
 
 fn start_generation(ui: &Rc<Ui>) {
-    let editing = ui.state.borrow().is_editing();
+    let inpaint = ui.state.borrow().inpaint.is_some();
+    if inpaint && !active_preset(ui).supports_inpaint {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "{} cannot inpaint. Pick an inpainting model.",
+            active_preset(ui).label
+        )));
+        return;
+    }
+    let editing = !inpaint && ui.state.borrow().is_editing();
     if editing && !active_preset(ui).supports_edit {
         ui.toast.add_toast(adw::Toast::new(&format!(
             "{} cannot edit images. Remove the references or pick another model.",
@@ -3131,7 +3482,9 @@ fn start_generation(ui: &Rc<Ui>) {
         )));
         return;
     }
-    let mode = if editing {
+    let mode = if inpaint {
+        GenerationMode::Inpaint
+    } else if editing {
         GenerationMode::Edit
     } else {
         GenerationMode::Generate
@@ -3261,8 +3614,25 @@ fn generate(
 
     let effective_prompt = flux_core::style::compose_prompt(&base_prompt, style_id);
 
-    let (width, height) = target_size(ui);
-    let references = ui.state.borrow().references.clone();
+    let pending_inpaint = if mode == GenerationMode::Inpaint {
+        ui.state.borrow().inpaint.clone()
+    } else {
+        None
+    };
+    if mode == GenerationMode::Inpaint && pending_inpaint.is_none() {
+        ui.toast
+            .add_toast(adw::Toast::new("Paint a mask before inpainting."));
+        return;
+    }
+    let (width, height) = match &pending_inpaint {
+        Some(inpaint) => (inpaint.width, inpaint.height),
+        None => target_size(ui),
+    };
+    let references = if pending_inpaint.is_some() {
+        Vec::new()
+    } else {
+        ui.state.borrow().references.clone()
+    };
     let output_dir = ui.config.borrow().output_dir.clone();
     let (offload, previews) = {
         let config = ui.config.borrow();
@@ -3279,9 +3649,13 @@ fn generate(
         })
         .collect::<Vec<_>>();
 
-    let batch = batch_override
-        .unwrap_or_else(|| ui.batch_spin.value().round().clamp(1.0, 4.0) as usize)
-        .clamp(1, 4);
+    let batch = if mode == GenerationMode::Inpaint {
+        1
+    } else {
+        batch_override
+            .unwrap_or_else(|| ui.batch_spin.value().round().clamp(1.0, 4.0) as usize)
+            .clamp(1, 4)
+    };
     let available = queue::LIMIT.saturating_sub(ui.queue.borrow().len());
     if available == 0 {
         ui.toast.add_toast(adw::Toast::new(&format!(
@@ -3298,6 +3672,10 @@ fn generate(
         )));
     }
 
+    let source_path = pending_inpaint
+        .as_ref()
+        .map(|inpaint| inpaint.source.to_string_lossy().into_owned())
+        .or(source_path);
     let slug = slugify(&base_prompt);
     let was_busy = ui.queue.borrow().running().is_some();
     if !was_busy {
@@ -3331,16 +3709,29 @@ fn generate(
         // entry can disappear before this job starts. The originals stay in
         // the job for History's parent lookup.
         let id = ui.queue.borrow_mut().next_id();
-        let (copies, reference_dir) = match copy_references(id, &references) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                ui.toast.add_toast(adw::Toast::new(&format!(
-                    "Could not prepare the references: {error}"
-                )));
-                break;
+        let (copies, reference_dir, job_inpaint) = if let Some(inpaint) = &pending_inpaint {
+            match copy_inpaint(id, inpaint) {
+                Ok((input, dir)) => (Vec::new(), Some(dir), Some(input)),
+                Err(error) => {
+                    ui.toast.add_toast(adw::Toast::new(&format!(
+                        "Could not prepare the inpainting input: {error}"
+                    )));
+                    break;
+                }
+            }
+        } else {
+            match copy_references(id, &references) {
+                Ok((copies, dir)) => (copies, dir, None),
+                Err(error) => {
+                    ui.toast.add_toast(adw::Toast::new(&format!(
+                        "Could not prepare the references: {error}"
+                    )));
+                    break;
+                }
             }
         };
         request.reference_images = copies;
+        request.inpaint = job_inpaint;
 
         let job = queue::Job {
             id,
@@ -3367,6 +3758,9 @@ fn generate(
         return;
     }
 
+    if pending_inpaint.is_some() {
+        ui.state.borrow_mut().inpaint = None;
+    }
     refresh_history_locks(ui);
     queue_view::rebuild(ui);
     show_composer(ui, false);
@@ -3442,6 +3836,33 @@ fn duplicate_output(original: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or("image");
     parent.join(format!("{stem}-copy-{}.png", now_millis()))
+}
+
+/// Copy the inpainting source and mask into a per-job folder.
+fn copy_inpaint(
+    id: u64,
+    pending: &state::PendingInpaint,
+) -> Result<(flux_core::InpaintInput, PathBuf), String> {
+    let dir = paths::cache_dir().join("queue").join(id.to_string());
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        return Err(format!("could not create {}: {error}", dir.display()));
+    }
+    let init = dir.join("init.png");
+    let mask = dir.join("mask.png");
+    for (source, target) in [(&pending.source, &init), (&pending.mask, &mask)] {
+        if let Err(error) = std::fs::copy(source, target) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(format!("could not copy {}: {error}", source.display()));
+        }
+    }
+    Ok((
+        flux_core::InpaintInput {
+            init_image: init,
+            mask_image: mask,
+            strength: 1.0,
+        },
+        dir,
+    ))
 }
 
 /// Copy the selected references into a per-job folder.
@@ -4639,6 +5060,9 @@ fn back_to_view(ui: &Rc<Ui>) {
 pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     if ui.compare_button.is_active() {
         ui.compare_button.set_active(false);
+    }
+    if ui.mask_mode.get() {
+        ui.mask_button.set_active(false);
     }
     let texture = match gdk::Texture::from_filename(path) {
         Ok(texture) => texture,

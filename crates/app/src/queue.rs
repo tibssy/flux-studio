@@ -68,6 +68,7 @@ pub(crate) struct UpscaleJob {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum JobKind {
     Generate(GenerateJob),
     Upscale(UpscaleJob),

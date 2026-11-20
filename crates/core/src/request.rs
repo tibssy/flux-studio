@@ -22,6 +22,15 @@ pub struct LoraConfig {
     pub weight: f32,
 }
 
+/// Masked inpainting input: source image plus a grayscale mask (white = repaint).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InpaintInput {
+    pub init_image: PathBuf,
+    pub mask_image: PathBuf,
+    /// Denoising strength for the generated region, 0–1.
+    pub strength: f32,
+}
+
 /// A single image-generation request.
 ///
 /// `steps`/`cfg` are copied from the selected [`crate::preset::ModelPreset`]
@@ -45,6 +54,8 @@ pub struct GenerateRequest {
     pub reference_images: Vec<PathBuf>,
     /// LoRA weights applied to this request.
     pub loras: Vec<LoraConfig>,
+    /// Masked inpainting input, when this request fills a masked region.
+    pub inpaint: Option<InpaintInput>,
     /// Whether the backend should stream per-step previews.
     pub previews: bool,
     pub output: PathBuf,
@@ -66,6 +77,7 @@ impl GenerateRequest {
             offload: true,
             reference_images: Vec::new(),
             loras: Vec::new(),
+            inpaint: None,
             previews: true,
             output: output.into(),
         }

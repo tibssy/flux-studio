@@ -216,6 +216,16 @@ impl SdServer {
                 model.max_references
             );
         }
+        if request.inpaint.is_some() && !model.supports_inpaint {
+            bail!("{} does not support inpainting", model.label);
+        }
+        if let Some(inpaint) = &request.inpaint {
+            for path in [&inpaint.init_image, &inpaint.mask_image] {
+                if !path.exists() {
+                    bail!("inpaint image not found at {}", path.display());
+                }
+            }
+        }
         if let Some(parent) = request.output.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -269,6 +279,11 @@ impl SdServer {
                     }))
                     .collect::<Vec<_>>()
             );
+        }
+        if let Some(inpaint) = &request.inpaint {
+            payload["init_image"] = json!(reference_data_url(&inpaint.init_image)?);
+            payload["mask_image"] = json!(reference_data_url(&inpaint.mask_image)?);
+            payload["strength"] = json!(inpaint.strength.clamp(0.0, 1.0));
         }
 
         let submit_url = format!("http://127.0.0.1:{port}/sdcpp/v1/img_gen");

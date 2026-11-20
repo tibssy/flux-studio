@@ -463,6 +463,7 @@ pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
         "night" => Some("Night"),
         "day" => Some("Daylight"),
         "expand" => Some("Expanded"),
+        "inpaint" => Some("Inpainted"),
         _ => None,
     }
 }

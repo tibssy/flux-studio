@@ -26,6 +26,7 @@ fn request(prompt: &str, output: &str, references: Vec<PathBuf>) -> GenerateRequ
         offload: true,
         reference_images: references,
         loras: Vec::new(),
+        inpaint: None,
         previews: true,
         output: PathBuf::from(output),
     }

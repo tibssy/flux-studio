@@ -62,6 +62,8 @@ pub struct ModelPreset {
     pub default_height: u32,
     /// Whether the model accepts `-r <image>` reference images.
     pub supports_edit: bool,
+    /// Whether the model applies an inpainting mask (`init_image` + mask).
+    pub supports_inpaint: bool,
     /// Largest number of reference images the model accepts (0 without edit).
     pub max_references: u32,
     /// Pixel grid the model's latent packing requires.
@@ -177,6 +179,7 @@ pub const FLUX2_KLEIN_4B: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    supports_inpaint: false,
     max_references: 10,
     size_step: 16,
     sigmas: &[],
@@ -231,6 +234,7 @@ pub const FLUX2_KLEIN_9B: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    supports_inpaint: false,
     max_references: 10,
     size_step: 16,
     sigmas: &[],
@@ -280,6 +284,7 @@ pub const FLUX3_KLEIN: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    supports_inpaint: false,
     max_references: 10,
     size_step: 16,
     sigmas: &[],
@@ -339,6 +344,7 @@ pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    supports_inpaint: false,
     max_references: 10,
     size_step: 16,
     sigmas: &[],
@@ -354,6 +360,67 @@ pub const FIBO2_EDIT_TURBO: ModelPreset = ModelPreset {
 
 /// FLUX.1 schnell: 4-step 12B text-to-image. Uses T5-XXL + CLIP-L instead of
 /// an LLM encoder, and has no reference-image support.
+/// FLUX.1 Fill dev: the inpainting/outpainting model.
+///
+/// The mask is applied by the backend (init image + mask), which is what makes
+/// true inpainting possible; the FLUX edit presets ignore masks. Weights use the
+/// FLUX.1 [dev] Non-Commercial License and need an explicit confirmation.
+pub const FLUX1_FILL_DEV: ModelPreset = ModelPreset {
+    id: "flux1-fill-dev",
+    label: "FLUX.1 Fill dev",
+    description: "20-step · inpainting · non-commercial",
+    files: &[
+        ModelFileSpec {
+            role: ModelRole::Diffusion,
+            rel_path: "diffusion/flux1-fill-dev-Q4_K_S.gguf",
+            url: "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q4_K_S.gguf",
+            approx_bytes: 6_809_920_800,
+        },
+        ModelFileSpec {
+            role: ModelRole::Vae,
+            rel_path: "vae/flux1-vae-bf16.safetensors",
+            url: "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo/resolve/main/vae/diffusion_pytorch_model.safetensors",
+            approx_bytes: 167_666_902,
+        },
+        ModelFileSpec {
+            role: ModelRole::TextEncoder,
+            rel_path: "text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+            url: "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+            approx_bytes: 2_900_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::ClipEncoder,
+            rel_path: "text_encoders/clip_l.safetensors",
+            url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+            approx_bytes: 246_000_000,
+        },
+        ModelFileSpec {
+            role: ModelRole::Preview,
+            rel_path: "vae/taef1.safetensors",
+            url: "https://huggingface.co/madebyollin/taef1/resolve/main/diffusion_pytorch_model.safetensors",
+            approx_bytes: 9_800_000,
+        },
+    ],
+    steps: 20,
+    cfg: 1.0,
+    sampler: Sampler::Euler,
+    default_width: 768,
+    default_height: 768,
+    supports_edit: false,
+    supports_inpaint: true,
+    max_references: 0,
+    size_step: 16,
+    sigmas: &[],
+    license: Some(ModelLicense {
+        name: "FLUX.1 [dev] Non-Commercial License",
+        holder: "Black Forest Labs",
+        url: "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev",
+        summary: "Non-commercial use only; commercial use needs a license from BFL.",
+        requires_acceptance: true,
+    }),
+    extra_args: &["--clip-on-cpu", "--guidance", "3.5"],
+};
+
 pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     id: "flux1-schnell",
     label: "FLUX.1 schnell",
@@ -396,6 +463,7 @@ pub const FLUX1_SCHNELL: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: false,
+    supports_inpaint: false,
     max_references: 0,
     size_step: 16,
     sigmas: &[],
@@ -460,6 +528,7 @@ pub const QWEN_IMAGE_2_1_TURBO: ModelPreset = ModelPreset {
     default_width: 768,
     default_height: 768,
     supports_edit: true,
+    supports_inpaint: false,
     max_references: 10,
     size_step: 32,
     // The Turbo schedule shipped with the model (qwen-image-2.1-turbo).
@@ -485,6 +554,7 @@ pub const PRESETS: &[ModelPreset] = &[
     FLUX3_KLEIN,
     FIBO2_EDIT_TURBO,
     QWEN_IMAGE_2_1_TURBO,
+    FLUX1_FILL_DEV,
 ];
 
 pub fn preset(id: &str) -> Option<&'static ModelPreset> {
@@ -673,6 +743,18 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/models/diffusion/flux-2-klein-4b-Q4_K_M.gguf")
+        );
+    }
+
+    #[test]
+    fn only_the_fill_preset_supports_inpainting() {
+        let fill = preset("flux1-fill-dev").unwrap();
+        assert!(fill.supports_inpaint);
+        assert!(
+            PRESETS
+                .iter()
+                .filter(|preset| preset.id != fill.id)
+                .all(|preset| !preset.supports_inpaint)
         );
     }
 }

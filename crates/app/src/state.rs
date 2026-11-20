@@ -10,6 +10,17 @@ pub(crate) struct AppState {
     pub display: Option<PathBuf>,
     /// Images passed to the model as `ref_images`, in prompt order.
     pub references: Vec<PathBuf>,
+    /// Masked inpaint prepared from the canvas, waiting for a prompt.
+    pub inpaint: Option<PendingInpaint>,
+}
+
+/// A source image plus the rasterised mask that should be repainted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingInpaint {
+    pub source: PathBuf,
+    pub mask: PathBuf,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl AppState {
@@ -17,29 +28,34 @@ impl AppState {
     pub fn new_image(&mut self) {
         self.display = None;
         self.references.clear();
+        self.inpaint = None;
     }
 
     /// Load an existing image as the only edit reference.
     pub fn load(&mut self, path: PathBuf) {
         self.display = Some(path.clone());
         self.references = vec![path];
+        self.inpaint = None;
     }
 
     /// Show an image without changing the edit references.
     pub fn select_display(&mut self, path: PathBuf) {
         self.display = Some(path);
+        self.inpaint = None;
     }
 
     /// Browse an image: show it and drop the edit references.
     pub fn preview(&mut self, path: PathBuf) {
         self.display = Some(path);
         self.references.clear();
+        self.inpaint = None;
     }
 
     /// Apply a finished generation.
     pub fn on_result(&mut self, path: PathBuf, was_edit: bool) {
         self.display = Some(path.clone());
         self.references = if was_edit { vec![path] } else { Vec::new() };
+        self.inpaint = None;
     }
 
     /// Whether at least one reference is selected.
@@ -147,15 +163,55 @@ mod tests {
     }
 
     #[test]
+    fn a_new_image_clears_a_pending_mask() {
+        let mut state = AppState {
+            inpaint: Some(PendingInpaint {
+                source: PathBuf::from("/tmp/a.png"),
+                mask: PathBuf::from("/tmp/mask.png"),
+                width: 64,
+                height: 64,
+            }),
+            ..Default::default()
+        };
+        state.new_image();
+        assert!(state.inpaint.is_none());
+    }
+
+    #[test]
+    fn loading_an_image_clears_a_pending_mask() {
+        let mut state = AppState {
+            inpaint: Some(PendingInpaint {
+                source: PathBuf::from("/tmp/a.png"),
+                mask: PathBuf::from("/tmp/mask.png"),
+                width: 64,
+                height: 64,
+            }),
+            ..Default::default()
+        };
+        state.preview(PathBuf::from("/tmp/b.png"));
+        assert!(state.inpaint.is_none());
+        state.inpaint = Some(PendingInpaint {
+            source: PathBuf::from("/tmp/b.png"),
+            mask: PathBuf::from("/tmp/mask.png"),
+            width: 64,
+            height: 64,
+        });
+        state.load(PathBuf::from("/tmp/c.png"));
+        assert!(state.inpaint.is_none());
+    }
+
+    #[test]
     fn undo_restores_crops_in_reverse_order() {
         let mut stack = UndoStack::default();
         let first = AppState {
             display: Some(PathBuf::from("/tmp/a.png")),
             references: Vec::new(),
+            inpaint: None,
         };
         let second = AppState {
             display: Some(PathBuf::from("/tmp/b.png")),
             references: vec![PathBuf::from("/tmp/b.png")],
+            inpaint: None,
         };
         stack.push(&first, (1.0, 2.0, 3.0, 4.0));
         stack.push(&second, (5.0, 6.0, 7.0, 8.0));

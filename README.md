@@ -90,6 +90,9 @@ Milestone 3 (packaged desktop app):
   `.gguf`, `.sft`) weights from `models/loras`, with per-weight strength and a
   live sidebar summary; active LoRAs apply to generations and effects and are
   recorded in PNG metadata
+- **inpainting and outpainting** with **FLUX.1 Fill dev**: paint a mask over
+  the canvas and describe the replacement, or extend the image to the sidebar
+  MP + ratio and inpaint the new border; results join the history chain
 - **manual adjustments** with brightness, contrast and saturation sliders and
   a live canvas preview; saving writes a new PNG that joins the history chain
   without re-running the model
@@ -129,6 +132,7 @@ Milestone 3 (packaged desktop app):
 | **FLUX.3 Image klein** | 6.3 GB | 16 | **254 s** | 5.0 GB |
 | **Fibo 2.0 Edit Turbo** | 9.2 GB | 4 | — | — |
 | **Qwen Image 2.1 Turbo** | 10.7 GB | 8 | **192 s** | 6.5 GB |
+| **FLUX.1 Fill dev** | 10.1 GB | 20 | — | — |
 | **FLUX.1 schnell** | 10.1 GB | 4 | — | — |
 
 FLUX.3 is the quality option (~3× slower on Maxwell); klein 4B is the fastest
@@ -138,6 +142,10 @@ alongside the GPU (it peaks at ~7.8 GB of VRAM with CPU offload) and runs about
 twice as slowly as klein 4B here. Fibo, klein 9B and FLUX.3 support
 reference-image editing; FLUX.1 schnell is text-to-image only. Fibo needs a
 vision projector (`--llm_vision`) and is slower than klein 4B.
+
+FLUX.1 Fill dev is the inpainting model. It is a 20-step non-commercial model
+and needs about 10 GB of weights; the mask and init image are sent to
+`sd-server`, which repaints only the masked region.
 
 Qwen Image 2.1 Turbo is the typography option: it renders long, small text
 correctly where the FLUX models drift, costs about 3× klein 4B at the same size,
@@ -165,6 +173,27 @@ wall time by less than 7% and raised VRAM by 0.4–0.8 GB.
 CUDA is 2–3× faster than CPU. **Vulkan is slower than CPU on Maxwell**, because
 the Vulkan backend has no cooperative-matrix path on sm_52; keep CUDA as the
 backend unless you are on a card/driver where Vulkan wins.
+
+## Inpainting and outpainting
+
+True masked inpainting needs an inpaint-capable model. The **FLUX.1 Fill dev**
+preset is included for that purpose; it is non-commercial and requires an
+explicit confirmation before download.
+
+- **Mask**: select FLUX.1 Fill dev, open an image, press the brush button,
+  paint over the region to replace, then press **Inpaint**. Describe the
+  replacement in the prompt and press Generate. The rest of the image is kept;
+  the mask is rasterised at the image's resolution and sent as a grayscale PNG.
+- **Outpaint**: press the extend button to build a canvas at the sidebar MP +
+  ratio, keep the source centred and mask the new border. Choose a wider or
+  taller target (for example 4:1) and describe what should fill the extension.
+- The mask and init image are copied into the job's queue folder, so the job
+  survives edits to the original files. Results use the `inpaint` history kind
+  and join the source's chain.
+
+Inpainting is slower than a 4-step edit: FLUX.1 Fill dev runs 20 steps and
+takes about 100 s for a 128² test on the reference Maxwell card; expect several
+minutes at 0.5–1 MP.
 
 ## Upscaling
 
@@ -268,6 +297,8 @@ without leaving the app.
 | Duplicate a queued prompt | copy button on a waiting queue row |
 | Recall a previous prompt | `Alt+Up` / `Alt+Down` in the composer |
 | Choose LoRAs | **LoRAs…** in the sidebar |
+| Inpaint an area | brush button over the canvas, paint, **Inpaint** |
+| Extend the canvas | extend button over the canvas (needs FLUX.1 Fill dev) |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
 | Preferences / downloads | gear button in the header bar |
@@ -350,6 +381,7 @@ Data locations:
 | `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
 | `~/.cache/flux-studio/sd-server.log` | backend server log |
 | `~/.cache/flux-studio/crops/` | cropped reference images |
+| `~/.cache/flux-studio/masks/` | temporary inpaint masks and outpaint canvases |
 | `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths, user effects |
 | `~/Pictures/Flux Studio/` | generated PNGs |
 
@@ -378,6 +410,12 @@ Data locations:
 - **FLUX.1 schnell** is **Apache-2.0**. The preset uses the
   [unsloth GGUF](https://huggingface.co/unsloth/FLUX.1-schnell-GGUF) for the
   transformer, a Q4_K_M T5-XXL encoder and the Apache-2.0 FLUX VAE.
+- **FLUX.1 Fill dev** weights use the **FLUX.1 [dev] Non-Commercial License**
+  and are for **non-commercial use only**; commercial use needs a license from
+  BFL ([model card](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev)).
+  The GGUF is [YarvixPA's quantization](https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF),
+  which inherits the same license, and the preset requires an explicit
+  confirmation before downloading.
 - **Qwen Image 2.1 Turbo** weights use the **Qwen Research License** and are
   for **non-commercial use only**; commercial use needs a separate licence from
   Alibaba Qwen ([license text](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)).

@@ -38,6 +38,8 @@ const QWEN_IMAGE_GGUF_URL: &str = "https://huggingface.co/unsloth/Qwen-Image-2.1
 const QWEN3_VL_8B_URL: &str = "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct";
 const FLUX1_SCHNELL_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.1-schnell";
 const SCHNELL_GGUF_URL: &str = "https://huggingface.co/unsloth/FLUX.1-schnell-GGUF";
+const FLUX1_FILL_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev";
+const FILL_GGUF_URL: &str = "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF";
 const T5_XXL_URL: &str = "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf";
 const CLIP_L_URL: &str = "https://huggingface.co/comfyanonymous/flux_text_encoders";
 const FLUX_VAE_URL: &str = "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo";
@@ -698,6 +700,16 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         FLUX1_SCHNELL_URL,
     ));
     credits_group.add(&link_row(
+        "FLUX.1 Fill dev",
+        "Black Forest Labs · FLUX.1 [dev] Non-Commercial License",
+        FLUX1_FILL_URL,
+    ));
+    credits_group.add(&link_row(
+        "FLUX.1 Fill GGUF quantization",
+        "YarvixPA · follows the FLUX.1 [dev] license",
+        FILL_GGUF_URL,
+    ));
+    credits_group.add(&link_row(
         "Fibo 2.0 Edit Turbo",
         "BRIA AI · CC BY-NC 4.0 (non-commercial)",
         FIBO_URL,
@@ -831,6 +843,11 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
         "FLUX.1 schnell weights",
         "Apache-2.0",
         FLUX1_SCHNELL_URL,
+    ));
+    legal_group.add(&link_row(
+        "FLUX.1 Fill dev weights",
+        "FLUX.1 [dev] Non-Commercial License · non-commercial use only",
+        FLUX1_FILL_URL,
     ));
     legal_group.add(&link_row(
         "Fibo 2.0 Edit Turbo weights",

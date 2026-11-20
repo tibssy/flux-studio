@@ -5,6 +5,10 @@ rough edges.
 
 ## Unreleased
 
+- **Inpainting and outpainting**: a **FLUX.1 Fill dev** preset (20 steps,
+  non-commercial) with a mask brush, an **Inpaint** action and canvas
+  extension to the sidebar MP + ratio. The mask and init image are sent to the
+  server so only the painted region changes.
 - **LoRA support**: a **LoRAs…** dialog lists weights from `models/loras`,
   with per-weight strength and a sidebar summary; active LoRAs apply to
   generations and effects and are recorded in PNG metadata.

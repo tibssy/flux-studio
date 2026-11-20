@@ -5,6 +5,7 @@
 #   ./scripts/fetch-models.sh flux2-klein-9b  # FLUX.2 klein 9B (~11 GB)
 #   ./scripts/fetch-models.sh flux3-klein     # FLUX.3 Image klein (~6.3 GB)
 #   ./scripts/fetch-models.sh qwen-image-2-1-turbo  # Qwen Image 2.1 Turbo (~10.7 GB)
+#   ./scripts/fetch-models.sh flux1-fill-dev  # FLUX.1 Fill dev, inpainting (~10 GB)
 #   ./scripts/fetch-models.sh upscalers       # five upscaler weights (~150 MB)
 #   ./scripts/fetch-models.sh all             # all presets and upscalers
 set -euo pipefail
@@ -61,6 +62,19 @@ fetch_qwen_image_2_1_turbo() {
     models/vae/qwen_image_2.1_vae_bf16.safetensors
 }
 
+fetch_flux1_fill() {
+  get "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q4_K_S.gguf" \
+    models/diffusion/flux1-fill-dev-Q4_K_S.gguf
+  get "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q4_K_M.gguf" \
+    models/text_encoders/t5-v1_1-xxl-encoder-Q4_K_M.gguf
+  get "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors" \
+    models/text_encoders/clip_l.safetensors
+  get "https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo/resolve/main/vae/diffusion_pytorch_model.safetensors" \
+    models/vae/flux1-vae-bf16.safetensors
+  get "https://huggingface.co/madebyollin/taef1/resolve/main/diffusion_pytorch_model.safetensors" \
+    models/vae/taef1.safetensors
+}
+
 fetch_upscalers() {
   get "https://huggingface.co/Phips/4xNomos2_hq_mosr/resolve/main/4xNomos2_hq_mosr.pth" \
     models/upscalers/4xNomos2_hq_mosr.pth
@@ -79,16 +93,18 @@ case "${1:-flux2-klein-4b}" in
   flux2-klein-9b) fetch_flux2_klein_9b ;;
   flux3-klein) fetch_flux3_klein ;;
   qwen-image-2-1-turbo) fetch_qwen_image_2_1_turbo ;;
+  flux1-fill-dev) fetch_flux1_fill ;;
   upscalers) fetch_upscalers ;;
   all)
     fetch_flux2_klein
     fetch_flux2_klein_9b
     fetch_flux3_klein
     fetch_qwen_image_2_1_turbo
+    fetch_flux1_fill
     fetch_upscalers
     ;;
   *)
-    echo "unknown preset: $1 (expected flux2-klein-4b, flux2-klein-9b, flux3-klein, qwen-image-2-1-turbo, upscalers or all)" >&2
+    echo "unknown preset: $1 (expected flux2-klein-4b, flux2-klein-9b, flux3-klein, qwen-image-2-1-turbo, flux1-fill-dev, upscalers or all)" >&2
     exit 1
     ;;
 esac

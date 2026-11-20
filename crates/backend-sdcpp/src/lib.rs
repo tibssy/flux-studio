@@ -290,6 +290,15 @@ pub fn build_args(
         args.push(schedule.into());
     }
 
+    if let Some(inpaint) = &request.inpaint {
+        args.push("-i".into());
+        args.push(inpaint.init_image.clone().into_os_string());
+        args.push("--mask".into());
+        args.push(inpaint.mask_image.clone().into_os_string());
+        args.push("--strength".into());
+        args.push(format!("{:.2}", inpaint.strength).into());
+    }
+
     for arg in preset.extra_args {
         args.push((*arg).into());
     }
@@ -416,6 +425,7 @@ mod tests {
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
             loras: Vec::new(),
+            inpaint: None,
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -452,6 +462,7 @@ mod tests {
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
             loras: Vec::new(),
+            inpaint: None,
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -497,6 +508,7 @@ mod tests {
             offload: true,
             reference_images: Vec::new(),
             loras: Vec::new(),
+            inpaint: None,
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -533,6 +545,7 @@ mod tests {
             offload: true,
             reference_images: Vec::new(),
             loras: Vec::new(),
+            inpaint: None,
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -571,6 +584,7 @@ mod tests {
                 path: "styles/watercolor.safetensors".into(),
                 weight: 0.8,
             }],
+            inpaint: None,
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -583,5 +597,38 @@ mod tests {
             args.windows(2)
                 .any(|w| w == ["--lora-model-dir", "/models/loras"])
         );
+    }
+
+    #[test]
+    fn passes_inpainting_inputs_to_the_cli() {
+        let preset = &flux_core::preset::FLUX1_FILL_DEV;
+        let request = GenerateRequest {
+            preset_id: preset.id.into(),
+            prompt: "a red hat".into(),
+            width: 512,
+            height: 512,
+            steps: preset.steps,
+            cfg: preset.cfg,
+            sigmas: Vec::new(),
+            seed: 1,
+            sampler: preset.sampler,
+            offload: true,
+            reference_images: Vec::new(),
+            loras: Vec::new(),
+            inpaint: Some(flux_core::InpaintInput {
+                init_image: "/tmp/in.png".into(),
+                mask_image: "/tmp/mask.png".into(),
+                strength: 1.0,
+            }),
+            previews: false,
+            output: "/tmp/out.png".into(),
+        };
+        let args: Vec<String> = build_args(Path::new("/models"), preset, &request)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.windows(2).any(|w| w == ["-i", "/tmp/in.png"]));
+        assert!(args.windows(2).any(|w| w == ["--mask", "/tmp/mask.png"]));
+        assert!(args.windows(2).any(|w| w == ["--strength", "1.00"]));
     }
 }
