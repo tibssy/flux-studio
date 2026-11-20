@@ -57,7 +57,9 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
         subtitle.push_str(" · paused");
     }
     ui.queue_expander.set_subtitle(&subtitle);
-    ui.queue_count.set_text(&pending_count.to_string());
+    // The pill counts every task in the section, including the running one.
+    let task_count = pending_count + usize::from(running.is_some());
+    ui.queue_count.set_text(&task_count.to_string());
 
     let waiting_text = match pending_count {
         0 => String::new(),
