@@ -184,6 +184,16 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
         );
     }
 
+    // Rows that are no longer rendered must not stay selected, or a bulk delete
+    // would remove images the user cannot see.
+    if ui.history_selection_mode.get() {
+        let visible: HashSet<i64> = visible_ids(ui).into_iter().collect();
+        ui.history_selected
+            .borrow_mut()
+            .retain(|id| visible.contains(id));
+        crate::update_selection_ui(ui);
+    }
+
     if let Some(adjustment) = adjustment {
         // Restore immediately and again after the new rows have been laid out.
         adjustment.set_value(offset);
@@ -234,6 +244,22 @@ pub(crate) fn add_row(
     row_box.set_margin_bottom(6);
     row_box.set_margin_start(8 + depth as i32 * 16);
     row_box.set_margin_end(8);
+
+    let selecting = ui.history_selection_mode.get();
+    if selecting {
+        let check = gtk::CheckButton::new();
+        check.set_active(ui.history_selected.borrow().contains(&entry.id));
+        check.set_valign(gtk::Align::Center);
+        check.set_tooltip_text(Some("Select this image"));
+        {
+            let ui = ui.clone();
+            let id = entry.id;
+            check.connect_toggled(move |check| {
+                crate::set_history_selected(&ui, id, check.is_active());
+            });
+        }
+        row_box.append(&check);
+    }
 
     if depth > 0 {
         // Thin guide that makes a chain read as one block in the sidebar.
@@ -306,6 +332,7 @@ pub(crate) fn add_row(
         .valign(gtk::Align::Center)
         .css_classes(["flat", "circular"])
         .build();
+    favorite_button.set_visible(!selecting);
     let info_button = gtk::Button::builder()
         .icon_name("dialog-information-symbolic")
         .tooltip_text("Details")
@@ -322,6 +349,7 @@ pub(crate) fn add_row(
     }
     actions.append(&info_button);
     actions.append(&delete_button);
+    actions.set_visible(!selecting);
 
     row_box.append(&thumbnail);
     row_box.append(&text);
@@ -429,13 +457,15 @@ pub(crate) fn add_row(
     ui.history_list.append(&row);
 }
 
-/// Restore the prompt, model, style, size and seed recorded with an entry.
+/// Restore the model, style, size and seed recorded with an entry.
+///
+/// The prompt is deliberately left alone: the composer starts empty and past
+/// prompts are loaded from the prompt picker.
 pub(crate) fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     if matches!(entry.kind.as_str(), "upscale" | "adjust" | "import") {
         return;
     }
 
-    ui.prompt.buffer().set_text(&entry.prompt);
     ui.seed_entry.set_text(&entry.seed);
 
     if let Some(index) = ui
@@ -712,7 +742,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let _ = std::fs::remove_file(thumb_path(entry.id));
 
     ui.entries.borrow_mut().retain(|item| item.id != entry.id);
-    crate::reload_history(ui, ui.generating.get() || ui.upscaling.get());
+    crate::reload_history(ui, true);
 
     let path = PathBuf::from(&entry.image_path);
     let is_active = {
@@ -726,7 +756,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
         ui.status.set_text("Image deleted");
     } else {
         if let Some(display) = ui.state.borrow().display.clone() {
-            highlight(ui, &display);
+            select_without_reveal(ui, &display);
         }
         update_image_actions(ui);
     }
@@ -747,6 +777,22 @@ fn row_by_id(list: &gtk::ListBox, id: i64) -> Option<gtk::ListBoxRow> {
         child = next;
     }
     None
+}
+
+/// Ids of the rows currently rendered in the sidebar.
+pub(crate) fn visible_ids(ui: &Ui) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let mut child = ui.history_list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>()
+            && let Ok(id) = row.widget_name().parse::<i64>()
+        {
+            ids.push(id);
+        }
+        child = next;
+    }
+    ids
 }
 
 /// Highlight the history row for `path` without scrolling to it.

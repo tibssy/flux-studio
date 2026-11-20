@@ -16,7 +16,7 @@ mod state;
 mod upscale_dialog;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -74,6 +74,8 @@ pub(crate) struct Ui {
     /// Scaled 48×48 textures for the reference strip, keyed by source path.
     pub reference_thumbnails: RefCell<HashMap<PathBuf, gdk::Texture>>,
     pub prompt: gtk::TextView,
+    pub prompt_history_button: gtk::MenuButton,
+    pub prompt_history_list: gtk::ListBox,
     pub generate: gtk::Button,
     pub cancel: gtk::Button,
     pub progress: gtk::ProgressBar,
@@ -169,8 +171,19 @@ pub(crate) struct Ui {
     pub live_preview: RefCell<Option<gdk::Texture>>,
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
+    pub select_button: gtk::Button,
+    pub search_button: gtk::ToggleButton,
+    pub selection_bar: gtk::Box,
+    pub selection_label: gtk::Label,
+    pub selection_all: gtk::Button,
+    pub selection_delete: gtk::Button,
+    pub selection_cancel: gtk::Button,
+    pub history_selection_mode: Cell<bool>,
+    pub history_selected: RefCell<HashSet<i64>>,
     pub history_search: gtk::SearchEntry,
-    pub history_filter: gtk::DropDown,
+    pub history_filter: Rc<Cell<u32>>,
+    pub history_filter_button: gtk::MenuButton,
+    pub history_filter_buttons: Vec<gtk::CheckButton>,
     pub history_empty: gtk::Label,
     pub history_debounce: RefCell<Option<glib::SourceId>>,
     pub entries: RefCell<Vec<Generation>>,
@@ -257,6 +270,18 @@ fn install_styles() {
          }
          .compare-overlay {
              background-color: @window_bg_color;
+         }
+         .selection-bar {
+             padding: 4px 6px;
+             border-radius: 8px;
+             background-color: alpha(@accent_bg_color, 0.12);
+         }
+         .filter-active {
+             color: @accent_color;
+         }
+         .prompt-history {
+             background-color: alpha(@window_bg_color, 0.86);
+             border-radius: 999px;
          }
          .queue-bubble {
              background-image: none;
@@ -445,6 +470,8 @@ fn build_ui(app: &adw::Application) {
         reference_add: view.reference_add,
         reference_thumbnails: RefCell::new(HashMap::new()),
         prompt: view.prompt,
+        prompt_history_button: view.prompt_history_button,
+        prompt_history_list: view.prompt_history_list,
         generate: view.generate,
         cancel: view.cancel,
         progress: view.progress,
@@ -526,8 +553,19 @@ fn build_ui(app: &adw::Application) {
         live_preview: RefCell::new(None),
         new_button: side.new_button,
         open_button: side.open_button,
+        select_button: side.select_button,
+        search_button: side.search_button,
+        selection_bar: side.selection_bar,
+        selection_label: side.selection_label,
+        selection_all: side.selection_all,
+        selection_delete: side.selection_delete,
+        selection_cancel: side.selection_cancel,
+        history_selection_mode: Cell::new(false),
+        history_selected: RefCell::new(HashSet::new()),
         history_search: side.history_search,
         history_filter: side.history_filter,
+        history_filter_button: side.history_filter_button,
+        history_filter_buttons: side.history_filter_buttons,
         history_empty: side.history_empty,
         history_debounce: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
@@ -741,7 +779,46 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.select_button
+            .clone()
+            .connect_clicked(move |_| enter_selection_mode(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.search_button.clone().connect_toggled(move |button| {
+            let visible = button.is_active();
+            ui.history_search.set_visible(visible);
+            if visible {
+                ui.history_search.grab_focus();
+            } else if !ui.history_search.text().is_empty() {
+                ui.history_search.set_text("");
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_cancel
+            .clone()
+            .connect_clicked(move |_| exit_selection_mode(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_all
+            .clone()
+            .connect_clicked(move |_| toggle_select_all(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_delete
+            .clone()
+            .connect_clicked(move |_| confirm_delete_selected(&ui));
+    }
+    {
+        let ui = ui.clone();
         ui.history_search.clone().connect_search_changed(move |_| {
+            if ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+            }
             if let Some(source) = ui.history_debounce.borrow_mut().take() {
                 source.remove();
             }
@@ -756,9 +833,38 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
-        ui.history_filter
-            .clone()
-            .connect_selected_notify(move |_| reload_history(&ui, true));
+        ui.history_search.clone().connect_stop_search(move |_| {
+            ui.search_button.set_active(false);
+        });
+    }
+    for (index, check) in ui.history_filter_buttons.iter().cloned().enumerate() {
+        {
+            let menu = ui.history_filter_button.clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| menu.popdown());
+            check.add_controller(gesture);
+        }
+        let ui = ui.clone();
+        check.connect_toggled(move |check| {
+            if !check.is_active() {
+                return;
+            }
+            ui.history_filter.set(index as u32);
+            ui.history_filter_button.set_tooltip_text(Some(&format!(
+                "Filter history: {}",
+                crate::history::FILTER_LABELS[index]
+            )));
+            if index == 0 {
+                ui.history_filter_button.remove_css_class("filter-active");
+            } else {
+                ui.history_filter_button.add_css_class("filter-active");
+            }
+            ui.history_filter_button.popdown();
+            if ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+            }
+            reload_history(&ui, true);
+        });
     }
     {
         let ui = ui.clone();
@@ -846,6 +952,29 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.prompt_history_button
+            .clone()
+            .connect_active_notify(move |button| {
+                if button.is_active() {
+                    rebuild_prompt_history(&ui);
+                }
+            });
+    }
+    {
+        let ui = ui.clone();
+        ui.prompt_history_list
+            .clone()
+            .connect_row_activated(move |_, row| {
+                let prompt = row.widget_name().to_string();
+                if prompt.is_empty() {
+                    return;
+                }
+                load_prompt_from_history(&ui, &prompt);
+                ui.prompt_history_button.popdown();
+            });
+    }
+    {
+        let ui = ui.clone();
         ui.batch_spin.clone().connect_value_changed(move |spin| {
             let value = spin.value().round().clamp(1.0, 4.0) as u32;
             spin.set_value(value as f64);
@@ -868,6 +997,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             let Ok(id) = row.widget_name().parse::<i64>() else {
                 return;
             };
+            if ui.history_selection_mode.get() {
+                let selected = !ui.history_selected.borrow().contains(&id);
+                set_history_selected(&ui, id, selected);
+                history_view::rebuild_preserving_scroll(&ui);
+                return;
+            }
             let entry = ui
                 .entries
                 .borrow()
@@ -1174,6 +1309,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let split = ui.split.clone();
         key_controller.connect_key_pressed(move |_, key, _, state| {
+            if key == gdk::Key::Escape && ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+                return glib::Propagation::Stop;
+            }
             if key == gdk::Key::Escape && ui.crop_mode.get() {
                 ui.crop_button.set_active(false);
                 return glib::Propagation::Stop;
@@ -1208,6 +1347,8 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::f | gdk::Key::F => {
                     split.set_show_sidebar(true);
+                    ui.search_button.set_active(true);
+                    ui.history_search.set_visible(true);
                     ui.history_search.grab_focus();
                     glib::Propagation::Stop
                 }
@@ -2510,7 +2651,7 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
     cancel_zoom(ui);
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
-    ui.prompt.buffer().set_text("");
+    clear_prompt(ui);
     update_image_view(ui);
     show_composer(ui, true);
     ui.status.set_text("New image");
@@ -3081,6 +3222,79 @@ fn remember_prompt(ui: &Rc<Ui>, prompt: &str) {
     }
 }
 
+/// Rebuild the prompt picker from the saved history, newest first.
+fn rebuild_prompt_history(ui: &Rc<Ui>) {
+    while let Some(child) = ui.prompt_history_list.first_child() {
+        ui.prompt_history_list.remove(&child);
+    }
+    let history = ui.config.borrow().prompt_history.clone();
+    if history.is_empty() {
+        let label = gtk::Label::builder()
+            .label("No saved prompts yet.")
+            .xalign(0.0)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(12)
+            .margin_end(12)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        let row = gtk::ListBoxRow::new();
+        row.set_activatable(false);
+        row.set_selectable(false);
+        row.set_child(Some(&label));
+        ui.prompt_history_list.append(&row);
+        return;
+    }
+
+    for prompt in history.iter().rev() {
+        let preview = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let label = gtk::Label::builder()
+            .label(preview)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(46)
+            .margin_top(7)
+            .margin_bottom(7)
+            .margin_start(10)
+            .margin_end(10)
+            .build();
+        let row = gtk::ListBoxRow::new();
+        row.set_widget_name(prompt);
+        row.set_tooltip_text(Some(prompt));
+        row.set_child(Some(&label));
+        ui.prompt_history_list.append(&row);
+    }
+}
+
+/// Load a prompt picked from the history popover.
+fn load_prompt_from_history(ui: &Rc<Ui>, prompt: &str) {
+    let draft = current_prompt(ui);
+    *ui.prompt_draft.borrow_mut() = draft;
+    let index = ui
+        .config
+        .borrow()
+        .prompt_history
+        .iter()
+        .rposition(|entry| entry == prompt);
+
+    ui.prompt_edit_guard.set(true);
+    let buffer = ui.prompt.buffer();
+    buffer.set_text(prompt);
+    ui.prompt_history_index.set(index);
+    ui.prompt_edit_guard.set(false);
+    buffer.place_cursor(&buffer.end_iter());
+    ui.prompt.grab_focus();
+}
+
+/// Empty the composer so a finished request never leaves its prompt behind.
+fn clear_prompt(ui: &Rc<Ui>) {
+    ui.prompt_edit_guard.set(true);
+    ui.prompt.buffer().set_text("");
+    ui.prompt_edit_guard.set(false);
+    ui.prompt_history_index.set(None);
+    ui.prompt_draft.borrow_mut().clear();
+}
+
 /// Cycle through submitted prompts; `older` walks towards the oldest entry.
 fn navigate_prompt_history(ui: &Rc<Ui>, older: bool) {
     let history = ui.config.borrow().prompt_history.clone();
@@ -3481,6 +3695,11 @@ fn generate(
     show_composer(ui, false);
     remember_prompt(ui, &base_prompt);
     ui.prompt_history_index.set(None);
+    // Only empty the field if it still holds the prompt that was just sent;
+    // a variation or effect must not wipe an unrelated draft.
+    if current_prompt(ui).trim() == base_prompt {
+        clear_prompt(ui);
+    }
     ui.status.set_text(&match (queued, was_busy) {
         (1, true) => "Added to the queue".to_string(),
         (1, false) => "Starting…".to_string(),
@@ -4758,6 +4977,217 @@ pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     true
 }
 
+pub(crate) fn enter_selection_mode(ui: &Rc<Ui>) {
+    if ui.history_selection_mode.get() {
+        return;
+    }
+    if ui.entries.borrow().is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("There are no images to select."));
+        return;
+    }
+    ui.history_selection_mode.set(true);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(true);
+    ui.select_button.set_sensitive(false);
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+    ui.status.set_text("Select images to delete");
+}
+
+pub(crate) fn exit_selection_mode(ui: &Rc<Ui>) {
+    if !ui.history_selection_mode.get() {
+        return;
+    }
+    ui.history_selection_mode.set(false);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(false);
+    ui.select_button.set_sensitive(true);
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+    ui.status.set_text("Selection cancelled");
+}
+
+pub(crate) fn set_history_selected(ui: &Rc<Ui>, id: i64, selected: bool) {
+    {
+        let mut selected_ids = ui.history_selected.borrow_mut();
+        if selected {
+            selected_ids.insert(id);
+        } else {
+            selected_ids.remove(&id);
+        }
+    }
+    update_selection_ui(ui);
+}
+
+pub(crate) fn update_selection_ui(ui: &Rc<Ui>) {
+    let count = ui.history_selected.borrow().len();
+    ui.selection_label.set_text(&match count {
+        0 => "0 selected".to_string(),
+        1 => "1 selected".to_string(),
+        count => format!("{count} selected"),
+    });
+    ui.selection_delete.set_sensitive(count > 0);
+
+    let visible = history_view::visible_ids(ui);
+    let all = !visible.is_empty() && {
+        let selected = ui.history_selected.borrow();
+        visible.iter().all(|id| selected.contains(id))
+    };
+    ui.selection_all.set_label(if all { "None" } else { "All" });
+    ui.selection_all.set_tooltip_text(Some(if all {
+        "Clear the selection"
+    } else {
+        "Select every visible image"
+    }));
+}
+
+fn toggle_select_all(ui: &Rc<Ui>) {
+    let visible = history_view::visible_ids(ui);
+    if visible.is_empty() {
+        return;
+    }
+    let all = {
+        let selected = ui.history_selected.borrow();
+        visible.iter().all(|id| selected.contains(id))
+    };
+    {
+        let mut selected = ui.history_selected.borrow_mut();
+        if all {
+            selected.clear();
+        } else {
+            selected.extend(visible);
+        }
+    }
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+}
+
+fn confirm_delete_selected(ui: &Rc<Ui>) {
+    let selected: Vec<Generation> = ui
+        .entries
+        .borrow()
+        .iter()
+        .filter(|entry| ui.history_selected.borrow().contains(&entry.id))
+        .cloned()
+        .collect();
+    if selected.is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("Select at least one image."));
+        return;
+    }
+    let mut locked = 0;
+    let deletable: Vec<Generation> = selected
+        .iter()
+        .filter(|entry| {
+            let is_locked = history_entry_locked(ui, Path::new(&entry.image_path));
+            if is_locked {
+                locked += 1;
+            }
+            !is_locked
+        })
+        .cloned()
+        .collect();
+    if deletable.is_empty() {
+        ui.toast.add_toast(adw::Toast::new(
+            "Every selected image is used by a queued job.",
+        ));
+        return;
+    }
+
+    let mut body = format!(
+        "This permanently removes {} image{} and their files.",
+        deletable.len(),
+        if deletable.len() == 1 { "" } else { "s" }
+    );
+    if locked > 0 {
+        body.push_str(&format!(
+            " {locked} selected image{} used by queued jobs will be kept.",
+            if locked == 1 { "" } else { "s" }
+        ));
+    }
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!(
+            "Delete {} image{}?",
+            deletable.len(),
+            if deletable.len() == 1 { "" } else { "s" }
+        ))
+        .body(body)
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    {
+        let ui = ui.clone();
+        dialog.connect_response(Some("delete"), move |_, _| {
+            delete_selected_images(&ui, &deletable, locked);
+        });
+    }
+    dialog.present(Some(&ui.window));
+}
+
+fn delete_selected_images(ui: &Rc<Ui>, entries: &[Generation], skipped: usize) {
+    let mut deleted_paths: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut failed = 0;
+    for entry in entries {
+        if let Err(error) = ui.history.borrow().delete(entry.id) {
+            tracing::warn!(%error, id = entry.id, "failed to delete history entry");
+            failed += 1;
+            continue;
+        }
+        let path = std::path::PathBuf::from(&entry.image_path);
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, path = %path.display(), "failed to remove image");
+        }
+        let _ = std::fs::remove_file(thumb_path(entry.id));
+        deleted_paths.insert(path);
+    }
+
+    {
+        let mut state = ui.state.borrow_mut();
+        if state
+            .display
+            .as_ref()
+            .is_some_and(|display| deleted_paths.contains(display))
+        {
+            state.new_image();
+        }
+        state
+            .references
+            .retain(|reference| !deleted_paths.contains(reference));
+    }
+
+    ui.history_selection_mode.set(false);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(false);
+    ui.select_button.set_sensitive(true);
+    reload_history(ui, true);
+    update_image_view(ui);
+    update_selection_ui(ui);
+
+    let deleted = deleted_paths.len();
+    ui.status.set_text(&format!(
+        "Deleted {deleted} image{}",
+        if deleted == 1 { "" } else { "s" }
+    ));
+    let mut message = format!(
+        "Deleted {deleted} image{}.",
+        if deleted == 1 { "" } else { "s" }
+    );
+    if skipped > 0 {
+        message.push_str(&format!(" {skipped} used by queued jobs were kept."));
+    }
+    if failed > 0 {
+        message.push_str(&format!(" {failed} could not be deleted."));
+    }
+    ui.toast.add_toast(adw::Toast::new(&message));
+}
+
 /// The history entry whose image is on the canvas, if any.
 fn current_history_entry(ui: &Ui) -> Option<Generation> {
     let display = ui.state.borrow().display.clone()?;
@@ -5066,7 +5496,7 @@ pub(crate) fn start_upscale(
 /// Whether a search term or kind filter is narrowing the History list.
 pub(crate) fn history_filter_active(ui: &Ui) -> bool {
     !ui.history_search.text().trim().is_empty()
-        || crate::history::HistoryFilter::from_index(ui.history_filter.selected())
+        || crate::history::HistoryFilter::from_index(ui.history_filter.get())
             != crate::history::HistoryFilter::All
 }
 
@@ -5076,7 +5506,7 @@ pub(crate) fn history_filter_active(ui: &Ui) -> bool {
 /// background jobs and favorite toggles should do.
 pub(crate) fn reload_history(ui: &Rc<Ui>, preserve_scroll: bool) {
     let query = ui.history_search.text().to_string();
-    let filter = crate::history::HistoryFilter::from_index(ui.history_filter.selected());
+    let filter = crate::history::HistoryFilter::from_index(ui.history_filter.get());
     let filtered = !query.trim().is_empty() || filter != crate::history::HistoryFilter::All;
 
     let result = if filtered {
