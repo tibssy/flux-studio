@@ -222,7 +222,13 @@ active count is shown next to the button, and the weights are embedded in the
 PNG metadata.
 
 LoRAs are model-specific: use weights trained for the active model family
-(FLUX, Qwen, …). An incompatible weight fails when the server loads it.
+(FLUX, Qwen, …). An incompatible weight is reported when a job runs, and the
+image is generated without it.
+
+The dialog validates safetensors headers, so a truncated download is flagged
+as **Incomplete file** and cannot be enabled. If the backend still refuses a
+weight (for example because it was trained for another architecture), the
+finished job shows a warning naming the file.
 
 ## Day/night helper
 

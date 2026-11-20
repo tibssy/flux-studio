@@ -5,6 +5,12 @@ rough edges.
 
 ## Unreleased
 
+- **LoRA validation**: a weight that cannot load is flagged in the **LoRAs…**
+  dialog (with the reason, e.g. an incomplete download) and cannot be enabled.
+  A job that would use a broken weight is stopped with a clear message instead
+  of generating without it.
+- **Failed LoRA warning**: if the backend rejects a weight at load time, the
+  result now says so instead of silently looking like a LoRA with no effect.
 - **LoRA support**: a **LoRAs…** dialog lists weights from `models/loras`,
   with per-weight strength and a sidebar summary; active LoRAs apply to
   generations and effects and are recorded in PNG metadata.
