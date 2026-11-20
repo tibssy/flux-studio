@@ -4492,6 +4492,9 @@ fn finish_job(ui: &Rc<Ui>) {
     }
     refresh_model(ui);
     queue_view::rebuild(ui);
+    // The finished job no longer references the parent image, so its delete
+    // button can come back now.
+    refresh_history_locks(ui);
     update_image_actions(ui);
 }
 
