@@ -182,6 +182,7 @@ pub(crate) struct Ui {
     pub history_selection_mode: Cell<bool>,
     pub history_selected: RefCell<HashSet<i64>>,
     pub history_search: gtk::SearchEntry,
+    pub history_search_revealer: gtk::Revealer,
     pub history_filter: Rc<Cell<u32>>,
     pub history_filter_button: gtk::MenuButton,
     pub history_filter_buttons: Vec<gtk::CheckButton>,
@@ -592,6 +593,7 @@ fn build_ui(app: &adw::Application) {
         history_selection_mode: Cell::new(false),
         history_selected: RefCell::new(HashSet::new()),
         history_search: side.history_search,
+        history_search_revealer: side.history_search_revealer,
         history_filter: side.history_filter,
         history_filter_button: side.history_filter_button,
         history_filter_buttons: side.history_filter_buttons,
@@ -831,11 +833,23 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         ui.search_button.clone().connect_toggled(move |button| {
             let visible = button.is_active();
-            ui.history_search.set_visible(visible);
+            ui.history_search_revealer.set_reveal_child(visible);
+            ui.history_search.set_can_focus(visible);
             if visible {
-                ui.history_search.grab_focus();
+                // Focus once the revealer has made the entry focusable.
+                let entry = ui.history_search.clone();
+                glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                    entry.grab_focus();
+                });
             } else if !ui.history_search.text().is_empty() {
-                ui.history_search.set_text("");
+                // Clear after the field has slid away, so the list does not
+                // jump while the animation is still running.
+                let ui = ui.clone();
+                glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                    if !ui.search_button.is_active() {
+                        ui.history_search.set_text("");
+                    }
+                });
             }
         });
     }
@@ -1391,9 +1405,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::f | gdk::Key::F => {
                     split.set_show_sidebar(true);
-                    ui.search_button.set_active(true);
-                    ui.history_search.set_visible(true);
-                    ui.history_search.grab_focus();
+                    if ui.search_button.is_active() {
+                        ui.history_search.grab_focus();
+                    } else {
+                        ui.search_button.set_active(true);
+                    }
                     glib::Propagation::Stop
                 }
                 gdk::Key::n | gdk::Key::N => {

@@ -35,6 +35,7 @@ pub(crate) struct Sidebar {
     pub selection_delete: gtk::Button,
     pub selection_cancel: gtk::Button,
     pub history_search: gtk::SearchEntry,
+    pub history_search_revealer: gtk::Revealer,
     pub history_filter: Rc<Cell<u32>>,
     pub history_filter_button: gtk::MenuButton,
     pub history_filter_buttons: Vec<gtk::CheckButton>,
@@ -335,9 +336,14 @@ pub(crate) fn build(
     let history_search = gtk::SearchEntry::builder()
         .placeholder_text("Search history")
         .hexpand(true)
-        .visible(false)
         .build();
     history_search.set_tooltip_text(Some("Search prompts, models and seeds (Ctrl+F)"));
+    let history_search_revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(180)
+        .reveal_child(false)
+        .child(&history_search)
+        .build();
 
     let history_empty = gtk::Label::builder()
         .label("No images match.")
@@ -433,7 +439,7 @@ pub(crate) fn build(
     root.append(&separator);
     root.append(&queue_box);
     root.append(&history_header);
-    root.append(&history_search);
+    root.append(&history_search_revealer);
     root.append(&selection_bar);
     root.append(&history_empty);
     root.append(&history_scroller);
@@ -467,6 +473,7 @@ pub(crate) fn build(
         selection_delete,
         selection_cancel,
         history_search,
+        history_search_revealer,
         history_filter: Rc::new(Cell::new(0)),
         history_filter_button,
         history_filter_buttons,
