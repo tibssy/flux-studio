@@ -74,6 +74,8 @@ pub(crate) struct Ui {
     /// Scaled 48×48 textures for the reference strip, keyed by source path.
     pub reference_thumbnails: RefCell<HashMap<PathBuf, gdk::Texture>>,
     pub prompt: gtk::TextView,
+    pub prompt_history_button: gtk::MenuButton,
+    pub prompt_history_list: gtk::ListBox,
     pub generate: gtk::Button,
     pub cancel: gtk::Button,
     pub progress: gtk::ProgressBar,
@@ -170,6 +172,7 @@ pub(crate) struct Ui {
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
     pub select_button: gtk::Button,
+    pub search_button: gtk::ToggleButton,
     pub selection_bar: gtk::Box,
     pub selection_label: gtk::Label,
     pub selection_all: gtk::Button,
@@ -275,6 +278,10 @@ fn install_styles() {
          }
          .filter-active {
              color: @accent_color;
+         }
+         .prompt-history {
+             background-color: alpha(@window_bg_color, 0.86);
+             border-radius: 999px;
          }
          .queue-bubble {
              background-image: none;
@@ -463,6 +470,8 @@ fn build_ui(app: &adw::Application) {
         reference_add: view.reference_add,
         reference_thumbnails: RefCell::new(HashMap::new()),
         prompt: view.prompt,
+        prompt_history_button: view.prompt_history_button,
+        prompt_history_list: view.prompt_history_list,
         generate: view.generate,
         cancel: view.cancel,
         progress: view.progress,
@@ -545,6 +554,7 @@ fn build_ui(app: &adw::Application) {
         new_button: side.new_button,
         open_button: side.open_button,
         select_button: side.select_button,
+        search_button: side.search_button,
         selection_bar: side.selection_bar,
         selection_label: side.selection_label,
         selection_all: side.selection_all,
@@ -775,6 +785,18 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.search_button.clone().connect_toggled(move |button| {
+            let visible = button.is_active();
+            ui.history_search.set_visible(visible);
+            if visible {
+                ui.history_search.grab_focus();
+            } else if !ui.history_search.text().is_empty() {
+                ui.history_search.set_text("");
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
         ui.selection_cancel
             .clone()
             .connect_clicked(move |_| exit_selection_mode(&ui));
@@ -807,6 +829,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 reload_history(&inner, true);
             });
             *ui.history_debounce.borrow_mut() = Some(source);
+        });
+    }
+    {
+        let ui = ui.clone();
+        ui.history_search.clone().connect_stop_search(move |_| {
+            ui.search_button.set_active(false);
         });
     }
     for (index, check) in ui.history_filter_buttons.iter().cloned().enumerate() {
@@ -921,6 +949,29 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 ui.prompt_history_index.set(None);
             }
         });
+    }
+    {
+        let ui = ui.clone();
+        ui.prompt_history_button
+            .clone()
+            .connect_active_notify(move |button| {
+                if button.is_active() {
+                    rebuild_prompt_history(&ui);
+                }
+            });
+    }
+    {
+        let ui = ui.clone();
+        ui.prompt_history_list
+            .clone()
+            .connect_row_activated(move |_, row| {
+                let prompt = row.widget_name().to_string();
+                if prompt.is_empty() {
+                    return;
+                }
+                load_prompt_from_history(&ui, &prompt);
+                ui.prompt_history_button.popdown();
+            });
     }
     {
         let ui = ui.clone();
@@ -1296,6 +1347,8 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::f | gdk::Key::F => {
                     split.set_show_sidebar(true);
+                    ui.search_button.set_active(true);
+                    ui.history_search.set_visible(true);
                     ui.history_search.grab_focus();
                     glib::Propagation::Stop
                 }
@@ -2598,7 +2651,7 @@ pub(crate) fn new_image(ui: &Rc<Ui>) {
     cancel_zoom(ui);
     ui.undo.borrow_mut().clear();
     ui.state.borrow_mut().new_image();
-    ui.prompt.buffer().set_text("");
+    clear_prompt(ui);
     update_image_view(ui);
     show_composer(ui, true);
     ui.status.set_text("New image");
@@ -3169,6 +3222,79 @@ fn remember_prompt(ui: &Rc<Ui>, prompt: &str) {
     }
 }
 
+/// Rebuild the prompt picker from the saved history, newest first.
+fn rebuild_prompt_history(ui: &Rc<Ui>) {
+    while let Some(child) = ui.prompt_history_list.first_child() {
+        ui.prompt_history_list.remove(&child);
+    }
+    let history = ui.config.borrow().prompt_history.clone();
+    if history.is_empty() {
+        let label = gtk::Label::builder()
+            .label("No saved prompts yet.")
+            .xalign(0.0)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(12)
+            .margin_end(12)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        let row = gtk::ListBoxRow::new();
+        row.set_activatable(false);
+        row.set_selectable(false);
+        row.set_child(Some(&label));
+        ui.prompt_history_list.append(&row);
+        return;
+    }
+
+    for prompt in history.iter().rev() {
+        let preview = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let label = gtk::Label::builder()
+            .label(preview)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(46)
+            .margin_top(7)
+            .margin_bottom(7)
+            .margin_start(10)
+            .margin_end(10)
+            .build();
+        let row = gtk::ListBoxRow::new();
+        row.set_widget_name(prompt);
+        row.set_tooltip_text(Some(prompt));
+        row.set_child(Some(&label));
+        ui.prompt_history_list.append(&row);
+    }
+}
+
+/// Load a prompt picked from the history popover.
+fn load_prompt_from_history(ui: &Rc<Ui>, prompt: &str) {
+    let draft = current_prompt(ui);
+    *ui.prompt_draft.borrow_mut() = draft;
+    let index = ui
+        .config
+        .borrow()
+        .prompt_history
+        .iter()
+        .rposition(|entry| entry == prompt);
+
+    ui.prompt_edit_guard.set(true);
+    let buffer = ui.prompt.buffer();
+    buffer.set_text(prompt);
+    ui.prompt_history_index.set(index);
+    ui.prompt_edit_guard.set(false);
+    buffer.place_cursor(&buffer.end_iter());
+    ui.prompt.grab_focus();
+}
+
+/// Empty the composer so a finished request never leaves its prompt behind.
+fn clear_prompt(ui: &Rc<Ui>) {
+    ui.prompt_edit_guard.set(true);
+    ui.prompt.buffer().set_text("");
+    ui.prompt_edit_guard.set(false);
+    ui.prompt_history_index.set(None);
+    ui.prompt_draft.borrow_mut().clear();
+}
+
 /// Cycle through submitted prompts; `older` walks towards the oldest entry.
 fn navigate_prompt_history(ui: &Rc<Ui>, older: bool) {
     let history = ui.config.borrow().prompt_history.clone();
@@ -3569,6 +3695,11 @@ fn generate(
     show_composer(ui, false);
     remember_prompt(ui, &base_prompt);
     ui.prompt_history_index.set(None);
+    // Only empty the field if it still holds the prompt that was just sent;
+    // a variation or effect must not wipe an unrelated draft.
+    if current_prompt(ui).trim() == base_prompt {
+        clear_prompt(ui);
+    }
     ui.status.set_text(&match (queued, was_busy) {
         (1, true) => "Added to the queue".to_string(),
         (1, false) => "Starting…".to_string(),

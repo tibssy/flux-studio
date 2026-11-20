@@ -457,13 +457,15 @@ pub(crate) fn add_row(
     ui.history_list.append(&row);
 }
 
-/// Restore the prompt, model, style, size and seed recorded with an entry.
+/// Restore the model, style, size and seed recorded with an entry.
+///
+/// The prompt is deliberately left alone: the composer starts empty and past
+/// prompts are loaded from the prompt picker.
 pub(crate) fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
     if matches!(entry.kind.as_str(), "upscale" | "adjust" | "import") {
         return;
     }
 
-    ui.prompt.buffer().set_text(&entry.prompt);
     ui.seed_entry.set_text(&entry.seed);
 
     if let Some(index) = ui

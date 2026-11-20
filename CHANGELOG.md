@@ -5,6 +5,11 @@ rough edges.
 
 ## Unreleased
 
+- **Prompt picker**: the prompt field has a history button in its top-right
+  corner that lists saved prompts, and the field is cleared after each
+  generation request.
+- **Search toggle**: a search button in the History header shows or hides the
+  search field (`Ctrl+F` still opens it).
 - **History filter button**: the funnel icon in the History header opens a
   compact filter list for favorites, text-to-image, edits, upscales and
   adjustments.

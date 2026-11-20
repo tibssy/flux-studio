@@ -26,6 +26,7 @@ pub(crate) struct Sidebar {
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
     pub select_button: gtk::Button,
+    pub search_button: gtk::ToggleButton,
     pub selection_bar: gtk::Box,
     pub selection_label: gtk::Label,
     pub selection_all: gtk::Button,
@@ -272,6 +273,11 @@ pub(crate) fn build(
         .tooltip_text("Select multiple images to delete")
         .css_classes(["flat"])
         .build();
+    let search_button = gtk::ToggleButton::builder()
+        .icon_name("system-search-symbolic")
+        .tooltip_text("Search history (Ctrl+F)")
+        .css_classes(["flat"])
+        .build();
 
     let filter_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
     filter_box.set_margin_top(6);
@@ -301,6 +307,7 @@ pub(crate) fn build(
 
     let history_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     history_header.append(&history_title);
+    history_header.append(&search_button);
     history_header.append(&history_filter_button);
     history_header.append(&select_button);
     history_header.append(&open_button);
@@ -309,6 +316,7 @@ pub(crate) fn build(
     let history_search = gtk::SearchEntry::builder()
         .placeholder_text("Search history")
         .hexpand(true)
+        .visible(false)
         .build();
     history_search.set_tooltip_text(Some("Search prompts, models and seeds (Ctrl+F)"));
 
@@ -431,6 +439,7 @@ pub(crate) fn build(
         new_button,
         open_button,
         select_button,
+        search_button,
         selection_bar,
         selection_label,
         selection_all,
