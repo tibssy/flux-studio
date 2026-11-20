@@ -491,7 +491,7 @@ fn build_chain_header(
     expander.add_prefix(&history_thumbnail(entry, 0));
 
     // Replace libadwaita's bare arrow with one count/arrow pill.
-    if let Some(arrow) = find_widget_by_css(expander.upcast_ref(), "expander-row-arrow") {
+    if let Some(arrow) = crate::find_widget_by_css(expander.upcast_ref(), "expander-row-arrow") {
         arrow.set_visible(false);
     }
     let toggle = chain_toggle_button(group_size, collapsed);
@@ -737,21 +737,6 @@ fn chain_toggle_button(group_size: usize, collapsed: bool) -> (gtk::Button, gtk:
     content.append(&icon);
     button.set_child(Some(&content));
     (button, icon)
-}
-
-/// First descendant (or self) carrying a CSS class.
-fn find_widget_by_css(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
-    if widget.has_css_class(class) {
-        return Some(widget.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if let Some(found) = find_widget_by_css(&widget, class) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 /// The `AdwActionRow` embedded in an expander's header list.

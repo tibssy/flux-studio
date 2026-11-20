@@ -41,9 +41,9 @@ pub(crate) struct Sidebar {
     pub history_filter_buttons: Vec<gtk::CheckButton>,
     pub history_empty: gtk::Label,
     pub history_list: gtk::ListBox,
-    pub queue_box: gtk::Box,
+    pub queue_expander: adw::ExpanderRow,
     pub queue_list: gtk::ListBox,
-    pub queue_waiting: gtk::Label,
+    pub queue_count: gtk::Label,
     pub queue_clear: gtk::Button,
     pub queue_pause: gtk::ToggleButton,
 }
@@ -392,14 +392,27 @@ pub(crate) fn build(
         .vexpand(true)
         .build();
 
-    let queue_title = gtk::Label::builder()
-        .label("Queue")
-        .xalign(0.0)
-        .css_classes(["heading"])
+    let queue_count = gtk::Label::builder()
+        .label("0")
+        .css_classes(["caption"])
         .build();
-    let queue_waiting = gtk::Label::builder()
-        .xalign(1.0)
-        .css_classes(["caption", "dim-label"])
+    let queue_toggle_icon = gtk::Image::from_icon_name("pan-end-symbolic");
+    queue_toggle_icon.set_pixel_size(11);
+    let queue_toggle_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    queue_toggle_content.set_valign(gtk::Align::Center);
+    queue_toggle_content.append(&queue_count);
+    queue_toggle_content.append(&queue_toggle_icon);
+    let queue_toggle = gtk::Button::builder()
+        .tooltip_text("Expand queue")
+        .valign(gtk::Align::Center)
+        .css_classes(["chain-toggle"])
+        .child(&queue_toggle_content)
+        .build();
+    let queue_expander = adw::ExpanderRow::builder()
+        .title("Queue")
+        .subtitle("No tasks running")
+        .subtitle_lines(1)
+        .expanded(false)
         .build();
     let queue_clear = gtk::Button::builder()
         .icon_name("edit-clear-symbolic")
@@ -413,11 +426,14 @@ pub(crate) fn build(
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
-    let queue_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    queue_header.append(&queue_title);
-    queue_header.append(&queue_waiting);
-    queue_header.append(&queue_pause);
-    queue_header.append(&queue_clear);
+    if let Some(arrow) =
+        crate::find_widget_by_css(queue_expander.upcast_ref(), "expander-row-arrow")
+    {
+        arrow.set_visible(false);
+    }
+    queue_expander.add_suffix(&queue_toggle);
+    queue_expander.add_suffix(&queue_clear);
+    queue_expander.add_suffix(&queue_pause);
 
     let queue_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -429,15 +445,36 @@ pub(crate) fn build(
         .max_content_height(170)
         .vexpand(false)
         .build();
-    let queue_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    queue_box.set_visible(false);
-    queue_box.append(&queue_header);
-    queue_box.append(&queue_scroller);
+    queue_expander.add_row(&queue_scroller);
+
+    {
+        let expander = queue_expander.clone();
+        queue_toggle.connect_clicked(move |_| expander.set_expanded(!expander.is_expanded()));
+    }
+    {
+        let icon = queue_toggle_icon.clone();
+        let button = queue_toggle.clone();
+        queue_expander.connect_expanded_notify(move |expander| {
+            icon.set_icon_name(Some(if expander.is_expanded() {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            }));
+            button.set_tooltip_text(Some(if expander.is_expanded() {
+                "Collapse queue"
+            } else {
+                "Expand queue"
+            }));
+        });
+    }
+
+    let history_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
 
     root.append(&setup_title);
     root.append(&setup);
     root.append(&separator);
-    root.append(&queue_box);
+    root.append(&queue_expander);
+    root.append(&history_separator);
     root.append(&history_header);
     root.append(&history_search_revealer);
     root.append(&selection_bar);
@@ -479,9 +516,9 @@ pub(crate) fn build(
         history_filter_buttons,
         history_empty,
         history_list,
-        queue_box,
+        queue_expander,
         queue_list,
-        queue_waiting,
+        queue_count,
         queue_clear,
         queue_pause,
     }

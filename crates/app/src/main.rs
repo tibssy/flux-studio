@@ -146,9 +146,9 @@ pub(crate) struct Ui {
     pub history_list: gtk::ListBox,
     /// Jobs waiting behind the running one.
     pub queue: RefCell<queue::JobQueue>,
-    pub queue_box: gtk::Box,
+    pub queue_expander: adw::ExpanderRow,
     pub queue_list: gtk::ListBox,
-    pub queue_waiting: gtk::Label,
+    pub queue_count: gtk::Label,
     pub queue_clear: gtk::Button,
     pub queue_pause: gtk::ToggleButton,
     /// Suppresses the pause handler while the UI syncs it from the queue.
@@ -258,6 +258,21 @@ impl GenerationWorker {
         });
         Self { jobs }
     }
+}
+
+/// First descendant (or self) carrying a CSS class.
+pub(crate) fn find_widget_by_css(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if widget.has_css_class(class) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(found) = find_widget_by_css(&widget, class) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn install_styles() {
@@ -565,9 +580,9 @@ fn build_ui(app: &adw::Application) {
         history: RefCell::new(history),
         history_list: side.history_list,
         queue: RefCell::new(queue::JobQueue::default()),
-        queue_box: side.queue_box,
+        queue_expander: side.queue_expander,
         queue_list: side.queue_list,
-        queue_waiting: side.queue_waiting,
+        queue_count: side.queue_count,
         queue_clear: side.queue_clear,
         queue_pause: side.queue_pause,
         queue_pause_guard: Cell::new(false),
@@ -684,6 +699,7 @@ fn build_ui(app: &adw::Application) {
         history_view::collapse_all_groups(&ui);
         history_view::rebuild(&ui);
     }
+    queue_view::rebuild(&ui);
     restore_session(&ui);
 
     if let Err(error) = ui.config.borrow().save() {

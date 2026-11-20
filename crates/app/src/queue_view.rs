@@ -28,7 +28,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     let paused = ui.queue.borrow().is_paused();
 
     let pending_count = waiting.len();
-    let visible = pending_count > 0 || running.is_some();
+    let has_jobs = pending_count > 0 || running.is_some();
 
     ui.queue_pause_guard.set(true);
     ui.queue_pause.set_active(paused);
@@ -43,19 +43,27 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     } else {
         "Pause the queue"
     }));
+    ui.queue_pause.set_sensitive(has_jobs);
 
-    ui.queue_box.set_visible(visible);
+    // The collapsed header always shows what is running and how much is queued.
+    let mut subtitle = match &running {
+        Some(running) => running.job.title(),
+        None => "No tasks running".to_string(),
+    };
+    if pending_count > 0 {
+        subtitle.push_str(&format!(" · {pending_count} waiting"));
+    }
+    if paused && pending_count > 0 {
+        subtitle.push_str(" · paused");
+    }
+    ui.queue_expander.set_subtitle(&subtitle);
+    ui.queue_count.set_text(&pending_count.to_string());
+
     let waiting_text = match pending_count {
         0 => String::new(),
         1 => "1 waiting".into(),
         count => format!("{count} waiting"),
     };
-    ui.queue_waiting.set_text(&if paused && pending_count > 0 {
-        format!("{waiting_text} · paused")
-    } else {
-        waiting_text.clone()
-    });
-    ui.queue_waiting.set_visible(pending_count > 0);
     ui.queue_clear.set_sensitive(pending_count > 0);
 
     ui.queue_status.set_visible(pending_count > 0);
@@ -78,8 +86,24 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     for job in &waiting {
         ui.queue_list.append(&waiting_row(ui, job));
     }
+    if !has_jobs {
+        let empty = gtk::Label::builder()
+            .label("No tasks in the queue.")
+            .xalign(0.0)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(12)
+            .margin_end(12)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        let row = gtk::ListBoxRow::new();
+        row.set_activatable(false);
+        row.set_selectable(false);
+        row.set_child(Some(&empty));
+        ui.queue_list.append(&row);
+    }
 
-    if visible {
+    if has_jobs {
         ensure_ticker(ui);
     } else {
         stop_ticker(ui);
