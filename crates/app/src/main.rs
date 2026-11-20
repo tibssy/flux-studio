@@ -2962,13 +2962,24 @@ fn install_reference_drop(ui: &Rc<Ui>) {
         target.connect_drop(move |_, value, _, _| {
             ui.stack.remove_css_class("drop-active");
             if let Ok(files) = value.get::<gdk::FileList>() {
-                let paths: Vec<PathBuf> = files
+                let mut paths: Vec<PathBuf> = files
                     .files()
                     .iter()
                     .filter_map(|file| file.path())
                     .filter(|path| path.is_file())
                     .filter(|path| image::image_dimensions(path).is_ok())
                     .collect();
+                // Dropping the image that is already on the canvas is the drag
+                // source feeding itself; treat it as a no-op instead of adding
+                // the current image as a reference.
+                let display = ui.state.borrow().display.clone();
+                let dropped = paths.len();
+                if let Some(display) = display {
+                    paths.retain(|path| !same_file(&display, path));
+                    if paths.is_empty() && dropped > 0 {
+                        return false;
+                    }
+                }
                 if paths.is_empty() {
                     ui.toast
                         .add_toast(adw::Toast::new("No images in the dropped files."));
