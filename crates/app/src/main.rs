@@ -306,6 +306,13 @@ fn install_styles() {
              box-shadow: inset 0 0 0 2px @accent_color;
              border-radius: 16px;
          }
+         /* The theme paints every drop target with :drop(active). The canvas
+            uses .drop-active instead, so external drops keep one border and
+            our own drags keep none. */
+         .canvas:drop(active) {
+             box-shadow: none;
+             border-color: transparent;
+         }
          .compare-overlay {
              background-color: @window_bg_color;
          }
@@ -2985,6 +2992,7 @@ fn sync_image_drag(ui: &Ui) {
 
 /// Accept reference images dropped onto the canvas.
 fn install_reference_drop(ui: &Rc<Ui>) {
+    ui.stack.add_css_class("canvas");
     let target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     target.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
 
