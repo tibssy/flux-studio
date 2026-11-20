@@ -23,6 +23,8 @@ pub(crate) struct Sidebar {
     pub seed_entry: gtk::Entry,
     pub random_button: gtk::Button,
     pub batch_spin: gtk::SpinButton,
+    pub lora_button: gtk::Button,
+    pub lora_summary: gtk::Label,
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
     pub select_button: gtk::Button,
@@ -231,6 +233,22 @@ pub(crate) fn build(
         .build();
     batch_row.append(&batch_hint);
 
+    let lora_button = gtk::Button::builder()
+        .label("LoRAs…")
+        .tooltip_text("Apply LoRA weights to generations")
+        .css_classes(["flat"])
+        .build();
+    let lora_summary = gtk::Label::builder()
+        .label("None active")
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    let lora_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    lora_row.append(&field_label("LoRAs"));
+    lora_row.append(&lora_button);
+    lora_row.append(&lora_summary);
+
     let setup = gtk::Box::new(gtk::Orientation::Vertical, 6);
     setup.append(&row("Model", &model_dropdown));
     setup.append(&model_hint);
@@ -245,6 +263,7 @@ pub(crate) fn build(
     ratio_select_row.append(&ratio_dropdown);
     setup.append(&seed_row);
     setup.append(&batch_row);
+    setup.append(&lora_row);
     setup.append(&ratio_select_row);
     setup.append(&size_row);
     setup.append(&ratio_preview);
@@ -436,6 +455,8 @@ pub(crate) fn build(
         seed_entry,
         random_button,
         batch_spin,
+        lora_button,
+        lora_summary,
         new_button,
         open_button,
         select_button,

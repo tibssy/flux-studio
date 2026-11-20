@@ -255,9 +255,13 @@ pub fn build_args(
         args.push(path(ModelRole::VisionEncoder));
     }
 
+    let mut prompt = request.prompt.clone();
+    for lora in &request.loras {
+        prompt.push_str(&format!(" <lora:{}:{}>", lora.path, lora.weight));
+    }
     args.extend([
         "-p".into(),
-        request.prompt.clone().into(),
+        prompt.into(),
         "-W".into(),
         request.width.to_string().into(),
         "-H".into(),
@@ -272,6 +276,8 @@ pub fn build_args(
         request.seed.to_string().into(),
         "--vae-tiling".into(),
     ]);
+    args.push("--lora-model-dir".into());
+    args.push(models_dir.join("loras").into_os_string());
 
     if !request.sigmas.is_empty() {
         let schedule = request
@@ -409,6 +415,7 @@ mod tests {
             sampler: flux_core::Sampler::Euler,
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
+            loras: Vec::new(),
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -444,6 +451,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
+            loras: Vec::new(),
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -488,6 +496,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            loras: Vec::new(),
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -523,6 +532,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
+            loras: Vec::new(),
             previews: false,
             output: "/tmp/out.png".into(),
         };
@@ -539,6 +549,39 @@ mod tests {
         assert!(
             args.iter()
                 .any(|a| a.ends_with("flux3-image-klein-Q4_K.gguf"))
+        );
+    }
+
+    #[test]
+    fn applies_lora_tags_and_the_lora_directory() {
+        let preset = &FLUX2_KLEIN_4B;
+        let request = GenerateRequest {
+            preset_id: preset.id.into(),
+            prompt: "a cat".into(),
+            width: 768,
+            height: 768,
+            steps: preset.steps,
+            cfg: preset.cfg,
+            sigmas: Vec::new(),
+            seed: 42,
+            sampler: preset.sampler,
+            offload: true,
+            reference_images: Vec::new(),
+            loras: vec![flux_core::LoraConfig {
+                path: "styles/watercolor.safetensors".into(),
+                weight: 0.8,
+            }],
+            previews: false,
+            output: "/tmp/out.png".into(),
+        };
+        let args: Vec<String> = build_args(Path::new("/models"), preset, &request)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"a cat <lora:styles/watercolor.safetensors:0.8>".to_string()));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--lora-model-dir", "/models/loras"])
         );
     }
 }

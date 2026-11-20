@@ -53,6 +53,8 @@ pub struct ImageMetadata {
     pub height: u32,
     #[serde(default)]
     pub references: Vec<String>,
+    #[serde(default)]
+    pub loras: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default)]
@@ -290,6 +292,7 @@ mod tests {
             width: 608,
             height: 816,
             references: vec!["/tmp/ref.png".into()],
+            loras: vec![],
             source: None,
             created_at: 1_765_000_000,
             duration_ms: 12_500,
