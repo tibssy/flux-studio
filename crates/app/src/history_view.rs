@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
 use flux_core::preset::preset;
@@ -127,6 +128,28 @@ pub(crate) fn collapse_all_groups(ui: &Rc<Ui>) {
     }
 }
 
+/// Fold a chain; its expander row animates shut.
+pub(crate) fn collapse_group(ui: &Rc<Ui>, root: i64) {
+    set_group_collapsed(ui, root, true);
+}
+
+fn set_group_collapsed(ui: &Rc<Ui>, root: i64, collapsed: bool) {
+    if let Some(expander) = ui.chain_expanders.borrow().get(&root).cloned() {
+        if expander.is_expanded() != !collapsed {
+            expander.set_expanded(!collapsed);
+        }
+        return;
+    }
+    // No expander is rendered (for example while a filter forces chains open);
+    // remember the state for the next rebuild.
+    let mut groups = ui.collapsed_groups.borrow_mut();
+    if collapsed {
+        groups.insert(root);
+    } else {
+        groups.remove(&root);
+    }
+}
+
 fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
     let adjustment = if preserve_scroll {
         ui.history_list
@@ -144,6 +167,10 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
     while let Some(child) = ui.history_list.first_child() {
         ui.history_list.remove(&child);
     }
+    ui.chain_expanders.borrow_mut().clear();
+    ui.chain_toggles.borrow_mut().clear();
+    ui.chain_headers.borrow_mut().clear();
+    ui.chain_child_rows.borrow_mut().clear();
 
     let ordered = order_entries(ui.entries.borrow().clone());
     *ui.entries.borrow_mut() = ordered.entries.clone();
@@ -161,28 +188,55 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
     }
     let collapsed = ui.collapsed_groups.borrow().clone();
     let expand_all = crate::history_filter_active(ui);
+
+    // Chain children are added to their header's expander row, which animates
+    // them open and shut itself.
+    let mut chain: Option<(i64, adw::ExpanderRow)> = None;
+
+    ui.expander_guard.set(true);
     for entry in ui.entries.borrow().iter() {
-        if !entry_visible(entry, &ordered, &collapsed, expand_all) {
-            continue;
-        }
         let root = ordered.roots.get(&entry.id).copied().unwrap_or(entry.id);
         let header = ordered.headers.get(&root).copied().unwrap_or(root);
         let group_size = ordered.group_sizes.get(&root).copied().unwrap_or(1);
         let is_header = entry.id == header;
         let depth = if group_size > 1 && !is_header { 1 } else { 0 };
-        let is_collapsed = !expand_all && is_header && group_size > 1 && collapsed.contains(&root);
-        let toggle_root = (!expand_all && is_header && group_size > 1).then_some(root);
         let first_in_chain = group_size > 1 && entry.id == root;
-        add_row(
-            ui,
-            entry,
-            depth,
+        let group = RowGroup {
             group_size,
-            is_collapsed,
-            toggle_root,
             first_in_chain,
-        );
+        };
+
+        let chain_child = !expand_all && group_size > 1 && !is_header;
+        if chain_child {
+            let Some((open_root, expander)) = &chain else {
+                continue;
+            };
+            debug_assert_eq!(*open_root, root);
+            let row = gtk::ListBoxRow::new();
+            row.set_widget_name(&entry.id.to_string());
+            row.set_child(Some(&build_row_box(ui, entry, depth, group)));
+            expander.add_row(&row);
+            ui.chain_child_rows
+                .borrow_mut()
+                .entry(root)
+                .or_default()
+                .push((entry.id, row));
+        } else if !expand_all && group_size > 1 {
+            // Chain header, rendered as an expander row.
+            let expander =
+                build_chain_header(ui, entry, group_size, collapsed.contains(&root), root);
+            ui.history_list.append(&expander);
+            chain = Some((root, expander));
+        } else {
+            chain = None;
+            let row = gtk::ListBoxRow::new();
+            // Row activation resolves entries by id, never by position.
+            row.set_widget_name(&entry.id.to_string());
+            row.set_child(Some(&build_row_box(ui, entry, depth, group)));
+            ui.history_list.append(&row);
+        }
     }
+    ui.expander_guard.set(false);
 
     // Rows that are no longer rendered must not stay selected, or a bulk delete
     // would remove images the user cannot see.
@@ -211,6 +265,7 @@ fn rebuild_inner(ui: &Rc<Ui>, preserve_scroll: bool) {
 ///
 /// A collapsed chain shows only its newest row (the header); everything else
 /// appears below it when expanded. Filtering forces every chain open.
+#[cfg(test)]
 fn entry_visible(
     entry: &Generation,
     ordered: &OrderedHistory,
@@ -226,23 +281,31 @@ fn entry_visible(
     entry.id == header || !collapsed.contains(&root)
 }
 
-pub(crate) fn add_row(
-    ui: &Rc<Ui>,
-    entry: &Generation,
-    depth: usize,
+struct RowGroup {
     group_size: usize,
-    collapsed: bool,
-    toggle_root: Option<i64>,
     first_in_chain: bool,
-) {
-    let row = gtk::ListBoxRow::new();
-    // Row activation resolves entries by id, never by position.
-    row.set_widget_name(&entry.id.to_string());
+}
+
+/// Build the content of one history row: checkbox, chain guide, thumbnail,
+/// prompt and meta labels, favorite/info/delete actions.
+///
+/// Chain headers use [`build_chain_header`] instead; this is for standalone
+/// rows and for rows inside a chain.
+fn build_row_box(ui: &Rc<Ui>, entry: &Generation, depth: usize, group: RowGroup) -> gtk::Box {
+    let group_size = group.group_size;
+    let first_in_chain = group.first_in_chain;
 
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row_box.set_margin_top(6);
-    row_box.set_margin_bottom(6);
-    row_box.set_margin_start(8 + depth as i32 * 16);
+    if depth > 0 {
+        // Tighter rows inside a chain so the group reads as one block.
+        row_box.set_margin_top(3);
+        row_box.set_margin_bottom(3);
+        row_box.add_css_class("chain-child");
+    } else {
+        row_box.set_margin_top(6);
+        row_box.set_margin_bottom(6);
+    }
+    row_box.set_margin_start(8 + depth as i32 * 8);
     row_box.set_margin_end(8);
 
     let selecting = ui.history_selection_mode.get();
@@ -271,6 +334,241 @@ pub(crate) fn add_row(
         row_box.append(&guide);
     }
 
+    let thumbnail = history_thumbnail(entry, depth);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_valign(gtk::Align::Center);
+    text.set_hexpand(true);
+    let prompt_label = gtk::Label::builder()
+        .label(&entry.prompt)
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(18)
+        .build();
+    let meta_label = gtk::Label::builder()
+        .label(row_meta(entry, first_in_chain))
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(22)
+        .css_classes(["caption", "dim-label"])
+        .build();
+    text.append(&prompt_label);
+    text.append(&meta_label);
+
+    let favorite_button = favorite_button(ui, entry, selecting);
+    let actions = actions_box(ui, entry, selecting);
+
+    row_box.append(&thumbnail);
+    row_box.append(&text);
+    row_box.append(&favorite_button);
+    row_box.append(&actions);
+
+    row_box.set_tooltip_text(Some(&row_tooltip(entry, group_size, first_in_chain)));
+
+    {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        favorite_button.connect_clicked(move |_| toggle_favorite(&ui, &entry));
+    }
+    connect_row_actions(ui, entry, &actions);
+
+    // Rows inside a chain are not direct list rows, so they handle clicks
+    // themselves.
+    if depth > 0 {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        let row = row_box.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.connect_released(move |gesture, _, x, y| {
+            // Checkboxes and action buttons handle their own clicks.
+            if let Some(picked) = row.pick(x, y, gtk::PickFlags::DEFAULT)
+                && inside_interactive(&picked)
+            {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            select_chain_header(&ui, &entry);
+        });
+        row_box.add_controller(gesture);
+    }
+
+    row_box
+}
+
+/// Build a chain header as an expander row. Its child rows are added to it by
+/// the caller, and libadwaita animates the expansion.
+fn build_chain_header(
+    ui: &Rc<Ui>,
+    entry: &Generation,
+    group_size: usize,
+    collapsed: bool,
+    root: i64,
+) -> adw::ExpanderRow {
+    let expander = adw::ExpanderRow::builder()
+        .title(&entry.prompt)
+        .subtitle(row_meta(entry, false))
+        .title_lines(1)
+        .expanded(!collapsed)
+        .build();
+    expander.set_widget_name(&entry.id.to_string());
+    expander.set_tooltip_text(Some(&row_tooltip(entry, group_size, false)));
+    // The expander's inner AdwActionRow toggles expansion whenever it is
+    // activated, so make it inert and use our own click handling: clicking the
+    // header opens the image, clicking the arrow area expands the chain.
+    expander.set_activatable(false);
+    if let Some(header) = expander_header_row(&expander) {
+        header.set_activatable(false);
+    }
+
+    {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        let row = expander.clone();
+        // 0 = ignore, 1 = select the image, 2 = toggle the chain.
+        let action = Rc::new(std::cell::Cell::new(0u8));
+        let gesture = gtk::GestureClick::new();
+        // Run before the header list box, which claims clicks for row
+        // activation, so the header can be selected without expanding.
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let row = row.clone();
+            let action = action.clone();
+            gesture.connect_pressed(move |gesture, _, x, y| {
+                let Some(picked) = row.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                    action.set(0);
+                    return;
+                };
+                // The expander's child rows and its buttons handle their clicks.
+                if inside_expander_children(&picked) || inside_interactive(&picked) {
+                    action.set(0);
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                let on_arrow = is_expander_arrow(&picked) || x >= row.width() as f64 - 36.0;
+                action.set(if on_arrow { 2 } else { 1 });
+            });
+        }
+        gesture.connect_released(move |_, _, _, _| match action.replace(0) {
+            1 => select_chain_header(&ui, &entry),
+            2 => row.set_expanded(!row.is_expanded()),
+            _ => {}
+        });
+        expander.add_controller(gesture);
+    }
+    {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        let row = expander.clone();
+        let key = gtk::EventControllerKey::new();
+        key.connect_key_pressed(move |_, key, _, _| match key {
+            gdk::Key::Return | gdk::Key::KP_Enter => {
+                select_chain_header(&ui, &entry);
+                glib::Propagation::Stop
+            }
+            gdk::Key::space => {
+                row.set_expanded(!row.is_expanded());
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        expander.add_controller(key);
+    }
+
+    let selecting = ui.history_selection_mode.get();
+    if selecting {
+        let check = gtk::CheckButton::new();
+        check.set_active(ui.history_selected.borrow().contains(&entry.id));
+        check.set_valign(gtk::Align::Center);
+        check.set_tooltip_text(Some("Select this image"));
+        {
+            let ui = ui.clone();
+            let id = entry.id;
+            check.connect_toggled(move |check| {
+                crate::set_history_selected(&ui, id, check.is_active());
+            });
+        }
+        expander.add_prefix(&check);
+    }
+    expander.add_prefix(&history_thumbnail(entry, 0));
+
+    // Replace libadwaita's bare arrow with one count/arrow pill.
+    if let Some(arrow) = find_widget_by_css(expander.upcast_ref(), "expander-row-arrow") {
+        arrow.set_visible(false);
+    }
+    let toggle = chain_toggle_button(group_size, collapsed);
+    ui.chain_toggles.borrow_mut().insert(root, toggle.clone());
+    expander.add_suffix(&toggle.0);
+    {
+        let row = expander.clone();
+        toggle
+            .0
+            .connect_clicked(move |_| row.set_expanded(!row.is_expanded()));
+    }
+
+    let favorite = favorite_button(ui, entry, selecting);
+    expander.add_suffix(&favorite);
+    let actions = actions_box(ui, entry, selecting);
+    expander.add_suffix(&actions);
+
+    {
+        let ui = ui.clone();
+        let entry = entry.clone();
+        favorite.connect_clicked(move |_| toggle_favorite(&ui, &entry));
+    }
+    connect_row_actions(ui, entry, &actions);
+
+    ui.chain_headers.borrow_mut().insert(entry.id, root);
+    ui.chain_expanders
+        .borrow_mut()
+        .insert(root, expander.clone());
+
+    {
+        let ui = ui.clone();
+        expander.connect_expanded_notify(move |expander| {
+            if ui.expander_guard.get() {
+                return;
+            }
+            if let Some((button, icon)) = ui.chain_toggles.borrow().get(&root) {
+                icon.set_icon_name(Some(if expander.is_expanded() {
+                    "pan-down-symbolic"
+                } else {
+                    "pan-end-symbolic"
+                }));
+                button.set_tooltip_text(Some(if expander.is_expanded() {
+                    "Collapse chain"
+                } else {
+                    "Expand chain"
+                }));
+            }
+            if expander.is_expanded() {
+                ui.collapsed_groups.borrow_mut().remove(&root);
+                return;
+            }
+            ui.collapsed_groups.borrow_mut().insert(root);
+            // Folded rows must not stay selected, or a later bulk delete would
+            // remove images the user can no longer see.
+            let removed = {
+                let children = ui
+                    .chain_child_rows
+                    .borrow()
+                    .get(&root)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut selected = ui.history_selected.borrow_mut();
+                children
+                    .iter()
+                    .filter(|(id, _)| selected.remove(id))
+                    .count()
+            };
+            if removed > 0 {
+                crate::update_selection_ui(&ui);
+            }
+        });
+    }
+
+    expander
+}
+
+fn history_thumbnail(entry: &Generation, depth: usize) -> gtk::Picture {
     let thumbnail = gtk::Picture::builder()
         .width_request(if depth > 0 { 44 } else { 56 })
         .height_request(if depth > 0 { 44 } else { 56 })
@@ -284,39 +582,11 @@ pub(crate) fn add_row(
     {
         thumbnail.set_paintable(Some(&texture));
     }
+    thumbnail
+}
 
-    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    text.set_valign(gtk::Align::Center);
-    text.set_hexpand(true);
-    let prompt_label = gtk::Label::builder()
-        .label(&entry.prompt)
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(18)
-        .build();
-    let mut meta = String::new();
-    if first_in_chain {
-        meta.push_str("first · ");
-    }
-    meta.push_str(&format!(
-        "{} · {}×{}",
-        entry_model_label(entry),
-        entry.width,
-        entry.height
-    ));
-    let meta_label = gtk::Label::builder()
-        .label(meta)
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(22)
-        .css_classes(["caption", "dim-label"])
-        .build();
-    text.append(&prompt_label);
-    text.append(&meta_label);
-
-    let actions = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    actions.set_valign(gtk::Align::Center);
-    let favorite_button = gtk::Button::builder()
+fn favorite_button(ui: &Rc<Ui>, entry: &Generation, selecting: bool) -> gtk::Button {
+    let button = gtk::Button::builder()
         .icon_name(if entry.favorite {
             "starred-symbolic"
         } else {
@@ -332,7 +602,15 @@ pub(crate) fn add_row(
         .valign(gtk::Align::Center)
         .css_classes(["flat", "circular"])
         .build();
-    favorite_button.set_visible(!selecting);
+    button.set_visible(!selecting);
+    let _ = ui;
+    button
+}
+
+fn actions_box(ui: &Rc<Ui>, entry: &Generation, selecting: bool) -> gtk::Box {
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    actions.set_valign(gtk::Align::Center);
+    actions.set_visible(!selecting);
     let info_button = gtk::Button::builder()
         .icon_name("dialog-information-symbolic")
         .tooltip_text("Details")
@@ -349,55 +627,47 @@ pub(crate) fn add_row(
     }
     actions.append(&info_button);
     actions.append(&delete_button);
-    actions.set_visible(!selecting);
+    actions
+}
 
-    row_box.append(&thumbnail);
-    row_box.append(&text);
-    row_box.append(&favorite_button);
-    if let Some(root) = toggle_root {
-        let toggle = gtk::Button::builder()
-            .tooltip_text(if collapsed {
-                "Expand chain"
-            } else {
-                "Collapse chain"
-            })
-            .valign(gtk::Align::Center)
-            .css_classes(["history-toggle"])
-            .build();
-        let content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-        let icon = gtk::Image::from_icon_name(if collapsed {
-            "pan-end-symbolic"
-        } else {
-            "pan-down-symbolic"
-        });
-        icon.set_pixel_size(11);
-        let count = gtk::Label::builder()
-            .label(group_size.to_string())
-            .css_classes(["caption"])
-            .build();
-        content.append(&icon);
-        content.append(&count);
-        toggle.set_child(Some(&content));
-        {
-            let ui = ui.clone();
-            toggle.connect_clicked(move |_| {
-                {
-                    let mut collapsed = ui.collapsed_groups.borrow_mut();
-                    if !collapsed.remove(&root) {
-                        collapsed.insert(root);
-                    }
-                }
-                // Rebuilding from inside the button's own signal is avoided by
-                // deferring to the next idle iteration.
-                let ui = ui.clone();
-                glib::idle_add_local_once(move || rebuild_preserving_scroll(&ui));
-            });
+/// Wire the info and delete buttons inside a row's action column.
+fn connect_row_actions(ui: &Rc<Ui>, entry: &Generation, actions: &gtk::Box) {
+    let mut child = actions.first_child();
+    let mut index = 0;
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        let Ok(button) = widget.downcast::<gtk::Button>() else {
+            continue;
+        };
+        let ui = ui.clone();
+        let entry = entry.clone();
+        match index {
+            0 => {
+                button.connect_clicked(move |_| show_info(&ui, &entry));
+            }
+            _ => {
+                button.connect_clicked(move |_| confirm_delete(&ui, &entry));
+            }
         }
-        row_box.append(&toggle);
+        index += 1;
     }
-    row_box.append(&actions);
-    row.set_child(Some(&row_box));
+}
 
+fn row_meta(entry: &Generation, first_in_chain: bool) -> String {
+    let mut meta = String::new();
+    if first_in_chain {
+        meta.push_str("first · ");
+    }
+    meta.push_str(&format!(
+        "{} · {}×{}",
+        entry_model_label(entry),
+        entry.width,
+        entry.height
+    ));
+    meta
+}
+
+fn row_tooltip(entry: &Generation, group_size: usize, first_in_chain: bool) -> String {
     let mut tooltip = if kind_label(&entry.kind).is_some() {
         format!(
             "{}\n{} · {} × {} · {:.1}s{}",
@@ -436,25 +706,112 @@ pub(crate) fn add_row(
     if first_in_chain {
         tooltip.push_str("\nfirst image in chain");
     }
-    row.set_tooltip_text(Some(&tooltip));
+    tooltip
+}
 
-    {
-        let ui = ui.clone();
-        let entry = entry.clone();
-        favorite_button.connect_clicked(move |_| toggle_favorite(&ui, &entry));
-    }
-    {
-        let ui = ui.clone();
-        let entry = entry.clone();
-        info_button.connect_clicked(move |_| show_info(&ui, &entry));
-    }
-    {
-        let ui = ui.clone();
-        let entry = entry.clone();
-        delete_button.connect_clicked(move |_| confirm_delete(&ui, &entry));
-    }
+/// The count/arrow pill on a chain header: count, chevron, and the icon used
+/// to update the chevron when the chain expands.
+fn chain_toggle_button(group_size: usize, collapsed: bool) -> (gtk::Button, gtk::Image) {
+    let button = gtk::Button::builder()
+        .tooltip_text(if collapsed {
+            "Expand chain"
+        } else {
+            "Collapse chain"
+        })
+        .valign(gtk::Align::Center)
+        .css_classes(["chain-toggle"])
+        .build();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    content.set_valign(gtk::Align::Center);
+    let count = gtk::Label::builder()
+        .label(group_size.to_string())
+        .css_classes(["caption"])
+        .build();
+    let icon = gtk::Image::from_icon_name(if collapsed {
+        "pan-end-symbolic"
+    } else {
+        "pan-down-symbolic"
+    });
+    icon.set_pixel_size(11);
+    content.append(&count);
+    content.append(&icon);
+    button.set_child(Some(&content));
+    (button, icon)
+}
 
-    ui.history_list.append(&row);
+/// First descendant (or self) carrying a CSS class.
+fn find_widget_by_css(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if widget.has_css_class(class) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(found) = find_widget_by_css(&widget, class) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The `AdwActionRow` embedded in an expander's header list.
+fn expander_header_row(expander: &adw::ExpanderRow) -> Option<gtk::ListBoxRow> {
+    expander
+        .first_child()?
+        .first_child()?
+        .first_child()?
+        .downcast::<gtk::ListBoxRow>()
+        .ok()
+}
+
+/// Whether a widget is libadwaita's expander arrow.
+fn is_expander_arrow(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(widget) = current {
+        if widget.has_css_class("expander-row-arrow") {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+/// Open a chain header's image, or toggle its checkbox in selection mode.
+fn select_chain_header(ui: &Rc<Ui>, entry: &Generation) {
+    if ui.history_selection_mode.get() {
+        let selected = !ui.history_selected.borrow().contains(&entry.id);
+        crate::set_history_selected(ui, entry.id, selected);
+        rebuild_preserving_scroll(ui);
+        return;
+    }
+    load_entry(ui, entry);
+}
+
+/// Whether a widget is inside the expander's revealed child area (rather than
+/// its header).
+fn inside_expander_children(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(widget) = current {
+        if widget.downcast_ref::<gtk::Revealer>().is_some() {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+/// Whether a widget or one of its ancestors handles clicks itself.
+fn inside_interactive(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(widget) = current {
+        if widget.downcast_ref::<gtk::CheckButton>().is_some()
+            || widget.downcast_ref::<gtk::Button>().is_some()
+        {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
 }
 
 /// Restore the model, style, size and seed recorded with an entry.
@@ -764,38 +1121,88 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     ui.toast.add_toast(adw::Toast::new("Image deleted."));
 }
 
-fn row_by_id(list: &gtk::ListBox, id: i64) -> Option<gtk::ListBoxRow> {
+/// The widget a history entry is rendered as. Chain headers and standalone
+/// rows are list rows; entries inside a chain are rows owned by its expander.
+fn find_entry_widget(ui: &Ui, id: i64) -> Option<gtk::Widget> {
     let wanted = id.to_string();
-    let mut child = list.first_child();
-    while let Some(widget) = child {
-        let next = widget.next_sibling();
-        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>()
-            && row.widget_name() == wanted
-        {
-            return Some(row);
+    let mut child = ui.history_list.first_child();
+    while let Some(row) = child {
+        child = row.next_sibling();
+        let Ok(list_row) = row.downcast::<gtk::ListBoxRow>() else {
+            continue;
+        };
+        if list_row.widget_name() == wanted {
+            return Some(list_row.upcast());
         }
-        child = next;
+        let Ok(header_id) = list_row.widget_name().parse::<i64>() else {
+            continue;
+        };
+        let Some(root) = ui.chain_headers.borrow().get(&header_id).copied() else {
+            continue;
+        };
+        if let Some(children) = ui.chain_child_rows.borrow().get(&root)
+            && let Some((_, child_row)) = children.iter().find(|(child_id, _)| *child_id == id)
+        {
+            return Some(child_row.clone().upcast());
+        }
     }
     None
 }
 
-/// Ids of the rows currently rendered in the sidebar.
+/// Whether an entry is currently unfolded in the sidebar.
+fn entry_shown(ui: &Ui, id: i64) -> bool {
+    let children = ui.chain_child_rows.borrow();
+    for (root, rows) in children.iter() {
+        if rows.iter().any(|(child_id, _)| *child_id == id) {
+            return ui
+                .chain_expanders
+                .borrow()
+                .get(root)
+                .is_some_and(|expander| expander.is_expanded());
+        }
+    }
+    drop(children);
+    find_entry_widget(ui, id).is_some()
+}
+
+/// Ids of the entries currently unfolded in the sidebar.
 pub(crate) fn visible_ids(ui: &Ui) -> Vec<i64> {
     let mut ids = Vec::new();
     let mut child = ui.history_list.first_child();
-    while let Some(widget) = child {
-        let next = widget.next_sibling();
-        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>()
-            && let Ok(id) = row.widget_name().parse::<i64>()
-        {
-            ids.push(id);
+    while let Some(row) = child {
+        child = row.next_sibling();
+        let Ok(list_row) = row.downcast::<gtk::ListBoxRow>() else {
+            continue;
+        };
+        let Ok(id) = list_row.widget_name().parse::<i64>() else {
+            continue;
+        };
+        ids.push(id);
+        let Some(root) = ui.chain_headers.borrow().get(&id).copied() else {
+            continue;
+        };
+        let expanded = ui
+            .chain_expanders
+            .borrow()
+            .get(&root)
+            .is_some_and(|expander| expander.is_expanded());
+        if expanded && let Some(children) = ui.chain_child_rows.borrow().get(&root) {
+            ids.extend(children.iter().map(|(child_id, _)| *child_id));
         }
-        child = next;
     }
     ids
 }
 
-/// Highlight the history row for `path` without scrolling to it.
+/// Drop the manual selection highlight from every chain child.
+fn clear_child_selection(ui: &Ui) {
+    for rows in ui.chain_child_rows.borrow().values() {
+        for (_, row) in rows {
+            row.remove_css_class("history-child-selected");
+        }
+    }
+}
+
+/// Highlight the history entry for `path` without scrolling to it.
 ///
 /// Reloads triggered by search, filters or favorites should not move the
 /// sidebar while the user is reading it.
@@ -807,16 +1214,40 @@ pub(crate) fn select_without_reveal(ui: &Rc<Ui>, path: &Path) {
         .find(|entry| Path::new(&entry.image_path) == path)
         .map(|entry| entry.id);
     let Some(id) = id else {
-        ui.history_list.unselect_all();
+        clear_selection(ui);
         return;
     };
-    match row_by_id(&ui.history_list, id) {
-        Some(row) => ui.history_list.select_row(Some(&row)),
-        None => ui.history_list.unselect_all(),
+    if !entry_shown(ui, id) {
+        clear_selection(ui);
+        return;
+    }
+    select_entry(ui, id);
+}
+
+/// Clear the list selection and any manual chain-child highlight.
+pub(crate) fn clear_selection(ui: &Rc<Ui>) {
+    clear_child_selection(ui);
+    ui.history_list.unselect_all();
+}
+
+fn select_entry(ui: &Rc<Ui>, id: i64) {
+    let Some(widget) = find_entry_widget(ui, id) else {
+        return;
+    };
+    clear_selection(ui);
+    if let Ok(row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+        // Only direct list rows can carry the list selection; rows inside an
+        // expander get the manual highlight instead.
+        let list: gtk::Widget = ui.history_list.clone().upcast();
+        if row.parent().is_some_and(|parent| parent == list) {
+            ui.history_list.select_row(Some(&row));
+        } else {
+            row.add_css_class("history-child-selected");
+        }
     }
 }
 
-/// Highlight the history row for `path` and scroll it into view.
+/// Highlight the history entry for `path` and scroll it into view.
 pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
     let id = ui
         .entries
@@ -825,32 +1256,31 @@ pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
         .find(|entry| Path::new(&entry.image_path) == path)
         .map(|entry| entry.id);
     let Some(id) = id else {
-        ui.history_list.unselect_all();
+        clear_selection(ui);
         return;
     };
 
-    // The newest row of a collapsed chain is rendered as the header, so most
-    // selections are already visible. Select it without expanding the chain.
-    if let Some(row) = row_by_id(&ui.history_list, id) {
-        ui.history_list.select_row(Some(&row));
-        reveal_row(&ui.history_list, &row);
+    // The newest row of a collapsed chain is visible as the header, so most
+    // selections are already in place.
+    if entry_shown(ui, id) {
+        select_and_reveal(ui, id);
         return;
     }
 
-    // An older hidden row cannot be selected: expand its chain (and any
-    // collapsed ancestors) first.
-    let mut expanded = false;
+    // Expand the chain (and any collapsed ancestors) and let the expander
+    // finish animating before scrolling the target into view.
+    let mut roots = Vec::new();
     {
         let entries = ui.entries.borrow();
-        let mut collapsed = ui.collapsed_groups.borrow_mut();
+        let collapsed = ui.collapsed_groups.borrow();
         let mut current = entries.iter().find(|entry| entry.id == id);
         let mut guard = 0;
         while let Some(entry) = current {
             let Some(parent_id) = entry.parent_id else {
                 break;
             };
-            if collapsed.remove(&parent_id) {
-                expanded = true;
+            if collapsed.contains(&parent_id) {
+                roots.push(parent_id);
             }
             current = entries.iter().find(|entry| entry.id == parent_id);
             guard += 1;
@@ -859,30 +1289,48 @@ pub(crate) fn highlight(ui: &Rc<Ui>, path: &Path) {
             }
         }
         // Selecting the chain root itself should also open the chain.
-        if collapsed.remove(&id) {
-            expanded = true;
+        if collapsed.contains(&id) {
+            roots.push(id);
         }
     }
-    if expanded {
-        rebuild(ui);
+    for root in roots {
+        set_group_collapsed(ui, root, false);
     }
 
-    let Some(row) = row_by_id(&ui.history_list, id) else {
-        return;
-    };
-    ui.history_list.select_row(Some(&row));
-    reveal_row(&ui.history_list, &row);
+    if entry_shown(ui, id) {
+        let ui = ui.clone();
+        let path = path.to_path_buf();
+        glib::timeout_add_local_once(Duration::from_millis(240), move || {
+            // A newer navigation may have moved the canvas elsewhere while the
+            // chain was opening; only follow the image that is still shown.
+            let current = ui.state.borrow().display.clone();
+            if current.as_deref() == Some(path.as_path()) {
+                select_and_reveal(&ui, id);
+            }
+        });
+    } else {
+        // Every row is built, so this is only a fallback.
+        select_and_reveal(ui, id);
+    }
 }
 
-/// Scroll a history row into view without moving keyboard focus.
-fn reveal_row(list: &gtk::ListBox, row: &gtk::ListBoxRow) {
+fn select_and_reveal(ui: &Rc<Ui>, id: i64) {
+    let Some(widget) = find_entry_widget(ui, id) else {
+        return;
+    };
+    select_entry(ui, id);
+    reveal_row(&ui.history_list, &widget);
+}
+
+/// Scroll a history entry into view without moving keyboard focus.
+fn reveal_row(list: &gtk::ListBox, widget: &gtk::Widget) {
     let Some(scroller) = list
         .ancestor(gtk::ScrolledWindow::static_type())
         .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
     else {
         return;
     };
-    let Some(bounds) = row.compute_bounds(list) else {
+    let Some(bounds) = widget.compute_bounds(list) else {
         return;
     };
     let adjustment = scroller.vadjustment();

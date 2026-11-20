@@ -190,6 +190,16 @@ pub(crate) struct Ui {
     pub entries: RefCell<Vec<Generation>>,
     /// Chain roots whose descendants are hidden in the sidebar.
     pub collapsed_groups: RefCell<std::collections::HashSet<i64>>,
+    /// Expandable chain headers, keyed by chain root.
+    pub chain_expanders: RefCell<HashMap<i64, adw::ExpanderRow>>,
+    /// Count/arrow pill on each chain header, keyed by chain root.
+    pub chain_toggles: RefCell<HashMap<i64, (gtk::Button, gtk::Image)>>,
+    /// Chain header id → chain root, used while scanning the list.
+    pub chain_headers: RefCell<HashMap<i64, i64>>,
+    /// Child rows inside each chain, keyed by chain root.
+    pub chain_child_rows: RefCell<HashMap<i64, Vec<(i64, gtk::ListBoxRow)>>>,
+    /// Suppresses expansion side effects while the list is being rebuilt.
+    pub expander_guard: Cell<bool>,
     pub model_dropdown: gtk::DropDown,
     pub models: RefCell<Vec<&'static ModelPreset>>,
     pub rebuilding_models: Cell<bool>,
@@ -330,16 +340,24 @@ fn install_styles() {
              background-color: alpha(@accent_bg_color, 0.45);
              border-radius: 1px;
          }
-         .history-toggle {
-             background-color: alpha(@accent_bg_color, 0.22);
+         .chain-toggle {
+             background-color: alpha(@accent_bg_color, 0.18);
              color: @accent_color;
-             border-radius: 8px;
-             padding: 1px 5px;
+             border-radius: 999px;
+             padding: 2px 8px;
              min-width: 0;
              min-height: 0;
          }
-         .history-toggle:hover {
-             background-color: alpha(@accent_bg_color, 0.35);
+         .chain-toggle:hover {
+             background-color: alpha(@accent_bg_color, 0.3);
+         }
+         .chain-child:hover {
+             background-color: alpha(@window_fg_color, 0.06);
+             border-radius: 8px;
+         }
+         .history-child-selected {
+             background-color: alpha(@accent_bg_color, 0.28);
+             border-radius: 8px;
          }
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
@@ -581,6 +599,11 @@ fn build_ui(app: &adw::Application) {
         history_debounce: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
         collapsed_groups: RefCell::new(std::collections::HashSet::new()),
+        chain_expanders: RefCell::new(HashMap::new()),
+        chain_toggles: RefCell::new(HashMap::new()),
+        chain_headers: RefCell::new(HashMap::new()),
+        chain_child_rows: RefCell::new(HashMap::new()),
+        expander_guard: Cell::new(false),
         model_dropdown: side.model_dropdown,
         models: RefCell::new(Vec::new()),
         rebuilding_models: Cell::new(false),
@@ -1764,7 +1787,7 @@ fn fit_reference_size(ui: &Rc<Ui>) {
 fn sync_history_selection(ui: &Rc<Ui>) {
     match ui.state.borrow().display.clone() {
         Some(path) => history_view::highlight(ui, &path),
-        None => ui.history_list.unselect_all(),
+        None => history_view::clear_selection(ui),
     }
 }
 
@@ -4603,7 +4626,7 @@ pub(crate) fn show_live(ui: &Rc<Ui>) {
         ui.picture_back.set_paintable(gdk::Paintable::NONE);
         ui.stack.set_visible_child_name("empty");
     }
-    ui.history_list.unselect_all();
+    history_view::clear_selection(ui);
     if ui.generating.get() {
         ui.status.set_text(if ui.live_preview.borrow().is_some() {
             "Live preview"
@@ -5299,6 +5322,7 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
 
     // Leaving a chain through wheel/arrow navigation folds the chain we came
     // from, so the next group opens in a clean state.
+    let mut folded_previous = false;
     let previous_id = ui.state.borrow().display.as_ref().and_then(|display| {
         ui.entries
             .borrow()
@@ -5314,8 +5338,8 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
         && previous_root != target_root
         && !ui.collapsed_groups.borrow().contains(&previous_root)
     {
-        ui.collapsed_groups.borrow_mut().insert(previous_root);
-        history_view::rebuild_preserving_scroll(ui);
+        history_view::collapse_group(ui, previous_root);
+        folded_previous = true;
     }
 
     if !fade_to_image(ui, &path) {
@@ -5327,6 +5351,18 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
     }
 
     ui.status.set_text(&history_view::status_label(&entry));
+
+    if folded_previous {
+        // The chain above is still sliding shut; re-reveal the target once the
+        // list has settled so the selection cannot drift off screen.
+        let ui = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(240), move || {
+            let current = ui.state.borrow().display.clone();
+            if current.as_deref() == Some(path.as_path()) {
+                history_view::highlight(&ui, &path);
+            }
+        });
+    }
 }
 
 /// The image an upscale dialog is about to process.
