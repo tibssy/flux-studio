@@ -149,6 +149,7 @@ pub(crate) struct Ui {
     pub queue_expander: adw::ExpanderRow,
     pub queue_list: gtk::ListBox,
     pub queue_count: gtk::Label,
+    pub queue_toggle: gtk::Button,
     pub queue_clear: gtk::Button,
     pub queue_pause: gtk::ToggleButton,
     /// Suppresses the pause handler while the UI syncs it from the queue.
@@ -583,6 +584,7 @@ fn build_ui(app: &adw::Application) {
         queue_expander: side.queue_expander,
         queue_list: side.queue_list,
         queue_count: side.queue_count,
+        queue_toggle: side.queue_toggle,
         queue_clear: side.queue_clear,
         queue_pause: side.queue_pause,
         queue_pause_guard: Cell::new(false),
@@ -2165,9 +2167,9 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     let actions = has_image && !foreground;
     let editable = actions && active_preset(ui).supports_edit;
     let navigation = has_image && !editing && !zooming && !classifying;
-    // A running upscale leaves a real image on the canvas; only a generation
-    // can be showing a low-resolution preview.
-    let stable = !generating || upscaling;
+    // Only a live preview is unstable: a pinned history image stays fully
+    // usable while jobs run in the background.
+    let stable = !(generating && !upscaling && ui.live_view.get());
     let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button

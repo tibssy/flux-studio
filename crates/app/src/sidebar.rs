@@ -44,6 +44,7 @@ pub(crate) struct Sidebar {
     pub queue_expander: adw::ExpanderRow,
     pub queue_list: gtk::ListBox,
     pub queue_count: gtk::Label,
+    pub queue_toggle: gtk::Button,
     pub queue_clear: gtk::Button,
     pub queue_pause: gtk::ToggleButton,
 }
@@ -431,9 +432,9 @@ pub(crate) fn build(
     {
         arrow.set_visible(false);
     }
-    queue_expander.add_suffix(&queue_toggle);
     queue_expander.add_suffix(&queue_clear);
     queue_expander.add_suffix(&queue_pause);
+    queue_expander.add_suffix(&queue_toggle);
 
     let queue_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -519,6 +520,7 @@ pub(crate) fn build(
         queue_expander,
         queue_list,
         queue_count,
+        queue_toggle,
         queue_clear,
         queue_pause,
     }
