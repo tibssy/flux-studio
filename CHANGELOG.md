@@ -8,9 +8,11 @@ rough edges.
 - **LoRA support**: a **LoRAs…** dialog lists weights from `models/loras`,
   with per-weight strength and a sidebar summary; active LoRAs apply to
   generations and effects and are recorded in PNG metadata.
-- **Prompt picker**: the prompt field has a history button in its top-right
-  corner that lists saved prompts, and the field is cleared after each
-  generation request.
+- **Composer toolbar**: image, camera, prompt-history and improve buttons sit
+  in one row under the prompt. The field is cleared after each generation
+  request.
+- **Camera capture**: take a photo from the first V4L2 camera and use it as an
+  edit reference; the button is hidden when no camera or `ffmpeg` is available.
 - **Search toggle**: a search button in the History header shows or hides the
   search field (`Ctrl+F` still opens it).
 - **History filter button**: the funnel icon in the History header opens a
