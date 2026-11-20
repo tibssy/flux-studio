@@ -129,6 +129,12 @@ pub(crate) struct Ui {
     pub folder_button: gtk::Button,
     pub compare_button: gtk::ToggleButton,
     pub compare_area: crate::compare_view::CompareView,
+    /// Drag source that exports the displayed image; detached while zoomed so
+    /// panning keeps the gesture.
+    pub image_drag: RefCell<Option<gtk::DragSource>>,
+    pub image_drag_attached: Cell<bool>,
+    /// A drag started from the canvas itself.
+    pub internal_drag: Cell<bool>,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -568,6 +574,9 @@ fn build_ui(app: &adw::Application) {
         folder_button: view.folder_button,
         compare_button: view.compare_button,
         compare_area: view.compare_area,
+        image_drag: RefCell::new(None),
+        image_drag_attached: Cell::new(false),
+        internal_drag: Cell::new(false),
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -1887,6 +1896,7 @@ fn apply_zoom(ui: &Ui) {
 }
 
 fn update_zoom_controls(ui: &Ui) {
+    sync_image_drag(ui);
     let has_image = ui.state.borrow().display.is_some();
     let busy = ui.generating.get()
         || ui.upscaling.get()
@@ -2935,10 +2945,42 @@ fn install_image_drag(ui: &Rc<Ui>) {
         if !path.is_file() {
             return None;
         }
+        // Set before the drag enters any target, so our own drag does not
+        // light up the canvas as a drop zone.
+        inner.internal_drag.set(true);
+        // The target can fire `enter` before `prepare`; undo its highlight.
+        inner.stack.remove_css_class("drop-active");
         let files = gdk::FileList::from_array(&[gio::File::for_path(&path)]);
         Some(gdk::ContentProvider::for_value(&files.to_value()))
     });
-    ui.stack.add_controller(source);
+    {
+        let ui = ui.clone();
+        source.connect_drag_end(move |_, _, _| {
+            ui.internal_drag.set(false);
+            ui.stack.remove_css_class("drop-active");
+        });
+    }
+    ui.stack.add_controller(source.clone());
+    ui.image_drag.replace(Some(source));
+    ui.image_drag_attached.set(true);
+}
+
+/// Zommed-in images pan with a drag; take the drag source out of the way so it
+/// cannot start a file drag and cut the pan short.
+fn sync_image_drag(ui: &Ui) {
+    let Some(source) = ui.image_drag.borrow().clone() else {
+        return;
+    };
+    let wanted = ui.zoom.get() <= 1.0;
+    if ui.image_drag_attached.get() == wanted {
+        return;
+    }
+    if wanted {
+        ui.stack.add_controller(source);
+    } else {
+        ui.stack.remove_controller(&source);
+    }
+    ui.image_drag_attached.set(wanted);
 }
 
 /// Accept reference images dropped onto the canvas.
@@ -2948,8 +2990,13 @@ fn install_reference_drop(ui: &Rc<Ui>) {
 
     {
         let overlay = ui.stack.clone();
+        let ui = ui.clone();
         target.connect_enter(move |_, _, _| {
-            overlay.add_css_class("drop-active");
+            // Our own drag would otherwise light up the canvas for the whole
+            // gesture.
+            if !ui.internal_drag.get() {
+                overlay.add_css_class("drop-active");
+            }
             gdk::DragAction::COPY
         });
     }
