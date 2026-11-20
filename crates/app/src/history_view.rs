@@ -422,7 +422,7 @@ pub(crate) fn add_row(
 
 /// Restore the prompt, model, style, size and seed recorded with an entry.
 pub(crate) fn restore_settings(ui: &Rc<Ui>, entry: &Generation) {
-    if entry.kind == "upscale" || entry.kind == "adjust" {
+    if matches!(entry.kind.as_str(), "upscale" | "adjust" | "import") {
         return;
     }
 
@@ -453,6 +453,7 @@ pub(crate) fn kind_label(kind: &str) -> Option<&'static str> {
     match kind {
         "upscale" => Some("Upscaled"),
         "adjust" => Some("Adjusted"),
+        "import" => Some("Opened"),
         "custom" => Some("Effect"),
         "colorize" => Some("Colorized"),
         "recover" => Some("Recovered"),
@@ -566,6 +567,13 @@ fn show_info(ui: &Rc<Ui>, entry: &Generation) {
         if let Some(source) = entry.source_path.as_deref() {
             content.append(&kv("Source", source));
         }
+        content.append(&kv("File", &entry.image_path));
+    } else if entry.kind == "import" {
+        content.append(&kv(
+            "Size",
+            &format!("{} × {} px", entry.width, entry.height),
+        ));
+        content.append(&kv("Created", &created_label(entry.created_at)));
         content.append(&kv("File", &entry.image_path));
     } else {
         content.append(&kv("Prompt", &entry.prompt));
@@ -863,7 +871,9 @@ fn model_label(id: &str) -> &str {
 }
 
 pub(crate) fn entry_model_label(entry: &Generation) -> &str {
-    if entry.kind == "upscale" {
+    if entry.kind == "import" {
+        "Imported image"
+    } else if entry.kind == "upscale" {
         upscaler(entry.model.as_str())
             .map(|model| model.label)
             .unwrap_or(entry.model.as_str())
@@ -946,6 +956,15 @@ mod tests {
         ]);
         assert_eq!(ids(&ordered.entries), vec![1, 2, 3, 4]);
         assert_eq!(ordered.group_sizes.get(&1), Some(&4));
+    }
+
+    #[test]
+    fn labels_imported_images() {
+        let mut imported = entry(1, None, 100);
+        imported.kind = "import".into();
+        imported.model = "import".into();
+        assert_eq!(kind_label("import"), Some("Opened"));
+        assert_eq!(entry_model_label(&imported), "Imported image");
     }
 
     #[test]

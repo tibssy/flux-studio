@@ -168,6 +168,7 @@ pub(crate) struct Ui {
     /// Latest preview frame, kept while the canvas shows something else.
     pub live_preview: RefCell<Option<gdk::Texture>>,
     pub new_button: gtk::Button,
+    pub open_button: gtk::Button,
     pub history_search: gtk::SearchEntry,
     pub history_filter: gtk::DropDown,
     pub history_empty: gtk::Label,
@@ -524,6 +525,7 @@ fn build_ui(app: &adw::Application) {
         live_view: Cell::new(true),
         live_preview: RefCell::new(None),
         new_button: side.new_button,
+        open_button: side.open_button,
         history_search: side.history_search,
         history_filter: side.history_filter,
         history_empty: side.history_empty,
@@ -731,6 +733,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let button = ui.new_button.clone();
         button.connect_clicked(move |_| new_image(&ui));
+    }
+    {
+        let ui = ui.clone();
+        let button = ui.open_button.clone();
+        button.connect_clicked(move |_| choose_image(&ui));
     }
     {
         let ui = ui.clone();
@@ -1206,6 +1213,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::n | gdk::Key::N => {
                     new_image(&ui);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::o | gdk::Key::O => {
+                    choose_image(&ui);
                     glib::Propagation::Stop
                 }
                 gdk::Key::u | gdk::Key::U => {
@@ -2518,6 +2529,136 @@ fn set_controls_enabled(ui: &Rc<Ui>, enabled: bool) {
     ui.improve_button
         .set_sensitive(enabled && !ui.improving.get());
     ui.generate.set_sensitive(enabled);
+}
+
+/// Open an image from disk and add it to History as an imported entry.
+fn choose_image(ui: &Rc<Ui>) {
+    let dialog = gtk::FileDialog::builder()
+        .title("Open image")
+        .modal(true)
+        .build();
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Images"));
+    for mime in [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/tiff",
+        "image/bmp",
+    ] {
+        filter.add_mime_type(mime);
+    }
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+    dialog.set_default_filter(Some(&filter));
+
+    let ui = ui.clone();
+    let window = ui.window.clone();
+    dialog.open(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+        let Ok(file) = result else {
+            return;
+        };
+        let Some(path) = file.path() else {
+            ui.toast
+                .add_toast(adw::Toast::new("Could not read that image."));
+            return;
+        };
+        import_image(&ui, path);
+    });
+}
+
+fn import_image(ui: &Rc<Ui>, path: PathBuf) {
+    let image = match image::open(&path) {
+        Ok(image) => image,
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "failed to open an imported image");
+            ui.toast
+                .add_toast(adw::Toast::new("That file is not a readable image."));
+            return;
+        }
+    };
+    let (width, height) = (image.width(), image.height());
+    let output_dir = ui.config.borrow().output_dir.clone();
+    if let Err(error) = std::fs::create_dir_all(&output_dir) {
+        tracing::error!(%error, path = %output_dir.display(), "failed to create the output folder");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not create the output folder."));
+        return;
+    }
+    let output = output_dir.join(format!("imported-{}.png", now_millis()));
+    if let Err(error) = image.save(&output) {
+        tracing::error!(%error, path = %output.display(), "failed to save an imported image");
+        ui.toast
+            .add_toast(adw::Toast::new("Could not save the imported image."));
+        return;
+    }
+
+    let created_at = unix_seconds();
+    let image_text = output.to_string_lossy().into_owned();
+    let title: String = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.trim())
+        .filter(|stem| !stem.is_empty())
+        .map(|stem| stem.chars().take(80).collect())
+        .unwrap_or_else(|| "Imported image".to_string());
+    let inserted = ui.history.borrow().insert(&NewGeneration {
+        prompt: &title,
+        model: "import",
+        style: "none",
+        width,
+        height,
+        steps: 0,
+        seed: "",
+        created_at,
+        duration_ms: 0,
+        image_path: &image_text,
+        reference_path: None,
+        reference_paths: &[],
+        kind: "import",
+        source_path: None,
+    });
+
+    match inserted {
+        Ok((id, parent_id)) => {
+            if let Err(error) = write_thumbnail(&output, id) {
+                tracing::warn!(%error, "failed to write thumbnail");
+            }
+            let entry = Generation {
+                id,
+                prompt: title,
+                model: "import".into(),
+                style: "none".into(),
+                width,
+                height,
+                steps: 0,
+                seed: String::new(),
+                created_at,
+                duration_ms: 0,
+                image_path: image_text,
+                reference_path: None,
+                reference_paths: Vec::new(),
+                kind: "import".into(),
+                source_path: None,
+                parent_id,
+                favorite: false,
+            };
+            ui.state.borrow_mut().preview(output.clone());
+            update_image_view(ui);
+            reload_history(ui, false);
+            history_view::highlight(ui, Path::new(&entry.image_path));
+            ui.status
+                .set_text(&format!("Imported · {width} × {height}"));
+            ui.toast.add_toast(adw::Toast::new("Image opened."));
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to record an imported image");
+            let _ = std::fs::remove_file(&output);
+            ui.toast
+                .add_toast(adw::Toast::new("Could not add the image to History."));
+        }
+    }
 }
 
 fn choose_references(ui: &Rc<Ui>) {

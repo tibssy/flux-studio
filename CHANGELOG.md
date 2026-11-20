@@ -5,6 +5,9 @@ rough edges.
 
 ## Unreleased
 
+- **Open images from disk**: `Ctrl+O` (or the folder button next to **New**)
+  imports a copy into the output folder and History, ready to edit, upscale or
+  use as a reference.
 - **Batch and variations**: queue 1–4 images per Generate with consecutive
   seeds, and re-run a result with seed + 1 from the new shuffle button.
 - **Before/after compare**: split the canvas against the source of an edit,
