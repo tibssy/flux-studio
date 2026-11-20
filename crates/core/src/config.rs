@@ -88,12 +88,15 @@ pub struct Config {
     pub session_restore: bool,
     pub last_image: Option<PathBuf>,
     pub draft_prompt: String,
-    /// User-saved prompts shown at the bottom of the effects menu.
-    pub custom_effects: Vec<CustomEffect>,
     /// Optional override for the folder scanned for LoRA weights.
     pub lora_dir: Option<PathBuf>,
     /// LoRAs applied to generations, in order.
     pub loras: Vec<LoraSelection>,
+    /// User-saved prompts shown at the bottom of the effects menu.
+    ///
+    /// Kept last: TOML serializes vectors of structs as `[[table]]` blocks, so
+    /// every scalar field must be written before them.
+    pub custom_effects: Vec<CustomEffect>,
 }
 
 impl Default for Config {
@@ -317,6 +320,23 @@ mod tests {
         });
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.loras, config.loras);
+    }
+
+    #[test]
+    fn effects_and_loras_serialize_as_valid_toml() {
+        let mut config = Config::default();
+        config.custom_effects.push(CustomEffect {
+            name: "Restore".into(),
+            prompt: "repair this photo".into(),
+        });
+        config.loras.push(LoraSelection {
+            path: "styles/watercolor.safetensors".into(),
+            weight: 0.8,
+        });
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.custom_effects, config.custom_effects);
         assert_eq!(parsed.loras, config.loras);
     }
 
