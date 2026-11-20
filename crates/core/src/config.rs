@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -144,8 +144,9 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        match std::fs::read_to_string(paths::config_file()) {
-            Ok(text) => toml::from_str(&text).unwrap_or_default(),
+        let path = paths::config_file();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => parse_or_backup(&text, &path),
             Err(_) => Self::default(),
         }
     }
@@ -155,8 +156,39 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        // Write beside the config and rename so an interrupted save cannot
+        // truncate the user's settings and effects.
+        let temporary = path.with_extension("toml.tmp");
+        std::fs::write(&temporary, toml::to_string_pretty(self)?)?;
+        std::fs::rename(&temporary, &path)?;
         Ok(())
+    }
+}
+
+/// Parse a config file, preserving a copy if it is malformed.
+///
+/// Returning defaults silently on a parse error used to overwrite the file on
+/// the next save, losing effects and settings. Keep the invalid file next to
+/// the original so it can be repaired.
+fn parse_or_backup(text: &str, path: &Path) -> Config {
+    match toml::from_str(text) {
+        Ok(config) => config,
+        Err(error) => {
+            let backup = path.with_extension("toml.invalid");
+            if let Err(copy_error) = std::fs::copy(path, &backup) {
+                eprintln!(
+                    "failed to parse {}: {error}; could not back it up: {copy_error}",
+                    path.display()
+                );
+            } else {
+                eprintln!(
+                    "failed to parse {}: {error}; saved a copy to {}",
+                    path.display(),
+                    backup.display()
+                );
+            }
+            Config::default()
+        }
     }
 }
 
