@@ -30,6 +30,17 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     let pending_count = waiting.len();
     let has_jobs = pending_count > 0 || running.is_some();
 
+    // With nothing queued the header is inert: no count pill, no expanding.
+    ui.queue_toggle.set_visible(has_jobs);
+    if has_jobs {
+        if !ui.queue_expander.enables_expansion() {
+            ui.queue_expander.set_enable_expansion(true);
+            ui.queue_expander.set_expanded(false);
+        }
+    } else {
+        ui.queue_expander.set_enable_expansion(false);
+    }
+
     ui.queue_pause_guard.set(true);
     ui.queue_pause.set_active(paused);
     ui.queue_pause_guard.set(false);
