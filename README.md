@@ -104,9 +104,12 @@ Milestone 3 (packaged desktop app):
 - **before/after compare**: the split button over the canvas shows the source
   of an edit, upscale or adjustment beside the result; drag the divider or
   click a side to move it
-- **prompt history**: the history button in the prompt field lists saved
-  prompts, and `Alt+Up` / `Alt+Down` recall them while keeping the draft you
-  were writing
+- **prompt history**: the history button in the composer toolbar lists
+  saved prompts, and `Alt+Up` / `Alt+Down` recall them while keeping the draft
+  you were writing
+- **camera capture**: the camera button in the composer grabs one frame from
+  the first V4L2 device, adds it as a reference and shows it on the canvas;
+  it only appears when a camera and `ffmpeg` are available
 - **session restore**: optionally reopen the last image and draft prompt on
   launch (**Preferences → General**, on by default)
 - **view-only zoom** with a bottom-right pill: zoom in/out, real-pixel scale
@@ -277,7 +280,8 @@ without leaving the app.
 | Pause / resume the queue | pause button in the **Queue** header |
 | Reorder waiting jobs | up/down arrows on a waiting queue row |
 | Duplicate a queued prompt | copy button on a waiting queue row |
-| Recall a previous prompt | history button in the prompt field, or `Alt+Up` / `Alt+Down` |
+| Recall a previous prompt | history button in the composer, or `Alt+Up` / `Alt+Down` |
+| Take a photo | camera button in the composer (needs a camera and `ffmpeg`) |
 | Choose LoRAs | **LoRAs…** in the sidebar |
 | Improve the prompt | ✨ button in the prompt field (needs `llama-cli`) |
 | New random seed | shuffle button next to the seed field |
@@ -286,7 +290,8 @@ without leaving the app.
 Editing is iterative: the first edit uses the selected references, and each
 following Generate uses the previous result. Press **New** (or `Ctrl+N`) to
 leave edit mode and generate from text alone. The composer opens empty; the
-history button in its top-right corner loads an earlier prompt.
+history button in its toolbar loads an earlier prompt, and the camera
+button takes a photo and uses it as a reference.
 
 After a generation the prompt field slides away and is cleared. Use the pencil
 button on the image (or `New`) to bring it back; with no references selected,

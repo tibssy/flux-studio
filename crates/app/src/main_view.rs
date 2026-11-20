@@ -13,6 +13,7 @@ pub(crate) struct MainView {
     pub prompt_history_list: gtk::ListBox,
     pub composer: gtk::Revealer,
     pub reference_button: gtk::Button,
+    pub camera_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub generate: gtk::Button,
     pub progress_row: gtk::Box,
@@ -457,7 +458,7 @@ pub(crate) fn build() -> MainView {
         .top_margin(8)
         .bottom_margin(8)
         .left_margin(8)
-        .right_margin(48)
+        .right_margin(8)
         .build();
 
     let prompt_scroller = gtk::ScrolledWindow::builder()
@@ -484,22 +485,23 @@ pub(crate) fn build() -> MainView {
     let prompt_history_button = gtk::MenuButton::builder()
         .icon_name("document-open-recent-symbolic")
         .tooltip_text("Load a previous prompt")
-        .halign(gtk::Align::End)
-        .valign(gtk::Align::Start)
-        .margin_top(4)
-        .margin_end(20)
-        .css_classes(["flat", "circular", "prompt-history"])
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
         .popover(&prompt_history_popover)
         .build();
-
-    let prompt_overlay = gtk::Overlay::new();
-    prompt_overlay.set_child(Some(&prompt_scroller));
-    prompt_overlay.add_overlay(&prompt_history_button);
 
     let reference_button = gtk::Button::builder()
         .icon_name("image-x-generic-symbolic")
         .tooltip_text("Add reference images to edit")
         .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+
+    let camera_button = gtk::Button::builder()
+        .icon_name("camera-photo-symbolic")
+        .tooltip_text("Take a photo with the camera")
+        .valign(gtk::Align::Center)
+        .visible(false)
         .css_classes(["flat"])
         .build();
 
@@ -522,6 +524,8 @@ pub(crate) fn build() -> MainView {
     actions.set_margin_end(6);
     actions.set_margin_bottom(6);
     actions.append(&reference_button);
+    actions.append(&camera_button);
+    actions.append(&prompt_history_button);
     actions.append(&improve_button);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
@@ -531,7 +535,7 @@ pub(crate) fn build() -> MainView {
     let prompt_field = gtk::Box::new(gtk::Orientation::Vertical, 0);
     prompt_field.add_css_class("prompt-field");
     prompt_field.set_hexpand(true);
-    prompt_field.append(&prompt_overlay);
+    prompt_field.append(&prompt_scroller);
     prompt_field.append(&actions);
 
     let composer = gtk::Revealer::builder()
@@ -594,6 +598,7 @@ pub(crate) fn build() -> MainView {
         prompt_history_list,
         composer,
         reference_button,
+        camera_button,
         improve_button,
         generate,
         progress_row,
