@@ -304,7 +304,7 @@ impl History {
     }
 }
 
-/// Filter chips shown above the History list.
+/// Filter options shown from the History header button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HistoryFilter {
     #[default]
@@ -316,7 +316,7 @@ pub enum HistoryFilter {
     Adjustments,
 }
 
-/// Labels in dropdown order.
+/// Labels in filter menu order.
 pub const FILTER_LABELS: [&str; 6] = [
     "All images",
     "Favorites",

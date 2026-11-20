@@ -740,7 +740,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
     let _ = std::fs::remove_file(thumb_path(entry.id));
 
     ui.entries.borrow_mut().retain(|item| item.id != entry.id);
-    crate::reload_history(ui, ui.generating.get() || ui.upscaling.get());
+    crate::reload_history(ui, true);
 
     let path = PathBuf::from(&entry.image_path);
     let is_active = {
@@ -754,7 +754,7 @@ fn delete_entry(ui: &Rc<Ui>, entry: &Generation) {
         ui.status.set_text("Image deleted");
     } else {
         if let Some(display) = ui.state.borrow().display.clone() {
-            highlight(ui, &display);
+            select_without_reveal(ui, &display);
         }
         update_image_actions(ui);
     }

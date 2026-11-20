@@ -37,8 +37,9 @@ Milestone 3 (packaged desktop app):
   newest image is the group header, older iterations expand below it, and the
   original sits at the bottom marked **first**. The **Select** button switches
   History to checkboxes for bulk deletion. **Search** prompts, models
-  and seeds (`Ctrl+F`) and filter by text-to-image, edits, upscales or
-  adjustments; matching chains stay expanded, and a star marks **favorites**
+  and seeds (`Ctrl+F`); the filter button in the History header narrows the
+  list to text-to-image, edits, upscales or adjustments; matching chains stay
+  expanded, and a star marks **favorites**
   for quick access
 - clicking a history image shows it on the canvas with the effects menu,
   upscale, edit and crop actions and restores its prompt, model, style, size

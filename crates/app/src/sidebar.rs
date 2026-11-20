@@ -32,7 +32,9 @@ pub(crate) struct Sidebar {
     pub selection_delete: gtk::Button,
     pub selection_cancel: gtk::Button,
     pub history_search: gtk::SearchEntry,
-    pub history_filter: gtk::DropDown,
+    pub history_filter: Rc<Cell<u32>>,
+    pub history_filter_button: gtk::MenuButton,
+    pub history_filter_buttons: Vec<gtk::CheckButton>,
     pub history_empty: gtk::Label,
     pub history_list: gtk::ListBox,
     pub queue_box: gtk::Box,
@@ -270,8 +272,36 @@ pub(crate) fn build(
         .tooltip_text("Select multiple images to delete")
         .css_classes(["flat"])
         .build();
+
+    let filter_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    filter_box.set_margin_top(6);
+    filter_box.set_margin_bottom(6);
+    filter_box.set_margin_start(6);
+    filter_box.set_margin_end(6);
+    let mut history_filter_buttons = Vec::with_capacity(crate::history::FILTER_LABELS.len());
+    let mut group_leader: Option<gtk::CheckButton> = None;
+    for (index, label) in crate::history::FILTER_LABELS.iter().enumerate() {
+        let check = gtk::CheckButton::with_label(label);
+        check.set_active(index == 0);
+        if let Some(leader) = &group_leader {
+            check.set_group(Some(leader));
+        } else {
+            group_leader = Some(check.clone());
+        }
+        filter_box.append(&check);
+        history_filter_buttons.push(check);
+    }
+    let filter_popover = gtk::Popover::builder().child(&filter_box).build();
+    let history_filter_button = gtk::MenuButton::builder()
+        .icon_name("view-filter-symbolic")
+        .tooltip_text("Filter history: All images")
+        .popover(&filter_popover)
+        .css_classes(["flat"])
+        .build();
+
     let history_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     history_header.append(&history_title);
+    history_header.append(&history_filter_button);
     history_header.append(&select_button);
     history_header.append(&open_button);
     history_header.append(&new_button);
@@ -281,9 +311,6 @@ pub(crate) fn build(
         .hexpand(true)
         .build();
     history_search.set_tooltip_text(Some("Search prompts, models and seeds (Ctrl+F)"));
-    let history_filter = gtk::DropDown::from_strings(&crate::history::FILTER_LABELS);
-    history_filter.set_hexpand(true);
-    history_filter.set_tooltip_text(Some("Filter history entries"));
 
     let history_empty = gtk::Label::builder()
         .label("No images match.")
@@ -292,10 +319,6 @@ pub(crate) fn build(
         .margin_start(6)
         .css_classes(["caption", "dim-label"])
         .build();
-
-    let history_tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    history_tools.append(&history_search);
-    history_tools.append(&history_filter);
 
     let selection_label = gtk::Label::builder()
         .label("0 selected")
@@ -383,7 +406,7 @@ pub(crate) fn build(
     root.append(&separator);
     root.append(&queue_box);
     root.append(&history_header);
-    root.append(&history_tools);
+    root.append(&history_search);
     root.append(&selection_bar);
     root.append(&history_empty);
     root.append(&history_scroller);
@@ -414,7 +437,9 @@ pub(crate) fn build(
         selection_delete,
         selection_cancel,
         history_search,
-        history_filter,
+        history_filter: Rc::new(Cell::new(0)),
+        history_filter_button,
+        history_filter_buttons,
         history_empty,
         history_list,
         queue_box,

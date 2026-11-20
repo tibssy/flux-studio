@@ -5,6 +5,11 @@ rough edges.
 
 ## Unreleased
 
+- **History filter button**: the funnel icon in the History header opens a
+  compact filter list for favorites, text-to-image, edits, upscales and
+  adjustments.
+- **Stable History scroll**: deleting an image no longer jumps the sidebar back
+  to the top.
 - **Bulk delete**: a **Select** button turns History rows into checkboxes with
   Select all, a selection count and one confirmation for the whole batch.
   Images used by queued jobs are skipped.

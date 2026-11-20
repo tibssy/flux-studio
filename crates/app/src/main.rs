@@ -178,7 +178,9 @@ pub(crate) struct Ui {
     pub history_selection_mode: Cell<bool>,
     pub history_selected: RefCell<HashSet<i64>>,
     pub history_search: gtk::SearchEntry,
-    pub history_filter: gtk::DropDown,
+    pub history_filter: Rc<Cell<u32>>,
+    pub history_filter_button: gtk::MenuButton,
+    pub history_filter_buttons: Vec<gtk::CheckButton>,
     pub history_empty: gtk::Label,
     pub history_debounce: RefCell<Option<glib::SourceId>>,
     pub entries: RefCell<Vec<Generation>>,
@@ -270,6 +272,9 @@ fn install_styles() {
              padding: 4px 6px;
              border-radius: 8px;
              background-color: alpha(@accent_bg_color, 0.12);
+         }
+         .filter-active {
+             color: @accent_color;
          }
          .queue-bubble {
              background-image: none;
@@ -549,6 +554,8 @@ fn build_ui(app: &adw::Application) {
         history_selected: RefCell::new(HashSet::new()),
         history_search: side.history_search,
         history_filter: side.history_filter,
+        history_filter_button: side.history_filter_button,
+        history_filter_buttons: side.history_filter_buttons,
         history_empty: side.history_empty,
         history_debounce: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
@@ -802,9 +809,29 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             *ui.history_debounce.borrow_mut() = Some(source);
         });
     }
-    {
+    for (index, check) in ui.history_filter_buttons.iter().cloned().enumerate() {
+        {
+            let menu = ui.history_filter_button.clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| menu.popdown());
+            check.add_controller(gesture);
+        }
         let ui = ui.clone();
-        ui.history_filter.clone().connect_selected_notify(move |_| {
+        check.connect_toggled(move |check| {
+            if !check.is_active() {
+                return;
+            }
+            ui.history_filter.set(index as u32);
+            ui.history_filter_button.set_tooltip_text(Some(&format!(
+                "Filter history: {}",
+                crate::history::FILTER_LABELS[index]
+            )));
+            if index == 0 {
+                ui.history_filter_button.remove_css_class("filter-active");
+            } else {
+                ui.history_filter_button.add_css_class("filter-active");
+            }
+            ui.history_filter_button.popdown();
             if ui.history_selection_mode.get() {
                 exit_selection_mode(&ui);
             }
@@ -5338,7 +5365,7 @@ pub(crate) fn start_upscale(
 /// Whether a search term or kind filter is narrowing the History list.
 pub(crate) fn history_filter_active(ui: &Ui) -> bool {
     !ui.history_search.text().trim().is_empty()
-        || crate::history::HistoryFilter::from_index(ui.history_filter.selected())
+        || crate::history::HistoryFilter::from_index(ui.history_filter.get())
             != crate::history::HistoryFilter::All
 }
 
@@ -5348,7 +5375,7 @@ pub(crate) fn history_filter_active(ui: &Ui) -> bool {
 /// background jobs and favorite toggles should do.
 pub(crate) fn reload_history(ui: &Rc<Ui>, preserve_scroll: bool) {
     let query = ui.history_search.text().to_string();
-    let filter = crate::history::HistoryFilter::from_index(ui.history_filter.selected());
+    let filter = crate::history::HistoryFilter::from_index(ui.history_filter.get());
     let filtered = !query.trim().is_empty() || filter != crate::history::HistoryFilter::All;
 
     let result = if filtered {
