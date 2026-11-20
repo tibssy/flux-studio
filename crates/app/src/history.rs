@@ -215,7 +215,7 @@ impl History {
             HistoryFilter::TextToImage => clauses
                 .push("kind = 'generate' AND (reference_path IS NULL OR reference_path = '')"),
             HistoryFilter::Edits => clauses.push(
-                "(kind NOT IN ('generate', 'upscale', 'adjust')
+                "(kind NOT IN ('generate', 'upscale', 'adjust', 'import')
                   OR (kind = 'generate' AND reference_path IS NOT NULL
                       AND reference_path != ''))",
             ),
@@ -717,6 +717,11 @@ mod tests {
         adjust.source_path = Some("/tmp/in.png");
         history.insert(&adjust).unwrap();
 
+        let mut import = sample("Imported image", "import");
+        import.created_at = 104;
+        import.kind = "import";
+        history.insert(&import).unwrap();
+
         let prompts = |filter| {
             let mut prompts: Vec<String> = history
                 .query(filter, "", 20)
@@ -727,7 +732,7 @@ mod tests {
             prompts.sort();
             prompts
         };
-        assert_eq!(prompts(HistoryFilter::All).len(), 4);
+        assert_eq!(prompts(HistoryFilter::All).len(), 5);
         assert_eq!(prompts(HistoryFilter::TextToImage), ["plain text"]);
         assert_eq!(prompts(HistoryFilter::Edits), ["edit this"]);
         assert_eq!(prompts(HistoryFilter::Upscales), ["Upscaled 4×"]);

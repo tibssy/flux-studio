@@ -24,6 +24,7 @@ pub(crate) struct Sidebar {
     pub random_button: gtk::Button,
     pub batch_spin: gtk::SpinButton,
     pub new_button: gtk::Button,
+    pub open_button: gtk::Button,
     pub history_search: gtk::SearchEntry,
     pub history_filter: gtk::DropDown,
     pub history_empty: gtk::Label,
@@ -253,8 +254,14 @@ pub(crate) fn build(
         .tooltip_text("Start a new image without a reference (Ctrl+N)")
         .css_classes(["flat"])
         .build();
+    let open_button = gtk::Button::builder()
+        .icon_name("document-open-symbolic")
+        .tooltip_text("Open an image from disk (Ctrl+O)")
+        .css_classes(["flat"])
+        .build();
     let history_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     history_header.append(&history_title);
+    history_header.append(&open_button);
     history_header.append(&new_button);
 
     let history_search = gtk::SearchEntry::builder()
@@ -356,6 +363,7 @@ pub(crate) fn build(
         random_button,
         batch_spin,
         new_button,
+        open_button,
         history_search,
         history_filter,
         history_empty,

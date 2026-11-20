@@ -107,6 +107,9 @@ Milestone 3 (packaged desktop app):
 - **history navigation** with a crossfade: scroll over the image or use the
   up/down arrows to step through history and compare an upscale with its source;
   the sidebar highlights the image currently on the canvas
+- **open images from disk** (`Ctrl+O` or the folder button next to **New**):
+  imports a copy into the output folder and History, ready to edit, upscale or
+  use as a reference
 - the composer slides away during generation and returns via Edit/New/Back
 - **preferences dialog**: output folder, CPU offload, models folder
 - **About page** with repository/issue links plus Credits and Legal subpages with back navigation
@@ -233,6 +236,7 @@ without leaving the app.
 | Crop to a reference | selection button, drag a rectangle, release (animated zoom into the crop) |
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
+| Open an image from disk | `Ctrl+O` or the folder button at the top of History |
 | Add reference images | image button in the prompt field, or `+` in the reference strip (multi-select) |
 | Preview / remove a reference | click its thumbnail / click the × on the thumbnail |
 | Edit an image | pick references with the image button, or open a history row and press Edit |
@@ -555,4 +559,5 @@ binary will always depend on the host GTK stack.
 
 - ~~M2: history/gallery, seed control, resolution presets, persistence~~
 - ~~M3: preferences, first-run downloader, PKGBUILD, desktop file, icon~~
-- M4: add user-supplied Hugging Face models, LoRA support, batch queue
+- ~~M4: LoRA support, batch generation, queue controls~~
+- Post-beta: user-supplied Hugging Face models and mask inpainting
