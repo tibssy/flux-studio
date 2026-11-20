@@ -32,8 +32,10 @@ Milestone 3 (packaged desktop app):
   the current MP target
 - **history** with details and delete actions per row; delete removes the PNG,
   thumbnail and database entry. Images derived from another result (edits,
-  effects and upscales) are grouped under their source with an indent and a
-  collapsible chain counter; chains start collapsed. **Search** prompts, models
+  effects upscales) are grouped under their source with an indent and a
+  collapsible chain counter; chains start collapsed and read newest-first: the
+  newest image is the group header, older iterations expand below it, and the
+  original sits at the bottom marked **first**. **Search** prompts, models
   and seeds (`Ctrl+F`) and filter by text-to-image, edits, upscales or
   adjustments; matching chains stay expanded, and a star marks **favorites**
   for quick access

@@ -4778,6 +4778,36 @@ fn history_position(ui: &Ui) -> Option<(usize, usize)> {
     Some((index, entries.len()))
 }
 
+/// Walk `parent_id` to the chain root.
+fn chain_root(entries: &[Generation], id: i64) -> Option<i64> {
+    let mut current = entries.iter().find(|entry| entry.id == id)?;
+    let mut root = current.id;
+    let mut guard = 0;
+    while let Some(parent_id) = current.parent_id {
+        let Some(parent) = entries.iter().find(|entry| entry.id == parent_id) else {
+            break;
+        };
+        root = parent.id;
+        current = parent;
+        guard += 1;
+        if guard > entries.len() {
+            break;
+        }
+    }
+    Some(root)
+}
+
+/// Root id and member count of the chain containing `id`.
+fn chain_info(ui: &Ui, id: i64) -> Option<(i64, usize)> {
+    let entries = ui.entries.borrow();
+    let root = chain_root(&entries, id)?;
+    let size = entries
+        .iter()
+        .filter(|entry| chain_root(&entries, entry.id) == Some(root))
+        .count();
+    Some((root, size))
+}
+
 /// Move `delta` entries through history: positive is older, negative newer.
 fn navigate_history(ui: &Rc<Ui>, delta: isize) {
     if ui.zooming.get() || ui.classifying.get() {
@@ -4793,6 +4823,28 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
     }
     let entry = ui.entries.borrow()[target as usize].clone();
     let path = PathBuf::from(&entry.image_path);
+
+    // Leaving a chain through wheel/arrow navigation folds the chain we came
+    // from, so the next group opens in a clean state.
+    let previous_id = ui.state.borrow().display.as_ref().and_then(|display| {
+        ui.entries
+            .borrow()
+            .iter()
+            .find(|entry| Path::new(&entry.image_path) == display.as_path())
+            .map(|entry| entry.id)
+    });
+    if let Some(previous_id) = previous_id
+        && previous_id != entry.id
+        && let (Some((previous_root, previous_size)), Some((target_root, _))) =
+            (chain_info(ui, previous_id), chain_info(ui, entry.id))
+        && previous_size > 1
+        && previous_root != target_root
+        && !ui.collapsed_groups.borrow().contains(&previous_root)
+    {
+        ui.collapsed_groups.borrow_mut().insert(previous_root);
+        history_view::rebuild_preserving_scroll(ui);
+    }
+
     if !fade_to_image(ui, &path) {
         ui.toast.add_toast(adw::Toast::new(&format!(
             "Could not open {}",
