@@ -135,6 +135,7 @@ pub(crate) struct Ui {
     pub image_drag_attached: Cell<bool>,
     /// A drag started from the canvas itself.
     pub internal_drag: Cell<bool>,
+    pub drag_started: Cell<bool>,
     pub reference_button: gtk::Button,
     pub improve_button: gtk::Button,
     pub improving: Cell<bool>,
@@ -301,6 +302,14 @@ fn install_styles() {
          }
          .prompt-field:focus-within {
              border-color: @card_bg_color;
+         }
+         .canvas {
+             border-radius: 16px;
+         }
+         /* Our own drag should not paint the canvas as a drop target. */
+         .canvas.no-drop-highlight:drop(active) {
+             box-shadow: none;
+             border-color: transparent;
          }
          .compare-overlay {
              background-color: @window_bg_color;
@@ -573,6 +582,7 @@ fn build_ui(app: &adw::Application) {
         image_drag: RefCell::new(None),
         image_drag_attached: Cell::new(false),
         internal_drag: Cell::new(false),
+        drag_started: Cell::new(false),
         reference_button: view.reference_button,
         improve_button: view.improve_button,
         improving: Cell::new(false),
@@ -2944,12 +2954,17 @@ fn install_image_drag(ui: &Rc<Ui>) {
         // Set before the drag enters any target, so our own drag is not
         // accepted by the canvas drop target.
         inner.internal_drag.set(true);
+        inner.drag_started.set(true);
         let files = gdk::FileList::from_array(&[gio::File::for_path(&path)]);
         Some(gdk::ContentProvider::for_value(&files.to_value()))
     });
     {
         let ui = ui.clone();
-        source.connect_drag_end(move |_, _, _| ui.internal_drag.set(false));
+        source.connect_drag_end(move |_, _, _| {
+            ui.internal_drag.set(false);
+            ui.drag_started.set(false);
+            ui.stack.remove_css_class("no-drop-highlight");
+        });
     }
     {
         // Mark the drag as our own as soon as the press lands, before the
@@ -2959,11 +2974,20 @@ fn install_image_drag(ui: &Rc<Ui>) {
         press.set_button(gdk::BUTTON_PRIMARY);
         {
             let ui = ui.clone();
-            press.connect_pressed(move |_, _, _, _| ui.internal_drag.set(true));
+            press.connect_pressed(move |_, _, _, _| {
+                ui.internal_drag.set(true);
+                ui.stack.add_css_class("no-drop-highlight");
+            });
         }
         {
             let ui = ui.clone();
-            press.connect_released(move |_, _, _, _| ui.internal_drag.set(false));
+            press.connect_released(move |_, _, _, _| {
+                // A drag that started clears these in `drag_end`.
+                if !ui.drag_started.get() {
+                    ui.internal_drag.set(false);
+                    ui.stack.remove_css_class("no-drop-highlight");
+                }
+            });
         }
         ui.stack.add_controller(press);
     }
@@ -2992,6 +3016,8 @@ fn sync_image_drag(ui: &Ui) {
 
 /// Accept reference images dropped onto the canvas.
 fn install_reference_drop(ui: &Rc<Ui>) {
+    // Rounded so libadwaita's native drop border follows the canvas corners.
+    ui.stack.add_css_class("canvas");
     let target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     target.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
 
