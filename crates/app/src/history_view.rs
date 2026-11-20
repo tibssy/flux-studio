@@ -494,6 +494,12 @@ fn build_chain_header(
     if let Some(arrow) = crate::find_widget_by_css(expander.upcast_ref(), "expander-row-arrow") {
         arrow.set_visible(false);
     }
+    // Suffixes are prepended, so add in reverse visual order: the action column
+    // stays flush right like standalone rows, then the star, then the pill.
+    let actions = actions_box(ui, entry, selecting);
+    expander.add_suffix(&actions);
+    let favorite = favorite_button(ui, entry, selecting);
+    expander.add_suffix(&favorite);
     let toggle = chain_toggle_button(group_size, collapsed);
     ui.chain_toggles.borrow_mut().insert(root, toggle.clone());
     expander.add_suffix(&toggle.0);
@@ -503,11 +509,6 @@ fn build_chain_header(
             .0
             .connect_clicked(move |_| row.set_expanded(!row.is_expanded()));
     }
-
-    let favorite = favorite_button(ui, entry, selecting);
-    expander.add_suffix(&favorite);
-    let actions = actions_box(ui, entry, selecting);
-    expander.add_suffix(&actions);
 
     {
         let ui = ui.clone();
