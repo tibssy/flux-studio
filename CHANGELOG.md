@@ -5,6 +5,9 @@ rough edges.
 
 ## Unreleased
 
+- **Bulk delete**: a **Select** button turns History rows into checkboxes with
+  Select all, a selection count and one confirmation for the whole batch.
+  Images used by queued jobs are skipped.
 - **History chains read newest-first**: a collapsed chain shows its newest
   image and opens it when clicked; expanding reveals older iterations below,
   with the original image at the bottom marked **first**.

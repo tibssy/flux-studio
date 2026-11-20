@@ -16,7 +16,7 @@ mod state;
 mod upscale_dialog;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -169,6 +169,14 @@ pub(crate) struct Ui {
     pub live_preview: RefCell<Option<gdk::Texture>>,
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
+    pub select_button: gtk::Button,
+    pub selection_bar: gtk::Box,
+    pub selection_label: gtk::Label,
+    pub selection_all: gtk::Button,
+    pub selection_delete: gtk::Button,
+    pub selection_cancel: gtk::Button,
+    pub history_selection_mode: Cell<bool>,
+    pub history_selected: RefCell<HashSet<i64>>,
     pub history_search: gtk::SearchEntry,
     pub history_filter: gtk::DropDown,
     pub history_empty: gtk::Label,
@@ -257,6 +265,11 @@ fn install_styles() {
          }
          .compare-overlay {
              background-color: @window_bg_color;
+         }
+         .selection-bar {
+             padding: 4px 6px;
+             border-radius: 8px;
+             background-color: alpha(@accent_bg_color, 0.12);
          }
          .queue-bubble {
              background-image: none;
@@ -526,6 +539,14 @@ fn build_ui(app: &adw::Application) {
         live_preview: RefCell::new(None),
         new_button: side.new_button,
         open_button: side.open_button,
+        select_button: side.select_button,
+        selection_bar: side.selection_bar,
+        selection_label: side.selection_label,
+        selection_all: side.selection_all,
+        selection_delete: side.selection_delete,
+        selection_cancel: side.selection_cancel,
+        history_selection_mode: Cell::new(false),
+        history_selected: RefCell::new(HashSet::new()),
         history_search: side.history_search,
         history_filter: side.history_filter,
         history_empty: side.history_empty,
@@ -741,7 +762,34 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
+        ui.select_button
+            .clone()
+            .connect_clicked(move |_| enter_selection_mode(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_cancel
+            .clone()
+            .connect_clicked(move |_| exit_selection_mode(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_all
+            .clone()
+            .connect_clicked(move |_| toggle_select_all(&ui));
+    }
+    {
+        let ui = ui.clone();
+        ui.selection_delete
+            .clone()
+            .connect_clicked(move |_| confirm_delete_selected(&ui));
+    }
+    {
+        let ui = ui.clone();
         ui.history_search.clone().connect_search_changed(move |_| {
+            if ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+            }
             if let Some(source) = ui.history_debounce.borrow_mut().take() {
                 source.remove();
             }
@@ -756,9 +804,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
     }
     {
         let ui = ui.clone();
-        ui.history_filter
-            .clone()
-            .connect_selected_notify(move |_| reload_history(&ui, true));
+        ui.history_filter.clone().connect_selected_notify(move |_| {
+            if ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+            }
+            reload_history(&ui, true);
+        });
     }
     {
         let ui = ui.clone();
@@ -868,6 +919,12 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
             let Ok(id) = row.widget_name().parse::<i64>() else {
                 return;
             };
+            if ui.history_selection_mode.get() {
+                let selected = !ui.history_selected.borrow().contains(&id);
+                set_history_selected(&ui, id, selected);
+                history_view::rebuild_preserving_scroll(&ui);
+                return;
+            }
             let entry = ui
                 .entries
                 .borrow()
@@ -1174,6 +1231,10 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         let split = ui.split.clone();
         key_controller.connect_key_pressed(move |_, key, _, state| {
+            if key == gdk::Key::Escape && ui.history_selection_mode.get() {
+                exit_selection_mode(&ui);
+                return glib::Propagation::Stop;
+            }
             if key == gdk::Key::Escape && ui.crop_mode.get() {
                 ui.crop_button.set_active(false);
                 return glib::Propagation::Stop;
@@ -4756,6 +4817,217 @@ pub(crate) fn fade_to_image(ui: &Rc<Ui>, path: &Path) -> bool {
     reset_zoom(ui);
     update_image_actions(ui);
     true
+}
+
+pub(crate) fn enter_selection_mode(ui: &Rc<Ui>) {
+    if ui.history_selection_mode.get() {
+        return;
+    }
+    if ui.entries.borrow().is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("There are no images to select."));
+        return;
+    }
+    ui.history_selection_mode.set(true);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(true);
+    ui.select_button.set_sensitive(false);
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+    ui.status.set_text("Select images to delete");
+}
+
+pub(crate) fn exit_selection_mode(ui: &Rc<Ui>) {
+    if !ui.history_selection_mode.get() {
+        return;
+    }
+    ui.history_selection_mode.set(false);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(false);
+    ui.select_button.set_sensitive(true);
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+    ui.status.set_text("Selection cancelled");
+}
+
+pub(crate) fn set_history_selected(ui: &Rc<Ui>, id: i64, selected: bool) {
+    {
+        let mut selected_ids = ui.history_selected.borrow_mut();
+        if selected {
+            selected_ids.insert(id);
+        } else {
+            selected_ids.remove(&id);
+        }
+    }
+    update_selection_ui(ui);
+}
+
+pub(crate) fn update_selection_ui(ui: &Rc<Ui>) {
+    let count = ui.history_selected.borrow().len();
+    ui.selection_label.set_text(&match count {
+        0 => "0 selected".to_string(),
+        1 => "1 selected".to_string(),
+        count => format!("{count} selected"),
+    });
+    ui.selection_delete.set_sensitive(count > 0);
+
+    let visible = history_view::visible_ids(ui);
+    let all = !visible.is_empty() && {
+        let selected = ui.history_selected.borrow();
+        visible.iter().all(|id| selected.contains(id))
+    };
+    ui.selection_all.set_label(if all { "None" } else { "All" });
+    ui.selection_all.set_tooltip_text(Some(if all {
+        "Clear the selection"
+    } else {
+        "Select every visible image"
+    }));
+}
+
+fn toggle_select_all(ui: &Rc<Ui>) {
+    let visible = history_view::visible_ids(ui);
+    if visible.is_empty() {
+        return;
+    }
+    let all = {
+        let selected = ui.history_selected.borrow();
+        visible.iter().all(|id| selected.contains(id))
+    };
+    {
+        let mut selected = ui.history_selected.borrow_mut();
+        if all {
+            selected.clear();
+        } else {
+            selected.extend(visible);
+        }
+    }
+    history_view::rebuild_preserving_scroll(ui);
+    update_selection_ui(ui);
+}
+
+fn confirm_delete_selected(ui: &Rc<Ui>) {
+    let selected: Vec<Generation> = ui
+        .entries
+        .borrow()
+        .iter()
+        .filter(|entry| ui.history_selected.borrow().contains(&entry.id))
+        .cloned()
+        .collect();
+    if selected.is_empty() {
+        ui.toast
+            .add_toast(adw::Toast::new("Select at least one image."));
+        return;
+    }
+    let mut locked = 0;
+    let deletable: Vec<Generation> = selected
+        .iter()
+        .filter(|entry| {
+            let is_locked = history_entry_locked(ui, Path::new(&entry.image_path));
+            if is_locked {
+                locked += 1;
+            }
+            !is_locked
+        })
+        .cloned()
+        .collect();
+    if deletable.is_empty() {
+        ui.toast.add_toast(adw::Toast::new(
+            "Every selected image is used by a queued job.",
+        ));
+        return;
+    }
+
+    let mut body = format!(
+        "This permanently removes {} image{} and their files.",
+        deletable.len(),
+        if deletable.len() == 1 { "" } else { "s" }
+    );
+    if locked > 0 {
+        body.push_str(&format!(
+            " {locked} selected image{} used by queued jobs will be kept.",
+            if locked == 1 { "" } else { "s" }
+        ));
+    }
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!(
+            "Delete {} image{}?",
+            deletable.len(),
+            if deletable.len() == 1 { "" } else { "s" }
+        ))
+        .body(body)
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("cancel"));
+
+    {
+        let ui = ui.clone();
+        dialog.connect_response(Some("delete"), move |_, _| {
+            delete_selected_images(&ui, &deletable, locked);
+        });
+    }
+    dialog.present(Some(&ui.window));
+}
+
+fn delete_selected_images(ui: &Rc<Ui>, entries: &[Generation], skipped: usize) {
+    let mut deleted_paths: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut failed = 0;
+    for entry in entries {
+        if let Err(error) = ui.history.borrow().delete(entry.id) {
+            tracing::warn!(%error, id = entry.id, "failed to delete history entry");
+            failed += 1;
+            continue;
+        }
+        let path = std::path::PathBuf::from(&entry.image_path);
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, path = %path.display(), "failed to remove image");
+        }
+        let _ = std::fs::remove_file(thumb_path(entry.id));
+        deleted_paths.insert(path);
+    }
+
+    {
+        let mut state = ui.state.borrow_mut();
+        if state
+            .display
+            .as_ref()
+            .is_some_and(|display| deleted_paths.contains(display))
+        {
+            state.new_image();
+        }
+        state
+            .references
+            .retain(|reference| !deleted_paths.contains(reference));
+    }
+
+    ui.history_selection_mode.set(false);
+    ui.history_selected.borrow_mut().clear();
+    ui.selection_bar.set_visible(false);
+    ui.select_button.set_sensitive(true);
+    reload_history(ui, true);
+    update_image_view(ui);
+    update_selection_ui(ui);
+
+    let deleted = deleted_paths.len();
+    ui.status.set_text(&format!(
+        "Deleted {deleted} image{}",
+        if deleted == 1 { "" } else { "s" }
+    ));
+    let mut message = format!(
+        "Deleted {deleted} image{}.",
+        if deleted == 1 { "" } else { "s" }
+    );
+    if skipped > 0 {
+        message.push_str(&format!(" {skipped} used by queued jobs were kept."));
+    }
+    if failed > 0 {
+        message.push_str(&format!(" {failed} could not be deleted."));
+    }
+    ui.toast.add_toast(adw::Toast::new(&message));
 }
 
 /// The history entry whose image is on the canvas, if any.

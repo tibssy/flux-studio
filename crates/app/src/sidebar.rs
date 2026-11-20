@@ -25,6 +25,12 @@ pub(crate) struct Sidebar {
     pub batch_spin: gtk::SpinButton,
     pub new_button: gtk::Button,
     pub open_button: gtk::Button,
+    pub select_button: gtk::Button,
+    pub selection_bar: gtk::Box,
+    pub selection_label: gtk::Label,
+    pub selection_all: gtk::Button,
+    pub selection_delete: gtk::Button,
+    pub selection_cancel: gtk::Button,
     pub history_search: gtk::SearchEntry,
     pub history_filter: gtk::DropDown,
     pub history_empty: gtk::Label,
@@ -259,8 +265,14 @@ pub(crate) fn build(
         .tooltip_text("Open an image from disk (Ctrl+O)")
         .css_classes(["flat"])
         .build();
+    let select_button = gtk::Button::builder()
+        .icon_name("selection-mode-symbolic")
+        .tooltip_text("Select multiple images to delete")
+        .css_classes(["flat"])
+        .build();
     let history_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     history_header.append(&history_title);
+    history_header.append(&select_button);
     history_header.append(&open_button);
     history_header.append(&new_button);
 
@@ -284,6 +296,36 @@ pub(crate) fn build(
     let history_tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
     history_tools.append(&history_search);
     history_tools.append(&history_filter);
+
+    let selection_label = gtk::Label::builder()
+        .label("0 selected")
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["caption"])
+        .build();
+    let selection_all = gtk::Button::builder()
+        .label("All")
+        .tooltip_text("Select every visible image")
+        .css_classes(["flat"])
+        .build();
+    let selection_delete = gtk::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Delete selected images")
+        .sensitive(false)
+        .css_classes(["flat", "destructive-action"])
+        .build();
+    let selection_cancel = gtk::Button::builder()
+        .icon_name("window-close-symbolic")
+        .tooltip_text("Cancel selection")
+        .css_classes(["flat"])
+        .build();
+    let selection_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    selection_bar.add_css_class("selection-bar");
+    selection_bar.set_visible(false);
+    selection_bar.append(&selection_label);
+    selection_bar.append(&selection_all);
+    selection_bar.append(&selection_delete);
+    selection_bar.append(&selection_cancel);
 
     let history_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
@@ -342,6 +384,7 @@ pub(crate) fn build(
     root.append(&queue_box);
     root.append(&history_header);
     root.append(&history_tools);
+    root.append(&selection_bar);
     root.append(&history_empty);
     root.append(&history_scroller);
 
@@ -364,6 +407,12 @@ pub(crate) fn build(
         batch_spin,
         new_button,
         open_button,
+        select_button,
+        selection_bar,
+        selection_label,
+        selection_all,
+        selection_delete,
+        selection_cancel,
         history_search,
         history_filter,
         history_empty,

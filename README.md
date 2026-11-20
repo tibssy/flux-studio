@@ -35,7 +35,8 @@ Milestone 3 (packaged desktop app):
   effects upscales) are grouped under their source with an indent and a
   collapsible chain counter; chains start collapsed and read newest-first: the
   newest image is the group header, older iterations expand below it, and the
-  original sits at the bottom marked **first**. **Search** prompts, models
+  original sits at the bottom marked **first**. The **Select** button switches
+  History to checkboxes for bulk deletion. **Search** prompts, models
   and seeds (`Ctrl+F`) and filter by text-to-image, edits, upscales or
   adjustments; matching chains stay expanded, and a star marks **favorites**
   for quick access
@@ -239,6 +240,7 @@ without leaving the app.
 | Undo a crop | undo button (crops only) |
 | New image (no reference) | `Ctrl+N` or **New** at the top of History |
 | Open an image from disk | `Ctrl+O` or the folder button at the top of History |
+| Select multiple images | **Select** at the top of History, then check rows and **Delete** |
 | Add reference images | image button in the prompt field, or `+` in the reference strip (multi-select) |
 | Preview / remove a reference | click its thumbnail / click the × on the thumbnail |
 | Edit an image | pick references with the image button, or open a history row and press Edit |
