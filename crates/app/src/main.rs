@@ -146,9 +146,9 @@ pub(crate) struct Ui {
     pub history_list: gtk::ListBox,
     /// Jobs waiting behind the running one.
     pub queue: RefCell<queue::JobQueue>,
-    pub queue_box: gtk::Box,
+    pub queue_expander: adw::ExpanderRow,
     pub queue_list: gtk::ListBox,
-    pub queue_waiting: gtk::Label,
+    pub queue_count: gtk::Label,
     pub queue_clear: gtk::Button,
     pub queue_pause: gtk::ToggleButton,
     /// Suppresses the pause handler while the UI syncs it from the queue.
@@ -182,6 +182,7 @@ pub(crate) struct Ui {
     pub history_selection_mode: Cell<bool>,
     pub history_selected: RefCell<HashSet<i64>>,
     pub history_search: gtk::SearchEntry,
+    pub history_search_revealer: gtk::Revealer,
     pub history_filter: Rc<Cell<u32>>,
     pub history_filter_button: gtk::MenuButton,
     pub history_filter_buttons: Vec<gtk::CheckButton>,
@@ -190,6 +191,16 @@ pub(crate) struct Ui {
     pub entries: RefCell<Vec<Generation>>,
     /// Chain roots whose descendants are hidden in the sidebar.
     pub collapsed_groups: RefCell<std::collections::HashSet<i64>>,
+    /// Expandable chain headers, keyed by chain root.
+    pub chain_expanders: RefCell<HashMap<i64, adw::ExpanderRow>>,
+    /// Count/arrow pill on each chain header, keyed by chain root.
+    pub chain_toggles: RefCell<HashMap<i64, (gtk::Button, gtk::Image)>>,
+    /// Chain header id → chain root, used while scanning the list.
+    pub chain_headers: RefCell<HashMap<i64, i64>>,
+    /// Child rows inside each chain, keyed by chain root.
+    pub chain_child_rows: RefCell<HashMap<i64, Vec<(i64, gtk::ListBoxRow)>>>,
+    /// Suppresses expansion side effects while the list is being rebuilt.
+    pub expander_guard: Cell<bool>,
     pub model_dropdown: gtk::DropDown,
     pub models: RefCell<Vec<&'static ModelPreset>>,
     pub rebuilding_models: Cell<bool>,
@@ -247,6 +258,21 @@ impl GenerationWorker {
         });
         Self { jobs }
     }
+}
+
+/// First descendant (or self) carrying a CSS class.
+pub(crate) fn find_widget_by_css(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if widget.has_css_class(class) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(found) = find_widget_by_css(&widget, class) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn install_styles() {
@@ -330,16 +356,24 @@ fn install_styles() {
              background-color: alpha(@accent_bg_color, 0.45);
              border-radius: 1px;
          }
-         .history-toggle {
-             background-color: alpha(@accent_bg_color, 0.22);
+         .chain-toggle {
+             background-color: alpha(@accent_bg_color, 0.18);
              color: @accent_color;
-             border-radius: 8px;
-             padding: 1px 5px;
+             border-radius: 999px;
+             padding: 2px 8px;
              min-width: 0;
              min-height: 0;
          }
-         .history-toggle:hover {
-             background-color: alpha(@accent_bg_color, 0.35);
+         .chain-toggle:hover {
+             background-color: alpha(@accent_bg_color, 0.3);
+         }
+         .chain-child:hover {
+             background-color: alpha(@window_fg_color, 0.06);
+             border-radius: 8px;
+         }
+         .history-child-selected {
+             background-color: alpha(@accent_bg_color, 0.28);
+             border-radius: 8px;
          }
          .sidebar-pane, .overlay-pane {
              background-color: @sidebar_bg_color;
@@ -546,9 +580,9 @@ fn build_ui(app: &adw::Application) {
         history: RefCell::new(history),
         history_list: side.history_list,
         queue: RefCell::new(queue::JobQueue::default()),
-        queue_box: side.queue_box,
+        queue_expander: side.queue_expander,
         queue_list: side.queue_list,
-        queue_waiting: side.queue_waiting,
+        queue_count: side.queue_count,
         queue_clear: side.queue_clear,
         queue_pause: side.queue_pause,
         queue_pause_guard: Cell::new(false),
@@ -574,6 +608,7 @@ fn build_ui(app: &adw::Application) {
         history_selection_mode: Cell::new(false),
         history_selected: RefCell::new(HashSet::new()),
         history_search: side.history_search,
+        history_search_revealer: side.history_search_revealer,
         history_filter: side.history_filter,
         history_filter_button: side.history_filter_button,
         history_filter_buttons: side.history_filter_buttons,
@@ -581,6 +616,11 @@ fn build_ui(app: &adw::Application) {
         history_debounce: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
         collapsed_groups: RefCell::new(std::collections::HashSet::new()),
+        chain_expanders: RefCell::new(HashMap::new()),
+        chain_toggles: RefCell::new(HashMap::new()),
+        chain_headers: RefCell::new(HashMap::new()),
+        chain_child_rows: RefCell::new(HashMap::new()),
+        expander_guard: Cell::new(false),
         model_dropdown: side.model_dropdown,
         models: RefCell::new(Vec::new()),
         rebuilding_models: Cell::new(false),
@@ -659,6 +699,7 @@ fn build_ui(app: &adw::Application) {
         history_view::collapse_all_groups(&ui);
         history_view::rebuild(&ui);
     }
+    queue_view::rebuild(&ui);
     restore_session(&ui);
 
     if let Err(error) = ui.config.borrow().save() {
@@ -808,11 +849,23 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
         let ui = ui.clone();
         ui.search_button.clone().connect_toggled(move |button| {
             let visible = button.is_active();
-            ui.history_search.set_visible(visible);
+            ui.history_search_revealer.set_reveal_child(visible);
+            ui.history_search.set_can_focus(visible);
             if visible {
-                ui.history_search.grab_focus();
+                // Focus once the revealer has made the entry focusable.
+                let entry = ui.history_search.clone();
+                glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                    entry.grab_focus();
+                });
             } else if !ui.history_search.text().is_empty() {
-                ui.history_search.set_text("");
+                // Clear after the field has slid away, so the list does not
+                // jump while the animation is still running.
+                let ui = ui.clone();
+                glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                    if !ui.search_button.is_active() {
+                        ui.history_search.set_text("");
+                    }
+                });
             }
         });
     }
@@ -1368,9 +1421,11 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 }
                 gdk::Key::f | gdk::Key::F => {
                     split.set_show_sidebar(true);
-                    ui.search_button.set_active(true);
-                    ui.history_search.set_visible(true);
-                    ui.history_search.grab_focus();
+                    if ui.search_button.is_active() {
+                        ui.history_search.grab_focus();
+                    } else {
+                        ui.search_button.set_active(true);
+                    }
                     glib::Propagation::Stop
                 }
                 gdk::Key::n | gdk::Key::N => {
@@ -1764,7 +1819,7 @@ fn fit_reference_size(ui: &Rc<Ui>) {
 fn sync_history_selection(ui: &Rc<Ui>) {
     match ui.state.borrow().display.clone() {
         Some(path) => history_view::highlight(ui, &path),
-        None => ui.history_list.unselect_all(),
+        None => history_view::clear_selection(ui),
     }
 }
 
@@ -4603,7 +4658,7 @@ pub(crate) fn show_live(ui: &Rc<Ui>) {
         ui.picture_back.set_paintable(gdk::Paintable::NONE);
         ui.stack.set_visible_child_name("empty");
     }
-    ui.history_list.unselect_all();
+    history_view::clear_selection(ui);
     if ui.generating.get() {
         ui.status.set_text(if ui.live_preview.borrow().is_some() {
             "Live preview"
@@ -5299,6 +5354,7 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
 
     // Leaving a chain through wheel/arrow navigation folds the chain we came
     // from, so the next group opens in a clean state.
+    let mut folded_previous = false;
     let previous_id = ui.state.borrow().display.as_ref().and_then(|display| {
         ui.entries
             .borrow()
@@ -5314,8 +5370,8 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
         && previous_root != target_root
         && !ui.collapsed_groups.borrow().contains(&previous_root)
     {
-        ui.collapsed_groups.borrow_mut().insert(previous_root);
-        history_view::rebuild_preserving_scroll(ui);
+        history_view::collapse_group(ui, previous_root);
+        folded_previous = true;
     }
 
     if !fade_to_image(ui, &path) {
@@ -5327,6 +5383,18 @@ fn navigate_history(ui: &Rc<Ui>, delta: isize) {
     }
 
     ui.status.set_text(&history_view::status_label(&entry));
+
+    if folded_previous {
+        // The chain above is still sliding shut; re-reveal the target once the
+        // list has settled so the selection cannot drift off screen.
+        let ui = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(240), move || {
+            let current = ui.state.borrow().display.clone();
+            if current.as_deref() == Some(path.as_path()) {
+                history_view::highlight(&ui, &path);
+            }
+        });
+    }
 }
 
 /// The image an upscale dialog is about to process.
