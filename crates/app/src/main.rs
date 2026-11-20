@@ -232,6 +232,9 @@ pub(crate) struct Ui {
     pub lora_summary: gtk::Label,
     /// Resolved folder scanned for LoRA weights.
     pub lora_dir: PathBuf,
+    /// Server log position before the running job, used to catch LoRAs the
+    /// backend refused to load.
+    pub lora_log_offset: Cell<Option<u64>>,
     pub state: RefCell<AppState>,
     pub generating: Cell<bool>,
     pub upscaling: Cell<bool>,
@@ -666,6 +669,7 @@ fn build_ui(app: &adw::Application) {
         lora_button: side.lora_button,
         lora_summary: side.lora_summary,
         lora_dir,
+        lora_log_offset: Cell::new(None),
         state: RefCell::new(AppState::default()),
         generating: Cell::new(false),
         upscaling: Cell::new(false),
@@ -3884,6 +3888,18 @@ fn generate(
         })
         .collect::<Vec<_>>();
 
+    // Do not queue a job that the server would silently run without the LoRA.
+    if let Some((path, reason)) = loras.iter().find_map(|lora| {
+        lora::validate(&ui.lora_dir, &lora.path)
+            .err()
+            .map(|reason| (lora.path.clone(), reason))
+    }) {
+        ui.toast.add_toast(adw::Toast::new(&format!(
+            "LoRA {path}: {reason}. Replace the file or disable it."
+        )));
+        return;
+    }
+
     let batch = batch_override
         .unwrap_or_else(|| ui.batch_spin.value().round().clamp(1.0, 4.0) as usize)
         .clamp(1, 4);
@@ -4139,6 +4155,15 @@ fn pump_queue(ui: &Rc<Ui>) -> bool {
 }
 
 fn start_generation_job(ui: &Rc<Ui>, job: queue::Job, request: GenerateRequest) {
+    // Remember where the server log ended so a refused LoRA can be reported
+    // when this job finishes.
+    ui.lora_log_offset.set(if request.loras.is_empty() {
+        None
+    } else {
+        std::fs::metadata(paths::cache_dir().join("sd-server.log"))
+            .ok()
+            .map(|meta| meta.len())
+    });
     let (sender, receiver) = async_channel::unbounded();
     if ui.worker.jobs.send_blocking((request, sender)).is_err() {
         tracing::error!("generation worker is unavailable");
@@ -4670,8 +4695,66 @@ fn record_history(
     }
 }
 
+/// Report LoRAs the server refused to register.
+///
+/// stable-diffusion.cpp logs a warning and generates without the weight, so
+/// without this the result just looks like a LoRA that had no effect.
+fn check_lora_failures(ui: &Rc<Ui>) {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let Some(offset) = ui.lora_log_offset.take() else {
+        return;
+    };
+    let path = paths::cache_dir().join("sd-server.log");
+    let Ok(len) = std::fs::metadata(&path).map(|meta| meta.len()) else {
+        return;
+    };
+    let start = if len < offset { 0 } else { offset };
+    if len == start {
+        return;
+    }
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return;
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut text = String::new();
+    if file
+        .take(4 * 1024 * 1024)
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return;
+    }
+    let failed = failed_lora_names(&text);
+    if failed.is_empty() {
+        return;
+    }
+    ui.status.set_text("A LoRA failed to load");
+    ui.toast.add_toast(adw::Toast::new(&format!(
+        "{} failed to load; the image was generated without it.",
+        failed.join(", ")
+    )));
+}
+
+/// File names mentioned by the server's LoRA registration warnings.
+fn failed_lora_names(log: &str) -> Vec<String> {
+    let mut failed: Vec<String> = log
+        .lines()
+        .filter(|line| line.contains("cannot register LoRA source"))
+        .filter_map(|line| line.split('\'').nth(1))
+        .filter_map(|path| Path::new(path).file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    failed.sort();
+    failed.dedup();
+    failed
+}
+
 /// Drop the finished job and start the next one, or return to idle.
 fn finish_job(ui: &Rc<Ui>) {
+    check_lora_failures(ui);
     ui.queue.borrow_mut().clear_running();
     ui.upscaling.set(false);
     if !pump_queue(ui) {
@@ -6176,5 +6259,21 @@ mod tests {
         assert_eq!(metadata.duration_ms, 12_500);
         assert_eq!(metadata.app_version, env!("CARGO_PKG_VERSION"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reports_only_loras_the_server_refused() {
+        let log = "\
+[I] apply lora at runtime
+[W] cannot register LoRA source '/models/loras/broken.ckpt'
+[I] generate_image completed
+[W] cannot register LoRA source '/models/loras/broken.ckpt'
+[W] cannot register LoRA source '/models/loras/other.pt'
+";
+        assert_eq!(
+            super::failed_lora_names(log),
+            vec!["broken.ckpt".to_string(), "other.pt".to_string()]
+        );
+        assert!(super::failed_lora_names("nothing here").is_empty());
     }
 }
