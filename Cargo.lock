@@ -646,6 +646,7 @@ dependencies = [
  "async-channel",
  "crc32fast",
  "dirs",
+ "libc",
  "serde",
  "serde_json",
  "toml",

@@ -39,6 +39,13 @@ pub(crate) fn find_cli(config: &Config) -> Option<PathBuf> {
             return Some(path);
         }
     }
+    // Bundled and system-wide installs live next to the app or under
+    // /usr/lib/flux-studio, neither of which is necessarily on PATH.
+    if let Some(path) = flux_core::runtime::find_system_llama_cli()
+        && is_executable(&path)
+    {
+        return Some(path);
+    }
     let path_var = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path_var) {
         let candidate = directory.join("llama-cli");

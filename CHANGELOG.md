@@ -5,9 +5,29 @@ rough edges.
 
 ## Unreleased
 
-- **Flatpak**: a Flathub-ready manifest with AppStream metadata and
-  screenshots. The CPU backend is built inside the runtime, so the sandboxed
-  app works without downloading a binary that needs a newer glibc.
+- **Flatpak**: a Flathub-ready manifest on the GNOME 51 runtime with AppStream
+  metadata and screenshots. The CPU `sd-server` and `llama-cli` backends are
+  built inside the runtime with AVX2/FMA and OpenMP, so the sandboxed app works
+  without downloading binaries that need a newer glibc.
+- **Flatpak prompt helper**: the bundled `llama-cli` is discovered next to the
+  app, so **Improve** works in the sandbox without a separate download.
+- **Startup model check**: restoring the last image no longer reports its
+  installed model as missing.
+- **Upscale dialog**: only installed upscaler weights are listed; additional
+  ones can be downloaded from Preferences.
+- **GPU detection in the Flatpak**: NVIDIA GPUs are found through NVML or
+  sysfs when `nvidia-smi` is unavailable, so the detected-hardware summary
+  includes the model, compute capability and the driver's CUDA version.
+- **Backend requirements**: ROCm, CUDA and Vulkan entries now check the
+  libraries named in the manifest before being offered, including toolkits
+  installed under `/opt`.
+- **Custom backend errors**: when a backend cannot start because a shared
+  library is missing, the toast names that library instead of only pointing
+  at the log.
+- **Flatpak backends**: custom `sd-server`/`llama-cli` pickers are hidden in
+  the sandbox, and a previously selected custom path is ignored and cleared.
+- **Backend rows**: the custom-binary chooser is right-aligned when there is
+  no activate button next to it.
 - **LoRA validation**: a weight that cannot load is flagged in the **LoRAs…**
   dialog (with the reason, e.g. an incomplete download) and cannot be enabled.
   A job that would use a broken weight is stopped with a clear message instead

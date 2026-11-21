@@ -78,6 +78,8 @@ jobs:
         run: |
           python3 - <<'PY'
           import yaml
+
+          manifests = {}
           for name in (
               "packaging/flatpak/io.github.tibssy.FluxStudio.yml",
               "packaging/flatpak/io.github.tibssy.FluxStudio.local.yml",
@@ -86,6 +88,16 @@ jobs:
                   manifest = yaml.safe_load(handle)
               assert manifest["id"] == "io.github.tibssy.FluxStudio", name
               assert manifest["command"] == "flux-studio", name
-              assert manifest["modules"], name
+              assert manifest["sdk-extensions"] == [
+                  "org.freedesktop.Sdk.Extension.rust-stable"
+              ], name
+              modules = [module["name"] for module in manifest["modules"]]
+              assert modules == [
+                  "stable-diffusion-cpp",
+                  "llama-cpp",
+                  "flux-studio",
+              ], f"{name}: {modules}"
+              manifests[name] = (manifest["runtime"], manifest["runtime-version"])
               print(f"{name}: ok")
+          assert len(set(manifests.values())) == 1, manifests
           PY

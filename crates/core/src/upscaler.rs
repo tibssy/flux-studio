@@ -173,6 +173,14 @@ pub fn upscaler(id: &str) -> Option<&'static UpscalerPreset> {
     UPSCALERS.iter().find(|preset| preset.id == id)
 }
 
+/// Presets whose weight file is present in `models_dir`.
+pub fn installed_upscalers(models_dir: &Path) -> Vec<&'static UpscalerPreset> {
+    UPSCALERS
+        .iter()
+        .filter(|preset| preset.is_installed(models_dir))
+        .collect()
+}
+
 pub fn default_upscaler() -> &'static UpscalerPreset {
     &MOSR_4X
 }
@@ -240,6 +248,25 @@ mod tests {
             path,
             PathBuf::from("/models/upscalers/4xNomos2_hq_mosr.pth")
         );
+    }
+
+    #[test]
+    fn installed_upscalers_require_the_weight_file() {
+        let dir =
+            std::env::temp_dir().join(format!("flux-upscalers-installed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(installed_upscalers(&dir).is_empty());
+
+        let preset = default_upscaler();
+        let path = preset.path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"weight").unwrap();
+
+        let installed = installed_upscalers(&dir);
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, preset.id);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

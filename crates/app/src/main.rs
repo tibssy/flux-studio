@@ -438,7 +438,8 @@ fn install_styles() {
 fn build_ui(app: &adw::Application) {
     install_styles();
 
-    let config = Config::load();
+    let mut config = Config::load();
+    backends::sanitize_config(&mut config);
     let models_dir = resolve_models_dir(&config);
     let sd_server = resolve_sd_server(&config);
     let needs_backend = config.sd_server.is_none()
@@ -723,6 +724,11 @@ fn build_ui(app: &adw::Application) {
     // Reference copies belong to queued jobs only; nothing survives a restart.
     let _ = std::fs::remove_dir_all(paths::cache_dir().join("queue"));
 
+    // Populate the installed-model list before restoring the last session:
+    // restoring an entry selects its model, and an empty list would wrongly
+    // report that the model is not installed.
+    refresh_model_list(&ui);
+
     if let Ok(entries) = ui.history.borrow().recent(HISTORY_LIMIT) {
         *ui.entries.borrow_mut() = entries;
         history_view::collapse_all_groups(&ui);
@@ -736,7 +742,6 @@ fn build_ui(app: &adw::Application) {
         tracing::warn!(%error, "failed to write config");
     }
 
-    refresh_model_list(&ui);
     update_size_ui(&ui);
     update_image_view(&ui);
     update_queue_bubble(&ui);

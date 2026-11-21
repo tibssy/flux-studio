@@ -514,7 +514,13 @@ Flatpak manifests.
 ### Flatpak
 
 `packaging/flatpak/` is the recommended beta channel: the app needs GTK 4.16+
-and libadwaita 1.6+, which most current distros do not ship.
+and libadwaita 1.6+, which most current distros do not ship. It targets the
+GNOME 51 runtime.
+
+Both the CPU `sd-server` and `llama-cli` are built from source in the manifest,
+so the Flatpak works out of the box without downloading an executable backend.
+The x86_64 build uses AVX2/FMA (x86-64-v3, Intel Haswell 2013+ or AMD
+Excavator/Zen+). Models are still downloaded on first use.
 
 ```bash
 # working tree (uses the local manifest)
@@ -535,10 +541,14 @@ python3 flatpak-cargo-generator.py Cargo.lock \
   -o packaging/flatpak/cargo-sources.json
 ```
 
-Models, backends, history and config live under
-`~/.var/app/io.github.tibssy.FluxStudio/`. The sandbox can read and write
-`Pictures` and `Downloads`; everything else goes through the file chooser
-portal.
+Models, history and config live under
+`~/.var/app/io.github.tibssy.FluxStudio/`; the bundled backends are under
+`/app/lib/flux-studio`. The sandbox can read and write `Pictures` and
+`Downloads`; everything else goes through the file chooser portal.
+
+Custom backend binaries are hidden in the Flatpak: they link against host
+CUDA/ROCm libraries that the sandbox does not expose. Use the bundled CPU
+backends or install the Vulkan backend from Preferences.
 
 ### Arch
 

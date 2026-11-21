@@ -278,22 +278,39 @@ pub struct GpuInfo {
     pub compute_cap: Option<u32>,
 }
 
+/// What NVML reports for the first NVIDIA GPU.
+#[derive(Debug, Clone, Default)]
+struct NvmlInfo {
+    gpu: GpuInfo,
+    /// CUDA version supported by the installed driver, encoded as NVML
+    /// reports it (for example 12080 for 12.8).
+    cuda_driver: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HardwareProfile {
     pub nvidia: Option<GpuInfo>,
     pub amd: bool,
     pub vulkan: bool,
+    /// CUDA runtime majors found as `libcudart.so.<major>`.
     pub cuda_majors: Vec<u32>,
+    /// CUDA version supported by the NVIDIA driver. The runtime may still be
+    /// absent, so this is not the same as `cuda_majors`.
+    pub cuda_driver: Option<u32>,
     pub glibc: Option<(u32, u32)>,
 }
 
 impl HardwareProfile {
     pub fn detect() -> Self {
+        let nvml = detect_nvml();
         Self {
-            nvidia: detect_nvidia(),
+            nvidia: detect_nvidia_smi()
+                .or_else(|| nvml.as_ref().map(|info| info.gpu.clone()))
+                .or_else(detect_nvidia_sysfs),
             amd: detect_amd(),
             vulkan: has_library("libvulkan.so.1"),
             cuda_majors: detect_cuda_majors(),
+            cuda_driver: nvml.as_ref().and_then(|info| info.cuda_driver),
             glibc: detect_glibc(),
         }
     }
@@ -309,7 +326,7 @@ impl HardwareProfile {
             ));
         }
 
-        match entry.kind {
+        let compatibility = match entry.kind {
             BackendKind::Cpu => None,
             BackendKind::Vulkan => {
                 if self.vulkan {
@@ -341,33 +358,58 @@ impl HardwareProfile {
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
-                    return Some(format!("CUDA {major} runtime not found (found: {found})"));
-                }
-                if !entry.supports_archs(gpu.compute_cap) {
-                    return Some(format!(
-                        "This build does not include sm_{} (architectures: {})",
-                        gpu.compute_cap.unwrap_or(0),
+                    Some(format!("CUDA {major} runtime not found (found: {found})"))
+                } else if let Some(cap) = gpu.compute_cap
+                    && !entry.supports_archs(Some(cap))
+                {
+                    Some(format!(
+                        "This build does not include sm_{cap} (architectures: {})",
                         entry
                             .archs
                             .iter()
                             .map(|arch| format!("sm_{arch}"))
                             .collect::<Vec<_>>()
                             .join(", ")
-                    ));
+                    ))
+                } else {
+                    None
                 }
-                None
             }
+        };
+        if compatibility.is_some() {
+            return compatibility;
         }
+
+        // The manifest lists the sonames a build needs; trust it over the
+        // broad GPU check above.
+        if let Some(missing) = entry
+            .requires
+            .iter()
+            .find(|library| !self.requirement_met(library))
+        {
+            return Some(format!("{missing} not found"));
+        }
+        None
+    }
+
+    fn requirement_met(&self, library: &str) -> bool {
+        if let Some(major) = library
+            .strip_prefix("libcudart.so.")
+            .and_then(|major| major.parse::<u32>().ok())
+        {
+            return self.cuda_majors.contains(&major);
+        }
+        has_library(library)
     }
 
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if let Some(gpu) = &self.nvidia {
-            parts.push(format!(
-                "NVIDIA {} (sm_{})",
-                gpu.name,
-                gpu.compute_cap.unwrap_or(0)
-            ));
+            let name = gpu.name.strip_prefix("NVIDIA ").unwrap_or(&gpu.name);
+            match gpu.compute_cap {
+                Some(cap) => parts.push(format!("NVIDIA {name} (sm_{cap})")),
+                None => parts.push(format!("NVIDIA {name}")),
+            }
         }
         if self.amd {
             parts.push("AMD GPU".into());
@@ -375,9 +417,17 @@ impl HardwareProfile {
         if self.vulkan {
             parts.push("Vulkan".into());
         }
+        if let Some(version) = self.cuda_driver {
+            let label = cuda_driver_label(version);
+            if self.cuda_majors.is_empty() {
+                parts.push(format!("{label} (runtime missing)"));
+            } else {
+                parts.push(label);
+            }
+        }
         if !self.cuda_majors.is_empty() {
             parts.push(format!(
-                "CUDA {}",
+                "CUDA {} runtime",
                 self.cuda_majors
                     .iter()
                     .map(u32::to_string)
@@ -487,7 +537,17 @@ pub fn llama_backends_dir() -> PathBuf {
     paths::backends_dir().join("llama")
 }
 
-fn detect_nvidia() -> Option<GpuInfo> {
+#[cfg(unix)]
+fn detect_nvml() -> Option<NvmlInfo> {
+    nvml::detect()
+}
+
+#[cfg(not(unix))]
+fn detect_nvml() -> Option<NvmlInfo> {
+    None
+}
+
+fn detect_nvidia_smi() -> Option<GpuInfo> {
     let output = Command::new("nvidia-smi")
         .args(["--query-gpu=name,compute_cap", "--format=csv,noheader"])
         .output()
@@ -529,13 +589,209 @@ fn detect_nvidia() -> Option<GpuInfo> {
     })
 }
 
+/// Read the model name the NVIDIA driver exposes through sysfs/procfs.
+///
+/// The sandbox may have neither `nvidia-smi` nor a loadable NVML library, but
+/// `/sys/class/drm` and `/proc/driver/nvidia` are visible. The compute
+/// capability is unknown in that case, which is reported as-is instead of as
+/// `sm_0`.
+fn detect_nvidia_sysfs() -> Option<GpuInfo> {
+    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(rest) = name.strip_prefix("card") else {
+            continue;
+        };
+        if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let device = entry.path().join("device");
+        let Ok(vendor) = std::fs::read_to_string(device.join("vendor")) else {
+            continue;
+        };
+        if !vendor.trim().eq_ignore_ascii_case("0x10de") {
+            continue;
+        }
+        let model = std::fs::canonicalize(&device)
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .and_then(|address| {
+                std::fs::read_to_string(format!("/proc/driver/nvidia/gpus/{address}/information"))
+                    .ok()
+            })
+            .and_then(|information| nvidia_model(&information));
+        return Some(GpuInfo {
+            name: model.unwrap_or_else(|| "GPU".into()),
+            compute_cap: None,
+        });
+    }
+    None
+}
+
+fn nvidia_model(information: &str) -> Option<String> {
+    information.lines().find_map(|line| {
+        line.strip_prefix("Model:")
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+    })
+}
+
+/// Minimal NVML binding, loaded at runtime.
+///
+/// The Flatpak does not expose `nvidia-smi`, and normal library paths do not
+/// include the driver extension, so the exact path is resolved first. Only a
+/// handful of entry points are needed, which avoids a build-time dependency
+/// on the driver headers.
+#[cfg(unix)]
+mod nvml {
+    use super::{GpuInfo, NvmlInfo};
+    use std::ffi::{CStr, CString};
+    use std::os::raw::{c_char, c_int, c_uint, c_void};
+    use std::path::{Path, PathBuf};
+
+    type Device = *mut c_void;
+    type Init = unsafe extern "C" fn() -> c_int;
+    type Shutdown = unsafe extern "C" fn() -> c_int;
+    type GetCount = unsafe extern "C" fn(*mut c_uint) -> c_int;
+    type GetHandle = unsafe extern "C" fn(c_uint, *mut Device) -> c_int;
+    type GetName = unsafe extern "C" fn(Device, *mut c_char, c_uint) -> c_int;
+    type GetCapability = unsafe extern "C" fn(Device, *mut c_int, *mut c_int) -> c_int;
+    type GetCudaDriver = unsafe extern "C" fn(*mut c_int) -> c_int;
+
+    const SUCCESS: c_int = 0;
+
+    pub(super) fn detect() -> Option<NvmlInfo> {
+        candidates().iter().find_map(|path| detect_from(path))
+    }
+
+    fn detect_from(path: &Path) -> Option<NvmlInfo> {
+        let path = CString::new(path.to_string_lossy().as_bytes()).ok()?;
+        let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW) };
+        if handle.is_null() {
+            return None;
+        }
+        let result = query(handle);
+        unsafe { libc::dlclose(handle) };
+        result
+    }
+
+    fn query(handle: *mut c_void) -> Option<NvmlInfo> {
+        let init: Init = load(handle, b"nvmlInit_v2\0")?;
+        let shutdown: Shutdown = load(handle, b"nvmlShutdown\0")?;
+        let get_count: GetCount = load(handle, b"nvmlDeviceGetCount_v2\0")?;
+        let get_handle: GetHandle = load(handle, b"nvmlDeviceGetHandleByIndex_v2\0")?;
+        let get_name: GetName = load(handle, b"nvmlDeviceGetName\0")?;
+        let get_capability: GetCapability = load(handle, b"nvmlDeviceGetCudaComputeCapability\0")?;
+        let get_cuda_driver: Option<GetCudaDriver> =
+            load(handle, b"nvmlSystemGetCudaDriverVersion_v2\0")
+                .or_else(|| load(handle, b"nvmlSystemGetCudaDriverVersion\0"));
+
+        if unsafe { init() } != SUCCESS {
+            return None;
+        }
+        let result = (|| {
+            let mut count = 0;
+            if unsafe { get_count(&mut count) } != SUCCESS || count == 0 {
+                return None;
+            }
+            let mut device: Device = std::ptr::null_mut();
+            if unsafe { get_handle(0, &mut device) } != SUCCESS || device.is_null() {
+                return None;
+            }
+
+            let mut name = [0 as c_char; 128];
+            let name = if unsafe { get_name(device, name.as_mut_ptr(), name.len() as c_uint) }
+                == SUCCESS
+            {
+                unsafe { CStr::from_ptr(name.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                "GPU".to_string()
+            };
+
+            let mut major = 0;
+            let mut minor = 0;
+            let compute_cap =
+                if unsafe { get_capability(device, &mut major, &mut minor) } == SUCCESS {
+                    Some((major.max(0) as u32) * 10 + minor.max(0) as u32)
+                } else {
+                    None
+                };
+
+            let cuda_driver = get_cuda_driver.and_then(|get_version| {
+                let mut version = 0;
+                (unsafe { get_version(&mut version) } == SUCCESS && version > 0)
+                    .then_some(version as u32)
+            });
+
+            Some(NvmlInfo {
+                gpu: GpuInfo { name, compute_cap },
+                cuda_driver,
+            })
+        })();
+        unsafe { shutdown() };
+        result
+    }
+
+    fn load<T: Copy>(handle: *mut c_void, name: &[u8]) -> Option<T> {
+        let symbol = unsafe { libc::dlsym(handle, name.as_ptr().cast()) };
+        (!symbol.is_null()).then(|| unsafe { std::mem::transmute_copy(&symbol) })
+    }
+
+    fn candidates() -> Vec<PathBuf> {
+        let mut paths = vec![PathBuf::from("libnvidia-ml.so.1")];
+        for directory in [
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+            "/usr/lib64",
+            "/usr/lib",
+            "/usr/local/lib",
+        ] {
+            paths.push(PathBuf::from(directory).join("libnvidia-ml.so.1"));
+        }
+        // The Flatpak driver extension keeps the libraries out of the normal
+        // search path.
+        for root in [
+            "/usr/lib/x86_64-linux-gnu/GL",
+            "/usr/lib/aarch64-linux-gnu/GL",
+            "/usr/lib64/GL",
+            "/usr/lib/GL",
+        ] {
+            let Ok(entries) = std::fs::read_dir(root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("nvidia-") {
+                    paths.push(entry.path().join("lib").join("libnvidia-ml.so.1"));
+                }
+            }
+        }
+        paths
+    }
+}
+
 fn detect_amd() -> bool {
-    let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
+    detect_amd_in(Path::new("/sys/class/drm"))
+}
+
+fn detect_amd_in(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return false;
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with("card") {
+        let name = name.to_string_lossy();
+        let Some(rest) = name.strip_prefix("card") else {
+            continue;
+        };
+        if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
         let vendor = entry.path().join("device/vendor");
@@ -622,14 +878,52 @@ fn has_library(name: &str) -> bool {
     {
         return true;
     }
-    [
+    if [
         "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
         "/usr/lib64",
         "/usr/lib",
         "/lib/x86_64-linux-gnu",
     ]
     .iter()
     .any(|dir| Path::new(dir).join(name).exists())
+    {
+        return true;
+    }
+    // CUDA and ROCm toolkits are commonly installed outside the loader path.
+    if let Ok(entries) = std::fs::read_dir("/opt") {
+        for entry in entries.flatten() {
+            let label = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if (label.starts_with("cuda") || label.starts_with("rocm"))
+                && find_library(&entry.path(), name, 0)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn find_library(dir: &Path, name: &str, depth: usize) -> bool {
+    if depth > 3 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .is_some_and(|file| file.to_string_lossy() == name)
+        {
+            return true;
+        }
+        if path.is_dir() && find_library(&path, name, depth + 1) {
+            return true;
+        }
+    }
+    false
 }
 
 fn ldconfig_output() -> Option<String> {
@@ -657,9 +951,38 @@ fn parse_version(text: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
+/// Format NVML's integer CUDA version (12080) as `CUDA 12.8 driver`.
+fn cuda_driver_label(version: u32) -> String {
+    let major = version / 1000;
+    let minor = (version % 1000) / 10;
+    format!("CUDA {major}.{minor} driver")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_entry(kind: BackendKind) -> BackendEntry {
+        BackendEntry {
+            id: "test".into(),
+            label: "Test".into(),
+            kind,
+            version: "v".into(),
+            url: "u".into(),
+            sha256: "s".into(),
+            size: 1,
+            backend: None,
+            cuda_major: None,
+            rocm_major: None,
+            archs: vec![],
+            requires: vec![],
+            min_glibc: None,
+            strip_prefix: None,
+            notes: None,
+            binary: None,
+            archive: None,
+        }
+    }
 
     #[test]
     fn parses_compute_caps() {
@@ -692,6 +1015,157 @@ mod tests {
         assert!(entry.supports_archs(Some(52)));
         assert!(!entry.supports_archs(Some(89)));
         assert!(!entry.supports_archs(None));
+    }
+
+    #[test]
+    fn parses_the_nvidia_model_from_procfs() {
+        let information = "\
+Model: \t\t Quadro M4000
+IRQ:   \t\t 163
+GPU UUID: \t GPU-250c6a35
+";
+        assert_eq!(nvidia_model(information), Some("Quadro M4000".into()));
+        assert_eq!(nvidia_model("IRQ: 1"), None);
+    }
+
+    #[test]
+    fn summary_only_includes_a_known_compute_cap() {
+        let known = HardwareProfile {
+            nvidia: Some(GpuInfo {
+                name: "Quadro M4000".into(),
+                compute_cap: Some(52),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(known.summary(), "NVIDIA Quadro M4000 (sm_52) · CPU");
+
+        let unknown = HardwareProfile {
+            nvidia: Some(GpuInfo {
+                name: "Quadro M4000".into(),
+                compute_cap: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(unknown.summary(), "NVIDIA Quadro M4000 · CPU");
+    }
+
+    #[test]
+    fn summary_separates_driver_and_runtime_cuda_versions() {
+        let hardware = HardwareProfile {
+            cuda_driver: Some(13000),
+            cuda_majors: vec![12],
+            ..Default::default()
+        };
+        assert_eq!(
+            hardware.summary(),
+            "CUDA 13.0 driver · CUDA 12 runtime · CPU"
+        );
+        assert_eq!(cuda_driver_label(12080), "CUDA 12.8 driver");
+
+        let driver_only = HardwareProfile {
+            cuda_driver: Some(13000),
+            ..Default::default()
+        };
+        assert_eq!(
+            driver_only.summary(),
+            "CUDA 13.0 driver (runtime missing) · CPU"
+        );
+    }
+
+    #[test]
+    fn detect_amd_ignores_connectors_and_other_vendors() {
+        let dir = std::env::temp_dir().join(format!("flux-amd-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let connector = dir.join("card0-DP-1/device");
+        std::fs::create_dir_all(&connector).unwrap();
+        std::fs::write(connector.join("vendor"), "0x1002\n").unwrap();
+        let nvidia = dir.join("card0/device");
+        std::fs::create_dir_all(&nvidia).unwrap();
+        std::fs::write(nvidia.join("vendor"), "0x10de\n").unwrap();
+        assert!(!detect_amd_in(&dir));
+
+        let amd = dir.join("card1/device");
+        std::fs::create_dir_all(&amd).unwrap();
+        std::fs::write(amd.join("vendor"), "0x1002\n").unwrap();
+        assert!(detect_amd_in(&dir));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_toolkit_libraries_outside_the_loader_path() {
+        let root = std::env::temp_dir().join(format!("flux-lib-scan-{}", std::process::id()));
+        let lib = root.join("cuda-13.0/lib64");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libcudart.so.13"), b"x").unwrap();
+
+        assert!(find_library(&root, "libcudart.so.13", 0));
+        assert!(!find_library(&root, "libcudart.so.12", 0));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_required_library_blocks_a_backend() {
+        let mut entry = test_entry(BackendKind::Cpu);
+        entry.requires = vec!["libflux-missing-test.so.99".into()];
+        assert_eq!(
+            HardwareProfile::default().compatibility(&entry),
+            Some("libflux-missing-test.so.99 not found".into())
+        );
+    }
+
+    #[test]
+    fn cudart_requirement_uses_the_detected_runtime() {
+        let mut entry = test_entry(BackendKind::Cpu);
+        entry.requires = vec!["libcudart.so.12".into()];
+        let present = HardwareProfile {
+            cuda_majors: vec![12],
+            ..Default::default()
+        };
+        assert_eq!(present.compatibility(&entry), None);
+
+        let absent = HardwareProfile {
+            cuda_majors: vec![11],
+            ..Default::default()
+        };
+        assert_eq!(
+            absent.compatibility(&entry),
+            Some("libcudart.so.12 not found".into())
+        );
+    }
+
+    #[test]
+    fn unknown_compute_cap_does_not_reject_cuda_backends() {
+        let entry = BackendEntry {
+            id: "cuda12".into(),
+            label: "CUDA 12".into(),
+            kind: BackendKind::Cuda,
+            version: "v".into(),
+            url: "u".into(),
+            sha256: "s".into(),
+            size: 1,
+            backend: None,
+            cuda_major: Some(12),
+            rocm_major: None,
+            archs: vec![52, 61],
+            requires: vec![],
+            min_glibc: None,
+            strip_prefix: None,
+            notes: None,
+            binary: None,
+            archive: None,
+        };
+        let hardware = HardwareProfile {
+            nvidia: Some(GpuInfo {
+                name: "Quadro M4000".into(),
+                compute_cap: None,
+            }),
+            cuda_majors: vec![12],
+            ..Default::default()
+        };
+        assert_eq!(hardware.compatibility(&entry), None);
     }
 
     #[test]
@@ -797,6 +1271,21 @@ mod tests {
             assert_eq!(entry.binary_name(), "llama-cli");
             assert_eq!(entry.archive_format(), ArchiveFormat::TarGz);
         }
+    }
+
+    #[test]
+    fn bundled_binaries_are_discovered_next_to_the_app() {
+        // The Flatpak installs both backends in /app/lib/flux-studio.
+        assert!(
+            system_server_candidates()
+                .iter()
+                .any(|path| path.ends_with("lib/flux-studio/sd-server"))
+        );
+        assert!(
+            system_llama_candidates()
+                .iter()
+                .any(|path| path.ends_with("lib/flux-studio/llama-cli"))
+        );
     }
 
     #[test]
