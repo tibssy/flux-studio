@@ -7,10 +7,11 @@ rough edges.
 
 - **Renamed to Imagiflume**: the app ID is now
   `io.github.tibssy.Imagiflume` and the binary is `imagiflume`. Config,
-  history and caches move to `~/.config/imagiflume`,
+  history and caches now live under `~/.config/imagiflume`,
   `~/.local/share/imagiflume` and `~/.cache/imagiflume`; the Flatpak data
-  directory is `~/.var/app/io.github.tibssy.Imagiflume/`. PNGs written by
-  older builds are still readable.
+  directory is `~/.var/app/io.github.tibssy.Imagiflume/`. Existing native
+  installs can move the old directories, and the Flatpak gets a new data
+  directory. PNGs written by older builds are still readable.
 - **Flatpak**: a Flathub-ready manifest on the GNOME 51 runtime with AppStream
   metadata and screenshots. The CPU `sd-server` and `llama-cli` backends are
   built inside the runtime with AVX2/FMA and OpenMP, so the sandboxed app works
