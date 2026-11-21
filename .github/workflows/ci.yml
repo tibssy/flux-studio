@@ -50,3 +50,42 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace --locked
+
+  packaging:
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install packaging tools
+        run: |
+          set -eux
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            appstream desktop-file-utils python3-yaml
+
+      - uses: actions/checkout@v4
+
+      - name: AppStream metadata
+        run: appstreamcli validate --no-net --pedantic packaging/io.github.tibssy.FluxStudio.metainfo.xml
+
+      - name: Desktop entry
+        run: desktop-file-validate packaging/io.github.tibssy.FluxStudio.desktop
+
+      - name: Flatpak manifests
+        run: |
+          python3 - <<'PY'
+          import yaml
+          for name in (
+              "packaging/flatpak/io.github.tibssy.FluxStudio.yml",
+              "packaging/flatpak/io.github.tibssy.FluxStudio.local.yml",
+          ):
+              with open(name) as handle:
+                  manifest = yaml.safe_load(handle)
+              assert manifest["id"] == "io.github.tibssy.FluxStudio", name
+              assert manifest["command"] == "flux-studio", name
+              assert manifest["modules"], name
+              print(f"{name}: ok")
+          PY

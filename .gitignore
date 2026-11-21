@@ -13,3 +13,7 @@
 /packaging/stable-diffusion.cpp
 /packaging/*.tar.gz
 /packaging/*.pkg.tar.*
+
+# flatpak-builder
+/.flatpak-builder
+/build-dir

@@ -5,6 +5,9 @@ rough edges.
 
 ## Unreleased
 
+- **Flatpak**: a Flathub-ready manifest with AppStream metadata and
+  screenshots. The CPU backend is built inside the runtime, so the sandboxed
+  app works without downloading a binary that needs a newer glibc.
 - **LoRA validation**: a weight that cannot load is flagged in the **LoRAs…**
   dialog (with the reason, e.g. an incomplete download) and cannot be enabled.
   A job that would use a broken weight is stopped with a clear message instead

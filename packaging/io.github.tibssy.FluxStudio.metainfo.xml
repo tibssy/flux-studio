@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.tibssy.FluxStudio</id>
+  <name>Flux Studio</name>
+  <summary>Generate and edit images locally with FLUX</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <developer id="io.github.tibssy">
+    <name>tibssy</name>
+  </developer>
+
+  <description>
+    <p>
+      Flux Studio is a desktop app for local image generation and editing,
+      powered by stable-diffusion.cpp. It runs the models on your own machine:
+      no Python environment, no cloud account and no images leaving the device.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Text to image with FLUX, Qwen Image and Fibo presets</li>
+      <li>Edit with reference images, crops and upscales</li>
+      <li>A history of every result with chains, search, filters and favorites</li>
+      <li>A queue with pause, reorder and batch counts</li>
+      <li>LoRA weights with per-file strength</li>
+      <li>PNG metadata that keeps each image self-describing</li>
+    </ul>
+    <p>
+      Models and backends are downloaded on first use. The app stays free, with
+      no ads, accounts or paid tiers.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.tibssy.FluxStudio.desktop</launchable>
+
+  <url type="homepage">https://github.com/tibssy/flux-studio</url>
+  <url type="bugtracker">https://github.com/tibssy/flux-studio/issues</url>
+  <url type="vcs-browser">https://github.com/tibssy/flux-studio</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Generate and edit images on your own machine</caption>
+      <image>
+        https://raw.githubusercontent.com/tibssy/flux-studio/main/packaging/screenshots/main.png
+      </image>
+    </screenshot>
+    <screenshot>
+      <caption>History keeps every result, grouped by the image it came from</caption>
+      <image>
+        https://raw.githubusercontent.com/tibssy/flux-studio/main/packaging/screenshots/history.png
+      </image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Graphics</category>
+    <category>2DGraphics</category>
+  </categories>
+
+  <keywords>
+    <keyword>AI</keyword>
+    <keyword>image</keyword>
+    <keyword>generation</keyword>
+    <keyword>diffusion</keyword>
+    <keyword>FLUX</keyword>
+    <keyword>stable-diffusion</keyword>
+    <keyword>upscale</keyword>
+  </keywords>
+
+  <releases>
+    <release version="0.1.0" date="2026-11-20">
+      <description>
+        <p>First beta: generation, editing, upscaling, LoRAs and history.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

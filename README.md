@@ -508,8 +508,41 @@ the separate `cudart-*` archives are not bundled.
 
 ## Packaging
 
-`packaging/` contains the PKGBUILD, desktop entry and icon. The package builds
-the CUDA backend for Maxwell by default:
+`packaging/` contains the PKGBUILD, desktop entry, icon, AppStream metadata and
+Flatpak manifests.
+
+### Flatpak
+
+`packaging/flatpak/` is the recommended beta channel: the app needs GTK 4.16+
+and libadwaita 1.6+, which most current distros do not ship.
+
+```bash
+# working tree (uses the local manifest)
+flatpak-builder --user --install --force-clean \
+  --state-dir=.flatpak-builder \
+  build-dir packaging/flatpak/io.github.tibssy.FluxStudio.local.yml
+
+flatpak run io.github.tibssy.FluxStudio
+```
+
+`io.github.tibssy.FluxStudio.yml` is the release manifest: it clones `main` and
+is what a Flathub submission would pin to a tag. Both use
+`cargo-sources.json`, generated from `Cargo.lock` with Flathub's
+`flatpak-cargo-generator.py`; regenerate it whenever dependencies change:
+
+```bash
+python3 flatpak-cargo-generator.py Cargo.lock \
+  -o packaging/flatpak/cargo-sources.json
+```
+
+Models, backends, history and config live under
+`~/.var/app/io.github.tibssy.FluxStudio/`. The sandbox can read and write
+`Pictures` and `Downloads`; everything else goes through the file chooser
+portal.
+
+### Arch
+
+The package builds the CUDA backend for Maxwell by default:
 
 ```bash
 # build a source tarball from this checkout (vendor/, models/ and build
@@ -517,7 +550,8 @@ the CUDA backend for Maxwell by default:
 tar --transform 's,^,flux-studio-0.1.0/,' -czf packaging/flux-studio-0.1.0.tar.gz \
     Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
     packaging/PKGBUILD packaging/io.github.tibssy.FluxStudio.desktop \
-    packaging/io.github.tibssy.FluxStudio.svg
+    packaging/io.github.tibssy.FluxStudio.svg \
+    packaging/io.github.tibssy.FluxStudio.metainfo.xml
 
 cd packaging
 FLUX_CUDA_ARCH=52 makepkg -si
