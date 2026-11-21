@@ -4,11 +4,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use adw::prelude::*;
-use flux_core::preset::preset;
-use flux_core::style::STYLES;
-use flux_core::upscaler::upscaler;
 use glib::types::StaticType;
 use gtk::{gdk, glib};
+use imagiflume_core::preset::preset;
+use imagiflume_core::style::STYLES;
+use imagiflume_core::upscaler::upscaler;
 
 use crate::history::Generation;
 use crate::{
@@ -1350,7 +1350,7 @@ fn kv(title: &str, value: &str) -> gtk::Box {
 }
 
 fn effective_prompt(entry: &Generation) -> String {
-    flux_core::style::compose_prompt(&entry.prompt, &entry.style)
+    imagiflume_core::style::compose_prompt(&entry.prompt, &entry.style)
 }
 
 fn created_label(created_at: i64) -> String {
@@ -1385,7 +1385,7 @@ pub(crate) fn entry_model_label(entry: &Generation) -> &str {
 }
 
 fn style_label(id: &str) -> &str {
-    flux_core::style::label(id)
+    imagiflume_core::style::label(id)
 }
 
 #[cfg(test)]

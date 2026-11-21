@@ -528,7 +528,8 @@ mod tests {
 
     #[test]
     fn preview_weights_are_optional() {
-        let dir = std::env::temp_dir().join(format!("flux-preset-preview-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("imagiflume-preset-preview-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

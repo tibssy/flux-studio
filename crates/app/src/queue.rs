@@ -13,9 +13,9 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use flux_core::GenerateRequest;
-use flux_core::preset::ModelPreset;
-use flux_core::upscaler::{UpscaleRequest, UpscalerPreset};
+use imagiflume_core::GenerateRequest;
+use imagiflume_core::preset::ModelPreset;
+use imagiflume_core::upscaler::{UpscaleRequest, UpscalerPreset};
 
 use crate::GenerationMode;
 
@@ -404,8 +404,8 @@ impl JobQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flux_core::preset::FLUX2_KLEIN_4B;
-    use flux_core::upscaler::MOSR_4X;
+    use imagiflume_core::preset::FLUX2_KLEIN_4B;
+    use imagiflume_core::upscaler::MOSR_4X;
 
     fn generate_job(id: u64) -> Job {
         let mut request = GenerateRequest::new("a prompt", format!("/tmp/{id}.png"));

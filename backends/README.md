@@ -1,6 +1,6 @@
 # Backend manifests
 
-Flux Studio ships two manifests:
+Imagiflume ships two manifests:
 
 - `manifest.json` for `sd-server` (stable-diffusion.cpp) image-generation backends.
 - `llama-manifest.json` for `llama-cli` (llama.cpp) prompt-improvement backends.
@@ -43,7 +43,7 @@ The current entries pin `leejet/stable-diffusion.cpp` `master-1094-3bad892`:
 
 The archives include `sd-server`, `sd-cli`, their shared libraries and use
 `RUNPATH=$ORIGIN`. The app extracts them into
-`~/.local/share/flux-studio/backends/<id>/`.
+`~/.local/share/imagiflume/backends/<id>/`.
 
 ## CUDA builds
 
@@ -77,7 +77,7 @@ the entry's `archs` before offering the build.
 
 Entries use `binary: "llama-cli"` and `archive: "tar-gz"`. The archive contains
 a single top-level `llama-<tag>/` directory, which the installer flattens into
-`~/.local/share/flux-studio/backends/llama/<id>/`. Its binaries use
+`~/.local/share/imagiflume/backends/llama/<id>/`. Its binaries use
 `RUNPATH=$ORIGIN`.
 
 The refresh path queries the releases list rather than `/releases/latest`,

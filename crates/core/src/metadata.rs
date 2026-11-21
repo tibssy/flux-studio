@@ -6,9 +6,12 @@
 //!
 //! Two chunks are written:
 //!
-//! - `flux-studio`: a JSON [`ImageMetadata`] blob (UTF-8, `iTXt`).
+//! - `imagiflume`: a JSON [`ImageMetadata`] blob (UTF-8, `iTXt`).
 //! - `parameters`: an A1111-style text blob for interoperability with other
 //!   stable-diffusion front ends.
+//!
+//! Images written before the rename used the `flux-studio` keyword. Those are
+//! still read, and rewriting one replaces the legacy chunk.
 //!
 //! Chunks are inserted right after `IHDR` without recompressing the image, so
 //! writing metadata is cheap even for large upscales.
@@ -19,7 +22,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Keyword of the structured metadata chunk.
-pub const METADATA_KEYWORD: &str = "flux-studio";
+pub const METADATA_KEYWORD: &str = "imagiflume";
+/// Keyword used by releases before the Imagiflume rename.
+pub const LEGACY_METADATA_KEYWORD: &str = "flux-studio";
 /// Keyword of the A1111-compatible text chunk.
 pub const PARAMETERS_KEYWORD: &str = "parameters";
 
@@ -63,7 +68,7 @@ pub struct ImageMetadata {
     pub duration_ms: i64,
 }
 
-/// Insert (or replace) the Flux Studio text chunks in `path`.
+/// Insert (or replace) the Imagiflume text chunks in `path`.
 pub fn write_png(path: &Path, metadata: &ImageMetadata) -> Result<()> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -84,14 +89,14 @@ pub fn write_png(path: &Path, metadata: &ImageMetadata) -> Result<()> {
     Ok(())
 }
 
-/// Read the Flux Studio chunk, if the PNG has one.
+/// Read the Imagiflume chunk, if the PNG has one.
 pub fn read_png(path: &Path) -> Result<Option<ImageMetadata>> {
     let bytes = std::fs::read(path)?;
     for chunk in chunks(&bytes)? {
         let Some(text) = decode_text_chunk(chunk.kind, chunk.data)? else {
             continue;
         };
-        if text.0 != METADATA_KEYWORD {
+        if text.0 != METADATA_KEYWORD && text.0 != LEGACY_METADATA_KEYWORD {
             continue;
         }
         let metadata = serde_json::from_str(&text.1)
@@ -143,7 +148,9 @@ fn is_our_text_chunk(kind: &[u8; 4], data: &[u8]) -> bool {
         .position(|byte| *byte == 0)
         .map(|end| &data[..end])
         .unwrap_or(data);
-    keyword == METADATA_KEYWORD.as_bytes() || keyword == PARAMETERS_KEYWORD.as_bytes()
+    keyword == METADATA_KEYWORD.as_bytes()
+        || keyword == LEGACY_METADATA_KEYWORD.as_bytes()
+        || keyword == PARAMETERS_KEYWORD.as_bytes()
 }
 
 struct Chunk<'a> {
@@ -249,7 +256,7 @@ fn parameters(metadata: &ImageMetadata) -> String {
         format!("Size: {}x{}", metadata.width, metadata.height),
         format!("Model: {}", metadata.model),
         format!(
-            "Version: Flux Studio {}",
+            "Version: Imagiflume {}",
             if metadata.app_version.is_empty() {
                 "unknown"
             } else {
@@ -300,7 +307,10 @@ mod tests {
     }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("flux-metadata-{}-{name}.png", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "imagiflume-metadata-{}-{name}.png",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -341,6 +351,41 @@ mod tests {
             .filter(|chunk| chunk.kind == b"iTXt" && is_our_text_chunk(chunk.kind, chunk.data))
             .count();
         assert_eq!(count, 2, "structured and A1111 chunks only");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_metadata_written_before_the_rename() {
+        let path = temp_path("legacy");
+        let mut output = Vec::new();
+        output.extend_from_slice(&PNG_SIGNATURE);
+        for chunk in chunks(TINY_PNG).unwrap() {
+            if chunk.kind == b"IHDR" {
+                write_chunk(&mut output, b"IHDR", chunk.data);
+                let json = serde_json::to_string(&metadata()).unwrap();
+                write_chunk(
+                    &mut output,
+                    b"iTXt",
+                    &text_payload(LEGACY_METADATA_KEYWORD, &json),
+                );
+            } else {
+                write_chunk(&mut output, chunk.kind, chunk.data);
+            }
+        }
+        std::fs::write(&path, output).unwrap();
+
+        assert_eq!(read_png(&path).unwrap().unwrap(), metadata());
+
+        // Rewriting replaces the legacy keyword instead of leaving two chunks.
+        write_png(&path, &metadata()).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let legacy = chunks(&bytes)
+            .unwrap()
+            .iter()
+            .filter_map(|chunk| decode_text_chunk(chunk.kind, chunk.data).ok().flatten())
+            .any(|(keyword, _)| keyword == LEGACY_METADATA_KEYWORD);
+        assert!(!legacy);
+
         let _ = std::fs::remove_file(path);
     }
 

@@ -1,4 +1,4 @@
-//! Resumable model downloader driven by the preset registry in `flux-core`.
+//! Resumable model downloader driven by the preset registry in `imagiflume-core`.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -7,11 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use async_channel::Sender;
-use flux_core::preset::{ModelFileSpec, ModelPreset};
-use flux_core::runtime::{ArchiveFormat, BackendEntry, InstalledBackend};
-use flux_core::upscaler::UpscalerPreset;
-use flux_core::vision::VisionHelper;
 use futures_util::StreamExt;
+use imagiflume_core::preset::{ModelFileSpec, ModelPreset};
+use imagiflume_core::runtime::{ArchiveFormat, BackendEntry, InstalledBackend};
+use imagiflume_core::upscaler::UpscalerPreset;
+use imagiflume_core::vision::VisionHelper;
 use reqwest::StatusCode;
 use reqwest::header::RANGE;
 use sha2::{Digest, Sha256};
@@ -49,7 +49,7 @@ pub async fn download(
     let existing = std::fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
 
     let client = reqwest::Client::builder()
-        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("imagiflume/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let mut request = client.get(file.url);
     if existing > 0 {
@@ -271,7 +271,7 @@ async fn download_backend_archive(
     progress: Sender<BackendProgress>,
 ) -> Result<()> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("imagiflume/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let response = client
         .get(&entry.url)
@@ -459,9 +459,9 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// Fetch and parse the backend manifest, skipping individual corrupt entries.
 pub async fn fetch_manifest(
     url: &str,
-) -> Result<(flux_core::runtime::BackendManifest, Vec<String>)> {
+) -> Result<(imagiflume_core::runtime::BackendManifest, Vec<String>)> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("imagiflume/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let response = client
         .get(url)
@@ -476,16 +476,17 @@ pub async fn fetch_manifest(
         );
     }
     let text = response.text().await?;
-    flux_core::runtime::BackendManifest::parse_lenient(&text)
+    imagiflume_core::runtime::BackendManifest::parse_lenient(&text)
 }
 
 /// Build a manifest from the latest upstream GitHub release.
 ///
 /// Upstream publishes Linux CPU, Vulkan and ROCm archives; CUDA remains
 /// curated locally. Assets without a SHA-256 digest are skipped.
-pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManifest, Vec<String>)> {
+pub async fn fetch_upstream_latest()
+-> Result<(imagiflume_core::runtime::BackendManifest, Vec<String>)> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("imagiflume/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let response = client
         .get("https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest")
@@ -517,11 +518,11 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
             continue;
         }
         let kind = if name.contains("-vulkan") {
-            flux_core::runtime::BackendKind::Vulkan
+            imagiflume_core::runtime::BackendKind::Vulkan
         } else if name.contains("-rocm-") {
-            flux_core::runtime::BackendKind::Rocm
+            imagiflume_core::runtime::BackendKind::Rocm
         } else if name.contains("-bin-Linux") {
-            flux_core::runtime::BackendKind::Cpu
+            imagiflume_core::runtime::BackendKind::Cpu
         } else {
             continue;
         };
@@ -547,22 +548,22 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
         };
 
         let (id, label, backend, requires) = match kind {
-            flux_core::runtime::BackendKind::Cpu => (
+            imagiflume_core::runtime::BackendKind::Cpu => (
                 "upstream-cpu",
                 "CPU (upstream)",
                 Some("cpu".to_string()),
                 Vec::new(),
             ),
-            flux_core::runtime::BackendKind::Vulkan => (
+            imagiflume_core::runtime::BackendKind::Vulkan => (
                 "upstream-vulkan",
                 "Vulkan (upstream)",
                 Some("vulkan0".to_string()),
                 vec!["libvulkan.so.1".to_string()],
             ),
-            flux_core::runtime::BackendKind::Rocm => {
+            imagiflume_core::runtime::BackendKind::Rocm => {
                 ("upstream-rocm", "ROCm (upstream)", None, Vec::new())
             }
-            flux_core::runtime::BackendKind::Cuda => continue,
+            imagiflume_core::runtime::BackendKind::Cuda => continue,
         };
         let min_glibc = if name.contains("Ubuntu-26.04") {
             Some("2.38".to_string())
@@ -577,7 +578,7 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
             .and_then(|version| version.split('.').next())
             .and_then(|major| major.parse::<u32>().ok());
 
-        entries.push(flux_core::runtime::BackendEntry {
+        entries.push(imagiflume_core::runtime::BackendEntry {
             id: id.to_string(),
             label: label.to_string(),
             kind,
@@ -591,7 +592,7 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
             archs: Vec::new(),
             requires,
             min_glibc,
-            strip_prefix: if kind == flux_core::runtime::BackendKind::Rocm {
+            strip_prefix: if kind == imagiflume_core::runtime::BackendKind::Rocm {
                 Some("build/bin".into())
             } else {
                 None
@@ -606,7 +607,7 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
         bail!("latest upstream release has no Linux CPU/Vulkan/ROCm assets");
     }
     Ok((
-        flux_core::runtime::BackendManifest {
+        imagiflume_core::runtime::BackendManifest {
             schema_version: 1,
             generated_at: tag,
             backends: entries,
@@ -620,9 +621,9 @@ pub async fn fetch_upstream_latest() -> Result<(flux_core::runtime::BackendManif
 /// `/releases/latest` can point at a release without assets (for example
 /// `v1.0.0`), so the releases list is scanned for the newest usable build.
 pub async fn fetch_llama_upstream_latest()
--> Result<(flux_core::runtime::BackendManifest, Vec<String>)> {
+-> Result<(imagiflume_core::runtime::BackendManifest, Vec<String>)> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("flux-studio/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("imagiflume/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let response = client
         .get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20")
@@ -637,7 +638,7 @@ pub async fn fetch_llama_upstream_latest()
     let releases: Vec<serde_json::Value> = response.json().await?;
     let (tag, entries, errors) = select_llama_release(&releases)?;
     Ok((
-        flux_core::runtime::BackendManifest {
+        imagiflume_core::runtime::BackendManifest {
             schema_version: 1,
             generated_at: tag,
             backends: entries,
@@ -648,7 +649,11 @@ pub async fn fetch_llama_upstream_latest()
 
 fn select_llama_release(
     releases: &[serde_json::Value],
-) -> Result<(String, Vec<flux_core::runtime::BackendEntry>, Vec<String>)> {
+) -> Result<(
+    String,
+    Vec<imagiflume_core::runtime::BackendEntry>,
+    Vec<String>,
+)> {
     let mut errors = Vec::new();
     for release in releases {
         match llama_entries_from_release(release) {
@@ -666,7 +671,11 @@ fn select_llama_release(
 
 fn llama_entries_from_release(
     release: &serde_json::Value,
-) -> Result<(String, Vec<flux_core::runtime::BackendEntry>, Vec<String>)> {
+) -> Result<(
+    String,
+    Vec<imagiflume_core::runtime::BackendEntry>,
+    Vec<String>,
+)> {
     let tag = release
         .get("tag_name")
         .and_then(serde_json::Value::as_str)
@@ -702,7 +711,7 @@ fn llama_entries_from_release(
         let (kind, cuda_major, rocm_major, id, label, requires) =
             if name.ends_with("-bin-ubuntu-x64.tar.gz") {
                 (
-                    flux_core::runtime::BackendKind::Cpu,
+                    imagiflume_core::runtime::BackendKind::Cpu,
                     None,
                     None,
                     "llama-cpu".to_string(),
@@ -711,7 +720,7 @@ fn llama_entries_from_release(
                 )
             } else if name.ends_with("-bin-ubuntu-vulkan-x64.tar.gz") {
                 (
-                    flux_core::runtime::BackendKind::Vulkan,
+                    imagiflume_core::runtime::BackendKind::Vulkan,
                     None,
                     None,
                     "llama-vulkan".to_string(),
@@ -729,7 +738,7 @@ fn llama_entries_from_release(
                     continue;
                 };
                 (
-                    flux_core::runtime::BackendKind::Rocm,
+                    imagiflume_core::runtime::BackendKind::Rocm,
                     None,
                     Some(major),
                     format!("llama-rocm{major}"),
@@ -747,7 +756,7 @@ fn llama_entries_from_release(
                     continue;
                 };
                 (
-                    flux_core::runtime::BackendKind::Cuda,
+                    imagiflume_core::runtime::BackendKind::Cuda,
                     Some(major),
                     None,
                     format!("llama-cuda{major}"),
@@ -760,7 +769,7 @@ fn llama_entries_from_release(
 
         if entries
             .iter()
-            .any(|entry: &flux_core::runtime::BackendEntry| entry.id == id)
+            .any(|entry: &imagiflume_core::runtime::BackendEntry| entry.id == id)
         {
             continue;
         }
@@ -785,7 +794,7 @@ fn llama_entries_from_release(
             continue;
         };
 
-        entries.push(flux_core::runtime::BackendEntry {
+        entries.push(imagiflume_core::runtime::BackendEntry {
             id,
             label,
             kind,
@@ -811,7 +820,7 @@ fn llama_entries_from_release(
 
 /// Result of checking both the curated manifest and the latest upstream release.
 pub struct ManifestRefresh {
-    pub manifest: flux_core::runtime::BackendManifest,
+    pub manifest: imagiflume_core::runtime::BackendManifest,
     pub errors: Vec<String>,
     pub curated_ok: bool,
     pub upstream_ok: bool,
@@ -823,7 +832,7 @@ pub struct ManifestRefresh {
 /// entries are preserved. A failure of either source does not discard the
 /// other one.
 pub async fn refresh_manifest(
-    base: &flux_core::runtime::BackendManifest,
+    base: &imagiflume_core::runtime::BackendManifest,
     curated_url: &str,
 ) -> Result<ManifestRefresh> {
     let curated = fetch_manifest(curated_url).await;
@@ -833,7 +842,7 @@ pub async fn refresh_manifest(
 
 /// Merge the curated llama.cpp manifest and the latest upstream release.
 pub async fn refresh_llama_manifest(
-    base: &flux_core::runtime::BackendManifest,
+    base: &imagiflume_core::runtime::BackendManifest,
     curated_url: &str,
 ) -> Result<ManifestRefresh> {
     let curated = fetch_manifest(curated_url).await;
@@ -848,9 +857,9 @@ pub async fn refresh_llama_manifest(
 }
 
 fn merge_refresh(
-    base: &flux_core::runtime::BackendManifest,
-    curated: Result<(flux_core::runtime::BackendManifest, Vec<String>)>,
-    upstream: Result<(flux_core::runtime::BackendManifest, Vec<String>)>,
+    base: &imagiflume_core::runtime::BackendManifest,
+    curated: Result<(imagiflume_core::runtime::BackendManifest, Vec<String>)>,
+    upstream: Result<(imagiflume_core::runtime::BackendManifest, Vec<String>)>,
     curated_label: &str,
     upstream_label: &str,
 ) -> Result<ManifestRefresh> {
@@ -862,7 +871,7 @@ fn merge_refresh(
 
     match curated {
         Ok((manifest, entry_errors)) => {
-            merged = flux_core::runtime::BackendManifest::merge(&merged, &manifest);
+            merged = imagiflume_core::runtime::BackendManifest::merge(&merged, &manifest);
             errors.extend(entry_errors);
             curated_ok = true;
         }
@@ -870,7 +879,7 @@ fn merge_refresh(
     }
     match upstream {
         Ok((manifest, entry_errors)) => {
-            merged = flux_core::runtime::BackendManifest::merge(&merged, &manifest);
+            merged = imagiflume_core::runtime::BackendManifest::merge(&merged, &manifest);
             errors.extend(entry_errors);
             upstream_ok = true;
         }
@@ -892,14 +901,14 @@ mod tests {
     use crate::{
         download_backend, extract_backend, llama_entries_from_release, select_llama_release,
     };
-    use flux_core::preset::{FLUX2_KLEIN_4B, ModelRole};
-    use flux_core::runtime::ArchiveFormat;
+    use imagiflume_core::preset::{FLUX2_KLEIN_4B, ModelRole};
+    use imagiflume_core::runtime::ArchiveFormat;
 
     #[test]
     #[ignore = "fetches the latest upstream GitHub release"]
     fn refreshes_from_upstream_when_curated_fails() {
         use crate::refresh_manifest;
-        let base = flux_core::runtime::bundled_manifest();
+        let base = imagiflume_core::runtime::bundled_manifest();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -918,7 +927,7 @@ mod tests {
     #[ignore = "fetches the latest upstream GitHub release"]
     fn fetches_latest_upstream_manifest() {
         use crate::fetch_upstream_latest;
-        use flux_core::runtime::BackendKind;
+        use imagiflume_core::runtime::BackendKind;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -943,8 +952,8 @@ mod tests {
     #[test]
     #[ignore = "downloads the upstream CPU backend"]
     fn installs_upstream_cpu_backend() {
-        use flux_core::runtime::bundled_manifest;
-        let dir = std::env::temp_dir().join("flux-backend-install-test");
+        use imagiflume_core::runtime::bundled_manifest;
+        let dir = std::env::temp_dir().join("imagiflume-backend-install-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = bundled_manifest();
@@ -989,7 +998,7 @@ mod tests {
     #[test]
     #[ignore = "downloads the upstream llama.cpp CPU backend"]
     fn installs_llama_cpu_backend() {
-        use flux_core::runtime::bundled_llama_manifest;
+        use imagiflume_core::runtime::bundled_llama_manifest;
         let dir = std::env::temp_dir().join("flux-llama-backend-install-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1014,7 +1023,8 @@ mod tests {
 
     #[test]
     fn missing_reports_absent_files() {
-        let dir = std::env::temp_dir().join(format!("flux-models-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("imagiflume-models-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1070,7 +1080,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let archive = write_tar_gz(&dir, "llama-b12383");
-        let entry = flux_core::runtime::bundled_llama_manifest().backends[0].clone();
+        let entry = imagiflume_core::runtime::bundled_llama_manifest().backends[0].clone();
         let destination = dir.join("out");
         std::fs::create_dir_all(&destination).unwrap();
         extract_backend(&archive, &entry, &destination).unwrap();

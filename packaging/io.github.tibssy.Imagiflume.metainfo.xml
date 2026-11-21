@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.tibssy.FluxStudio</id>
-  <name>Flux Studio</name>
-  <summary>Generate and edit images locally with FLUX</summary>
+  <id>io.github.tibssy.Imagiflume</id>
+  <name>Imagiflume</name>
+  <summary>Generate and edit images locally with FLUX, Qwen Image and Fibo</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
@@ -12,7 +12,7 @@
 
   <description>
     <p>
-      Flux Studio is a desktop app for local image generation and editing,
+      Imagiflume is a desktop app for local image generation and editing,
       powered by stable-diffusion.cpp. It runs the models on your own machine:
       no Python environment, no cloud account and no images leaving the device.
     </p>
@@ -31,23 +31,23 @@
     </p>
   </description>
 
-  <launchable type="desktop-id">io.github.tibssy.FluxStudio.desktop</launchable>
+  <launchable type="desktop-id">io.github.tibssy.Imagiflume.desktop</launchable>
 
-  <url type="homepage">https://github.com/tibssy/flux-studio</url>
-  <url type="bugtracker">https://github.com/tibssy/flux-studio/issues</url>
-  <url type="vcs-browser">https://github.com/tibssy/flux-studio</url>
+  <url type="homepage">https://github.com/tibssy/imagiflume</url>
+  <url type="bugtracker">https://github.com/tibssy/imagiflume/issues</url>
+  <url type="vcs-browser">https://github.com/tibssy/imagiflume</url>
 
   <screenshots>
     <screenshot type="default">
       <caption>Generate and edit images on your own machine</caption>
       <image>
-        https://raw.githubusercontent.com/tibssy/flux-studio/main/packaging/screenshots/main.png
+        https://raw.githubusercontent.com/tibssy/imagiflume/main/packaging/screenshots/main.png
       </image>
     </screenshot>
     <screenshot>
       <caption>History keeps every result, grouped by the image it came from</caption>
       <image>
-        https://raw.githubusercontent.com/tibssy/flux-studio/main/packaging/screenshots/history.png
+        https://raw.githubusercontent.com/tibssy/imagiflume/main/packaging/screenshots/history.png
       </image>
     </screenshot>
   </screenshots>
@@ -58,6 +58,7 @@
   </categories>
 
   <keywords>
+    <keyword>Imagiflume</keyword>
     <keyword>AI</keyword>
     <keyword>image</keyword>
     <keyword>generation</keyword>

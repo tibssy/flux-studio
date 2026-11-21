@@ -2,8 +2,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::config::CustomEffect;
-use flux_core::effect_pack;
+use imagiflume_core::config::CustomEffect;
+use imagiflume_core::effect_pack;
 
 use crate::history::Generation;
 use crate::main_view::effect_item;
@@ -17,7 +17,7 @@ pub(crate) fn savable_prompt(entry: &Generation) -> Option<String> {
     if entry.kind != "generate" || entry.reference_path.is_none() {
         return None;
     }
-    let prompt = flux_core::style::compose_prompt(&entry.prompt, &entry.style);
+    let prompt = imagiflume_core::style::compose_prompt(&entry.prompt, &entry.style);
     (!prompt.trim().is_empty()).then_some(prompt)
 }
 
@@ -252,9 +252,9 @@ fn export_effects(ui: &Rc<Ui>) {
         .title("Export effects")
         .modal(true)
         .build();
-    dialog.set_initial_name(Some("flux-studio-effects.json"));
+    dialog.set_initial_name(Some("imagiflume-effects.json"));
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some("Flux Studio effects"));
+    filter.set_name(Some("Imagiflume effects"));
     filter.add_pattern("*.json");
     let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
@@ -301,7 +301,7 @@ fn import_effects(ui: &Rc<Ui>) {
         .modal(true)
         .build();
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some("Flux Studio effects"));
+    filter.set_name(Some("Imagiflume effects"));
     filter.add_pattern("*.json");
     let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);

@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use async_channel::Sender;
 use base64::Engine;
-use flux_core::preset::{ModelPreset, ModelRole, preset};
-use flux_core::upscaler::{UpscaleRequest, UpscaledImage};
-use flux_core::{Backend, BackendInfo, GenerateRequest, Progress};
+use imagiflume_core::preset::{ModelPreset, ModelRole, preset};
+use imagiflume_core::upscaler::{UpscaleRequest, UpscaledImage};
+use imagiflume_core::{Backend, BackendInfo, GenerateRequest, Progress};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -60,7 +60,7 @@ struct Inner {
 
 impl SdServer {
     pub fn new(config: SdServerConfig) -> Self {
-        let log = flux_core::paths::cache_dir().join("sd-server.log");
+        let log = imagiflume_core::paths::cache_dir().join("sd-server.log");
         let upscaler = SdUpscaleServer::new(config.clone());
         let inner = Arc::new(Mutex::new(Inner {
             config,
@@ -109,7 +109,7 @@ impl Backend for SdServer {
     fn info(&self) -> BackendInfo {
         BackendInfo {
             name: "stable-diffusion.cpp (server)".into(),
-            device: std::env::var("FLUX_DEVICE").unwrap_or_else(|_| "cuda".into()),
+            device: std::env::var("IMAGIFLUME_DEVICE").unwrap_or_else(|_| "cuda".into()),
             version: None,
         }
     }
@@ -514,9 +514,9 @@ impl Inner {
                 self.loaded = None;
                 self.preview_loaded = false;
                 bail!(
-                    "sd-server exited with {status} while loading {} (see {})",
+                    "sd-server exited with {status} while loading {}: {}",
                     model.label,
-                    self.log.display()
+                    loader_hint(&self.log).unwrap_or_else(|| format!("see {}", self.log.display()))
                 );
             }
 
@@ -611,6 +611,20 @@ impl Job {
     }
 }
 
+/// Turn a dynamic-loader failure into a short, user-facing reason.
+///
+/// A custom backend built against host libraries exits before the server is
+/// ready. The generated message already points at the log, but the missing
+/// soname is what the user needs to see in the toast.
+fn loader_hint(log: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(log).ok()?;
+    text.lines().rev().find_map(|line| {
+        let (_, detail) = line.split_once("error while loading shared libraries:")?;
+        let library = detail.trim().split(':').next()?.trim();
+        (!library.is_empty()).then(|| format!("missing {library}"))
+    })
+}
+
 #[derive(Deserialize)]
 struct JobProgress {
     completed: Option<u32>,
@@ -644,4 +658,32 @@ struct JobError {
 struct ModelStatus {
     state: String,
     error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_the_missing_shared_library() {
+        let path =
+            std::env::temp_dir().join(format!("flux-loader-hint-{}.log", std::process::id()));
+        std::fs::write(
+            &path,
+            "/opt/flux/sd-server: error while loading shared libraries: \
+             libcudart.so.12: cannot open shared object file: No such file or directory\n",
+        )
+        .unwrap();
+        assert_eq!(loader_hint(&path), Some("missing libcudart.so.12".into()));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn has_no_hint_for_other_failures() {
+        let path =
+            std::env::temp_dir().join(format!("flux-loader-none-{}.log", std::process::id()));
+        std::fs::write(&path, "model failed to load\n").unwrap();
+        assert_eq!(loader_hint(&path), None);
+        let _ = std::fs::remove_file(path);
+    }
 }

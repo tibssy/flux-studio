@@ -2,9 +2,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::size::RatioMatch;
-use flux_core::style::STYLES;
-use flux_core::{Config, size};
+use imagiflume_core::size::RatioMatch;
+use imagiflume_core::style::STYLES;
+use imagiflume_core::{Config, size};
 
 pub(crate) struct Sidebar {
     pub root: gtk::Box,

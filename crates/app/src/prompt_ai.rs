@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use flux_core::Config;
+use imagiflume_core::Config;
 
 const SYSTEM_PROMPT: &str = "\
 Rewrite the user's image-generation prompt to be more specific and visually \
@@ -33,11 +33,18 @@ pub(crate) fn find_cli(config: &Config) -> Option<PathBuf> {
     {
         return Some(path.clone());
     }
-    if let Ok(path) = std::env::var("FLUX_LLAMA_CLI") {
+    if let Ok(path) = std::env::var("IMAGIFLUME_LLAMA_CLI") {
         let path = PathBuf::from(path);
         if is_executable(&path) {
             return Some(path);
         }
+    }
+    // Bundled and system-wide installs live next to the app or under
+    // /usr/lib/imagiflume, neither of which is necessarily on PATH.
+    if let Some(path) = imagiflume_core::runtime::find_system_llama_cli()
+        && is_executable(&path)
+    {
+        return Some(path);
     }
     let path_var = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path_var) {

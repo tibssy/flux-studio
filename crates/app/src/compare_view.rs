@@ -24,7 +24,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for CompareView {
-        const NAME: &'static str = "FluxCompareView";
+        const NAME: &'static str = "ImagiflumeCompareView";
         type Type = super::CompareView;
         type ParentType = gtk::Widget;
     }

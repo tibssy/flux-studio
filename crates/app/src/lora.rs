@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::config::LoraSelection;
+use imagiflume_core::config::LoraSelection;
 
 use crate::Ui;
 

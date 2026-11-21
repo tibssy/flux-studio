@@ -3,23 +3,23 @@
 # Build from a release tarball. Until the repository is published you can
 # produce one from the working tree:
 #
-#   tar --transform 's,^,flux-studio-0.1.0/,' -czf flux-studio-0.1.0.tar.gz \
+#   tar --transform 's,^,imagiflume-0.1.0/,' -czf imagiflume-0.1.0.tar.gz \
 #       Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
-#       packaging/PKGBUILD packaging/io.github.tibssy.FluxStudio.desktop \
-#       packaging/io.github.tibssy.FluxStudio.svg \
-#       packaging/io.github.tibssy.FluxStudio.metainfo.xml
+#       packaging/PKGBUILD packaging/io.github.tibssy.Imagiflume.desktop \
+#       packaging/io.github.tibssy.Imagiflume.svg \
+#       packaging/io.github.tibssy.Imagiflume.metainfo.xml
 #
 # then run `makepkg -si` in this directory.
 #
 # The CUDA backend is compiled for Maxwell (sm_52) by default. Override with
-# FLUX_CUDA_ARCH=86 (Ampere), 89 (Ada), 120 (Blackwell), etc.
+# IMAGIFLUME_CUDA_ARCH=86 (Ampere), 89 (Ada), 120 (Blackwell), etc.
 
-pkgname=flux-studio
+pkgname=imagiflume
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='GTK4/libadwaita desktop app for local image generation with stable-diffusion.cpp'
 arch=('x86_64')
-url='https://github.com/tibssy/flux-studio'
+url='https://github.com/tibssy/imagiflume'
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'hicolor-icon-theme' 'openssl')
 makedepends=('cargo' 'rust' 'cmake' 'ninja' 'git' 'cuda' 'gcc14')
@@ -29,7 +29,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "stable-diffusion.cpp::git+https://github.com/leejet/stable-diffusion.cpp#commit=32d516c0197ed5ca31305b8575e14eb1451fad33")
 sha256sums=('SKIP' 'SKIP')
 
-_cuda_arch="${FLUX_CUDA_ARCH:-52}"
+_cuda_arch="${IMAGIFLUME_CUDA_ARCH:-52}"
 
 build() {
   cd "$pkgname-$pkgver"
@@ -48,16 +48,16 @@ build() {
 package() {
   cd "$pkgname-$pkgver"
 
-  install -Dm755 target/release/flux-studio "$pkgdir/usr/bin/flux-studio"
+  install -Dm755 target/release/imagiflume "$pkgdir/usr/bin/imagiflume"
   install -Dm755 "$srcdir/stable-diffusion.cpp/build/bin/sd-server" \
-    "$pkgdir/usr/lib/flux-studio/sd-server"
+    "$pkgdir/usr/lib/imagiflume/sd-server"
 
-  install -Dm644 packaging/io.github.tibssy.FluxStudio.desktop \
-    "$pkgdir/usr/share/applications/io.github.tibssy.FluxStudio.desktop"
-  install -Dm644 packaging/io.github.tibssy.FluxStudio.svg \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.tibssy.FluxStudio.svg"
-  install -Dm644 packaging/io.github.tibssy.FluxStudio.metainfo.xml \
-    "$pkgdir/usr/share/metainfo/io.github.tibssy.FluxStudio.metainfo.xml"
+  install -Dm644 packaging/io.github.tibssy.Imagiflume.desktop \
+    "$pkgdir/usr/share/applications/io.github.tibssy.Imagiflume.desktop"
+  install -Dm644 packaging/io.github.tibssy.Imagiflume.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.tibssy.Imagiflume.svg"
+  install -Dm644 packaging/io.github.tibssy.Imagiflume.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.tibssy.Imagiflume.metainfo.xml"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

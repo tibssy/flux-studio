@@ -36,7 +36,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for RoundedClip {
-        const NAME: &'static str = "FluxRoundedClip";
+        const NAME: &'static str = "ImagiflumeRoundedClip";
         type Type = super::RoundedClip;
         type ParentType = gtk::Widget;
         type Interfaces = (gtk::Accessible, gtk::Buildable);
