@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::upscaler::{self, UPSCALERS};
+use flux_core::upscaler;
 use gtk::glib;
 
 use crate::Ui;
@@ -20,9 +20,20 @@ pub(crate) fn show(ui: &Rc<Ui>) {
         return;
     }
 
+    // Only offer weights that can actually be used. Downloads and deletions
+    // live in Preferences, which lists every preset.
+    let installed = upscaler::installed_upscalers(&ui.models_dir);
+    if installed.is_empty() {
+        ui.toast.add_toast(adw::Toast::new(
+            "No upscaler installed. Download one in Preferences → Models.",
+        ));
+        return;
+    }
+    let installed = Rc::new(installed);
+
     let (initial_model, initial_factor) = {
         let config = ui.config.borrow();
-        let model = UPSCALERS
+        let model = installed
             .iter()
             .position(|preset| preset.id == config.upscaler_id)
             .unwrap_or(0);
@@ -82,7 +93,7 @@ pub(crate) fn show(ui: &Rc<Ui>) {
     page.add(&output_group);
 
     let model_group = adw::PreferencesGroup::builder().title("Model").build();
-    let labels: Vec<&str> = UPSCALERS.iter().map(|preset| preset.label).collect();
+    let labels: Vec<&str> = installed.iter().map(|preset| preset.label).collect();
     let model_dropdown = gtk::DropDown::from_strings(&labels);
     model_dropdown.set_selected(initial_model as u32);
     let model_row = adw::ActionRow::builder().title("Upscaler").build();
@@ -90,30 +101,22 @@ pub(crate) fn show(ui: &Rc<Ui>) {
     model_row.set_activatable_widget(Some(&model_dropdown));
     let details_row = adw::ActionRow::builder().title("Details").build();
     let license_row = adw::ActionRow::builder().title("License").build();
-    let download_row = adw::ActionRow::builder()
-        .title("Model not installed")
+    let more_row = adw::ActionRow::builder()
+        .title("More upscalers…")
+        .subtitle("Download additional models in Preferences.")
         .build();
-    let download_button = gtk::Button::builder()
-        .label("Download")
+    let more_button = gtk::Button::builder()
+        .label("Preferences")
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
-    download_row.add_suffix(&download_button);
-    let progress = gtk::ProgressBar::builder()
-        .show_text(true)
-        .visible(false)
-        .build();
-    let status = gtk::Label::builder()
-        .xalign(0.0)
-        .wrap(true)
-        .css_classes(["caption", "dim-label"])
-        .build();
+    more_row.add_suffix(&more_button);
     model_group.add(&model_row);
     model_group.add(&details_row);
     model_group.add(&license_row);
-    model_group.add(&download_row);
-    model_group.add(&progress);
-    model_group.add(&status);
+    if installed.len() < upscaler::UPSCALERS.len() {
+        model_group.add(&more_row);
+    }
     page.add(&model_group);
 
     toolbar.set_content(Some(&page));
@@ -123,19 +126,17 @@ pub(crate) fn show(ui: &Rc<Ui>) {
     let selected_factor = Rc::new(RefCell::new(initial_factor));
 
     let refresh: Rc<dyn Fn()> = {
-        let ui = ui.clone();
         let size_row = size_row.clone();
         let warning = warning.clone();
         let details_row = details_row.clone();
         let license_row = license_row.clone();
-        let download_row = download_row.clone();
-        let download_button = download_button.clone();
         let upscale = upscale.clone();
         let selected_model = selected_model.clone();
         let selected_factor = selected_factor.clone();
+        let installed = installed.clone();
         Rc::new(move || {
-            let index = *selected_model.borrow();
-            let preset = &UPSCALERS[index.min(UPSCALERS.len() - 1)];
+            let index = (*selected_model.borrow()).min(installed.len() - 1);
+            let preset = installed[index];
             let factor = *selected_factor.borrow();
             let size = upscaler::output_size(width, height, factor);
             match size {
@@ -152,16 +153,7 @@ pub(crate) fn show(ui: &Rc<Ui>) {
                 preset.description
             ));
             license_row.set_subtitle(&format!("{} · {}", preset.license, preset.credits));
-
-            let installed = preset.is_installed(&ui.models_dir);
-            download_row.set_visible(!installed);
-            download_row.set_subtitle(&format!(
-                "{} · {}",
-                preset.label,
-                format_bytes(preset.approx_bytes())
-            ));
-            download_button.set_sensitive(!installed);
-            upscale.set_sensitive(installed && size.is_some());
+            upscale.set_sensitive(size.is_some());
         })
     };
     refresh();
@@ -183,84 +175,11 @@ pub(crate) fn show(ui: &Rc<Ui>) {
         });
     }
     {
+        let dialog = dialog.clone();
         let ui = ui.clone();
-        let progress = progress.clone();
-        let status = status.clone();
-        let trigger = download_button.clone();
-        let refresh = refresh.clone();
-        let selected_model = selected_model.clone();
-        trigger.connect_clicked(move |_| {
-            let preset = &UPSCALERS[*selected_model.borrow()];
-            if preset.is_installed(&ui.models_dir) {
-                refresh();
-                return;
-            }
-            download_button.set_sensitive(false);
-            progress.set_visible(true);
-            progress.set_fraction(0.0);
-            progress.set_text(Some("Starting…"));
-            status.set_text(&format!("Downloading {}…", preset.label));
-
-            let (progress_tx, progress_rx) =
-                async_channel::unbounded::<flux_models::DownloadProgress>();
-            let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
-            let models_dir = ui.models_dir.clone();
-            std::thread::spawn(move || {
-                let result = (|| -> anyhow::Result<()> {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()?;
-                    runtime.block_on(flux_models::download_upscaler(
-                        preset,
-                        &models_dir,
-                        progress_tx,
-                    ))?;
-                    Ok(())
-                })();
-                let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
-            });
-
-            let progress = progress.clone();
-            let status = status.clone();
-            let download_button = download_button.clone();
-            let refresh = refresh.clone();
-            let ui = ui.clone();
-            glib::spawn_future_local(async move {
-                while let Ok(event) = progress_rx.recv().await {
-                    let fraction = if event.total > 0 {
-                        event.downloaded as f64 / event.total as f64
-                    } else {
-                        0.0
-                    };
-                    progress.set_fraction(fraction.min(1.0));
-                    progress.set_text(Some(&format!("{:.0}%", fraction * 100.0)));
-                    status.set_text(&format!(
-                        "{} · {:.1} / {:.1} MB",
-                        event.file,
-                        event.downloaded as f64 / 1e6,
-                        event.total as f64 / 1e6
-                    ));
-                }
-                let result = done_rx.recv().await;
-                progress.set_visible(false);
-                download_button.set_sensitive(true);
-                match result {
-                    Ok(Ok(())) => {
-                        status.set_text("");
-                        ui.toast.add_toast(adw::Toast::new("Upscaler downloaded."));
-                        refresh();
-                    }
-                    Ok(Err(error)) => {
-                        status.set_text(&error);
-                        ui.toast
-                            .add_toast(adw::Toast::new(&format!("Download failed: {error}")));
-                    }
-                    Err(_) => {
-                        status.set_text("Download failed.");
-                        ui.toast.add_toast(adw::Toast::new("Download failed."));
-                    }
-                }
-            });
+        more_button.connect_clicked(move |_| {
+            dialog.close();
+            crate::preferences::show_preferences(&ui, true);
         });
     }
     {
@@ -276,8 +195,10 @@ pub(crate) fn show(ui: &Rc<Ui>) {
         let selected_factor = selected_factor.clone();
         let target = target.clone();
         let trigger = upscale.clone();
+        let installed = installed.clone();
         trigger.connect_clicked(move |_| {
-            let preset = &UPSCALERS[*selected_model.borrow()];
+            let index = (*selected_model.borrow()).min(installed.len() - 1);
+            let preset = installed[index];
             let factor = *selected_factor.borrow();
             dialog.close();
             crate::start_upscale(&ui, preset, factor, target.clone());
@@ -303,8 +224,4 @@ fn format_duration(seconds: u32) -> String {
             format!("{minutes} min {rest} s")
         }
     }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    format!("{:.0} MB", bytes as f64 / 1_048_576.0)
 }

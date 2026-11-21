@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -13,6 +13,35 @@ const BACKEND_ICON: &str = "application-x-executable-symbolic";
 
 type Refresh = Rc<dyn Fn()>;
 type RefreshSlot = Rc<RefCell<Option<Refresh>>>;
+
+/// Custom binaries link against host libraries that a Flatpak sandbox does
+/// not expose, so the chooser is only useful in native builds.
+fn in_flatpak() -> bool {
+    std::env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").exists()
+}
+
+/// Drop custom backend selections that cannot work inside the sandbox.
+pub(crate) fn sanitize_config(config: &mut Config) {
+    sanitize_config_for(config, in_flatpak());
+}
+
+fn sanitize_config_for(config: &mut Config, flatpak: bool) {
+    if !flatpak {
+        return;
+    }
+    if let Some(custom) = config.custom_server.take()
+        && config.sd_server.as_ref() == Some(&custom)
+    {
+        config.sd_server = None;
+        config.backend_id = None;
+    }
+    if let Some(custom) = config.llama_custom_cli.take()
+        && config.prompt_helper_cli.as_ref() == Some(&custom)
+    {
+        config.prompt_helper_cli = None;
+        config.llama_backend_id = None;
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -507,10 +536,16 @@ fn rebuild(
 
     let root = section.root();
     let system_path = section.system_path();
+    let custom_allowed = !in_flatpak();
     let (active_id, active_path, custom, custom_active) = {
         let config = ui.config.borrow();
-        let mut custom = section.custom(&config);
-        if custom.is_none()
+        let mut custom = if custom_allowed {
+            section.custom(&config)
+        } else {
+            None
+        };
+        if custom_allowed
+            && custom.is_none()
             && section.active_id(&config).is_none()
             && section.active_path(&config).as_deref() != system_path.as_deref()
         {
@@ -527,7 +562,7 @@ fn rebuild(
             custom_active,
         )
     };
-    if custom.is_some() && section.custom(&ui.config.borrow()).is_none() {
+    if custom_allowed && custom.is_some() && section.custom(&ui.config.borrow()).is_none() {
         let mut config = ui.config.borrow_mut();
         section.set_custom(&mut config, custom.clone());
         let _ = config.save();
@@ -741,62 +776,68 @@ fn rebuild(
         }
     }
 
-    let custom_row = adw::ActionRow::builder()
-        .title(section.custom_title())
-        .subtitle(match &custom {
-            Some(path) => {
-                let mut subtitle = path.display().to_string();
-                if !path.is_file() {
-                    subtitle.push_str(" · missing");
+    if !in_flatpak() {
+        let custom_row = adw::ActionRow::builder()
+            .title(section.custom_title())
+            .subtitle(match &custom {
+                Some(path) => {
+                    let mut subtitle = path.display().to_string();
+                    if !path.is_file() {
+                        subtitle.push_str(" · missing");
+                    }
+                    subtitle
                 }
-                subtitle
-            }
-            None => section.custom_placeholder().into(),
-        })
-        .build();
-    let choose = gtk::Button::builder()
-        .icon_name("document-open-symbolic")
-        .tooltip_text(section.choose_tooltip())
-        .valign(gtk::Align::Center)
-        .css_classes(["flat"])
-        .build();
-    {
-        let ui = ui.clone();
-        let refresh = refresh.clone();
-        choose.connect_clicked(move |_| {
-            let refresh = refresh.clone();
-            choose_binary(&ui, section, move || refresh());
-        });
-    }
-    custom_row.add_suffix(&choose);
-    let check = match custom {
-        Some(_) if custom_active => Some(check_button(true, "Active custom backend")),
-        Some(path) if path.is_file() => {
-            let button = check_button(false, "Use this custom backend");
+                None => section.custom_placeholder().into(),
+            })
+            .build();
+        let choose = gtk::Button::builder()
+            .icon_name("document-open-symbolic")
+            .tooltip_text(section.choose_tooltip())
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        {
             let ui = ui.clone();
             let refresh = refresh.clone();
-            button.connect_clicked(move |_| {
-                {
-                    let mut config = ui.config.borrow_mut();
-                    section.set_custom(&mut config, Some(path.clone()));
-                    let _ = config.save();
-                }
-                section.set_active(&ui, path.clone(), None, None);
-                refresh();
+            choose.connect_clicked(move |_| {
+                let refresh = refresh.clone();
+                choose_binary(&ui, section, move || refresh());
             });
-            Some(button)
         }
-        Some(_) => {
-            let button = check_button(false, "Custom backend is missing");
-            button.set_sensitive(false);
-            Some(button)
+        let check = match custom {
+            Some(_) if custom_active => Some(check_button(true, "Active custom backend")),
+            Some(path) if path.is_file() => {
+                let button = check_button(false, "Use this custom backend");
+                let ui = ui.clone();
+                let refresh = refresh.clone();
+                button.connect_clicked(move |_| {
+                    {
+                        let mut config = ui.config.borrow_mut();
+                        section.set_custom(&mut config, Some(path.clone()));
+                        let _ = config.save();
+                    }
+                    section.set_active(&ui, path.clone(), None, None);
+                    refresh();
+                });
+                Some(button)
+            }
+            Some(_) => {
+                let button = check_button(false, "Custom backend is missing");
+                button.set_sensitive(false);
+                Some(button)
+            }
+            None => None,
+        };
+        if let Some(button) = check {
+            custom_row.add_suffix(&choose);
+            custom_row.add_suffix(&check_slot(Some(button.upcast::<gtk::Widget>())));
+        } else {
+            // Keep the chooser in the same column as the activate buttons of the
+            // other rows instead of leaving an empty slot to its right.
+            custom_row.add_suffix(&check_slot(Some(choose.clone().upcast::<gtk::Widget>())));
         }
-        None => None,
-    };
-    custom_row.add_suffix(&check_slot(
-        check.map(|button| button.upcast::<gtk::Widget>()),
-    ));
-    list.append(&custom_row);
+        list.append(&custom_row);
+    }
 }
 
 fn start_install(
@@ -1145,7 +1186,7 @@ fn short_version(version: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::update_available;
+    use super::*;
 
     #[test]
     fn hides_update_when_manifest_points_at_rollback_copy() {
@@ -1165,5 +1206,59 @@ mod tests {
     #[test]
     fn shows_update_without_a_rollback_copy() {
         assert!(update_available(true, "old", "new", true, None));
+    }
+
+    #[test]
+    fn flatpak_drops_active_custom_backends() {
+        let mut config = Config::default();
+        config.custom_server = Some(PathBuf::from("/run/user/1000/doc/id/sd-server"));
+        config.sd_server = config.custom_server.clone();
+        config.backend_id = None;
+        config.llama_custom_cli = Some(PathBuf::from("/run/user/1000/doc/id/llama-cli"));
+        config.prompt_helper_cli = config.llama_custom_cli.clone();
+        config.llama_backend_id = None;
+
+        sanitize_config_for(&mut config, true);
+
+        assert!(config.custom_server.is_none());
+        assert!(config.sd_server.is_none());
+        assert!(config.backend_id.is_none());
+        assert!(config.llama_custom_cli.is_none());
+        assert!(config.prompt_helper_cli.is_none());
+        assert!(config.llama_backend_id.is_none());
+    }
+
+    #[test]
+    fn flatpak_keeps_a_working_installed_backend() {
+        let mut config = Config {
+            custom_server: Some(PathBuf::from("/run/user/1000/doc/id/sd-server")),
+            sd_server: Some(PathBuf::from("/app/lib/flux-studio/sd-server")),
+            backend_id: Some("upstream-cpu".into()),
+            ..Default::default()
+        };
+
+        sanitize_config_for(&mut config, true);
+
+        assert!(config.custom_server.is_none());
+        assert_eq!(
+            config.sd_server,
+            Some(PathBuf::from("/app/lib/flux-studio/sd-server"))
+        );
+        assert_eq!(config.backend_id.as_deref(), Some("upstream-cpu"));
+    }
+
+    #[test]
+    fn native_keeps_custom_backends() {
+        let mut config = Config::default();
+        config.custom_server = Some(PathBuf::from("/opt/custom/sd-server"));
+        config.sd_server = config.custom_server.clone();
+
+        sanitize_config_for(&mut config, false);
+
+        assert_eq!(
+            config.custom_server,
+            Some(PathBuf::from("/opt/custom/sd-server"))
+        );
+        assert_eq!(config.sd_server, config.custom_server);
     }
 }

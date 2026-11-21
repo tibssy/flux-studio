@@ -35,6 +35,7 @@
       "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1094-3bad892/sd-master-3bad892-bin-Linux-Ubuntu-24.04-x86_64-rocm-10.1.0.zip",
       "sha256": "24472a35ad6f0378525a7a2e8c7d4d143b329d408d87fea11bf490bfa20d468a",
       "size": 298837620,
+      "requires": ["libamdhip64.so.10"],
       "rocm_major": 10,
       "strip_prefix": "build/bin",
       "min_glibc": "2.39",

@@ -6,13 +6,17 @@
 #     --state-dir=.flatpak-builder \
 #     build-dir packaging/flatpak/io.github.tibssy.FluxStudio.yml
 #
-# The app downloads its inference backends and models on first use, so the
-# manifest does not bundle them. Flathub pins the source with a commit; the
-# branch below is for local builds of `main`.
+# Models are downloaded on first use. The CPU backends are bundled because the
+# upstream prebuilt binaries are linked against a newer glibc than the runtime
+# provides, and because Flathub builds included dependencies from source.
+# Flathub pins the app with a commit; the branch below is for local builds of
+# `main`.
 id: io.github.tibssy.FluxStudio
 runtime: org.gnome.Platform
-runtime-version: "49"
+runtime-version: "51"
 sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
 command: flux-studio
 
 finish-args:
@@ -41,18 +45,62 @@ modules:
   - name: stable-diffusion-cpp
     buildsystem: simple
     build-commands:
+      # flatpak-builder sets SOURCE_DATE_EPOCH, which makes ggml treat this as
+      # a cross build and silently disable every SIMD path. Keep GGML_NATIVE
+      # off (the build host is not the user's CPU) but request the ISA
+      # explicitly: without these the backend still runs, only ~30x slower.
       - cmake -S . -B _build -G Ninja
         -DCMAKE_BUILD_TYPE=Release
         -DSD_SERVER_BUILD_FRONTEND=OFF
         -DSD_BUILD_SHARED_LIBS=OFF
         -DGGML_NATIVE=OFF
-        -DGGML_OPENMP=OFF
+        -DGGML_SSE42=ON
+        -DGGML_AVX=ON
+        -DGGML_AVX2=ON
+        -DGGML_BMI2=ON
+        -DGGML_FMA=ON
+        -DGGML_F16C=ON
+        -DGGML_OPENMP=ON
       - cmake --build _build --target sd-server -j "$FLATPAK_BUILDER_N_JOBS"
       - install -Dm755 _build/bin/sd-server /app/lib/flux-studio/sd-server
+      - install -Dm644 LICENSE
+        /app/share/licenses/io.github.tibssy.FluxStudio/LICENSE.stable-diffusion.cpp
     sources:
       - type: git
         url: https://github.com/leejet/stable-diffusion.cpp.git
         commit: 32d516c0197ed5ca31305b8575e14eb1451fad33
+
+  # Prompt improvement and lighting detection run through llama-cli. Bundle it
+  # for the same reason as sd-server, and with the same explicit ISA flags.
+  - name: llama-cpp
+    buildsystem: simple
+    build-commands:
+      - cmake -S . -B _build -G Ninja
+        -DCMAKE_BUILD_TYPE=Release
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLAMA_BUILD_IS_DEV=OFF
+        -DLLAMA_BUILD_TESTS=OFF
+        -DLLAMA_BUILD_EXAMPLES=OFF
+        -DLLAMA_BUILD_TOOLS=ON
+        -DLLAMA_BUILD_SERVER=ON
+        -DLLAMA_BUILD_APP=OFF
+        -DLLAMA_OPENSSL=OFF
+        -DGGML_NATIVE=OFF
+        -DGGML_SSE42=ON
+        -DGGML_AVX=ON
+        -DGGML_AVX2=ON
+        -DGGML_BMI2=ON
+        -DGGML_FMA=ON
+        -DGGML_F16C=ON
+        -DGGML_OPENMP=ON
+      - cmake --build _build --target llama-cli -j "$FLATPAK_BUILDER_N_JOBS"
+      - install -Dm755 _build/bin/llama-cli /app/lib/flux-studio/llama-cli
+      - install -Dm644 LICENSE
+        /app/share/licenses/io.github.tibssy.FluxStudio/LICENSE.llama.cpp
+    sources:
+      - type: git
+        url: https://github.com/ggml-org/llama.cpp.git
+        commit: c56be864f482dc88a6d62a0816a265034941935f
 
   - name: flux-studio
 
