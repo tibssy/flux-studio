@@ -8,11 +8,11 @@ use crate::paths;
 /// Default manifest location. The bundled copy is used when this cannot be
 /// fetched or when the app is offline.
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/tibssy/flux-studio/main/backends/manifest.json";
+    "https://raw.githubusercontent.com/tibssy/imagiflume/main/backends/manifest.json";
 
 /// Default location of the llama.cpp backend manifest.
 pub const DEFAULT_LLAMA_MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/tibssy/flux-studio/main/backends/llama-manifest.json";
+    "https://raw.githubusercontent.com/tibssy/imagiflume/main/backends/llama-manifest.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -448,19 +448,19 @@ pub fn system_server_candidates() -> Vec<PathBuf> {
     {
         candidates.push(dir.join("sd-server"));
         candidates.push(dir.join("backends").join("sd-server"));
-        candidates.push(dir.join("../lib/flux-studio/sd-server"));
-        candidates.push(dir.join("../libexec/flux-studio/sd-server"));
+        candidates.push(dir.join("../lib/imagiflume/sd-server"));
+        candidates.push(dir.join("../libexec/imagiflume/sd-server"));
     }
-    candidates.push(PathBuf::from("/usr/lib/flux-studio/sd-server"));
+    candidates.push(PathBuf::from("/usr/lib/imagiflume/sd-server"));
     candidates.push(PathBuf::from("/usr/lib/sd-server"));
     candidates.push(PathBuf::from("/usr/lib64/sd-server"));
     candidates.push(PathBuf::from("/usr/libexec/sd-server"));
-    candidates.push(PathBuf::from("/usr/local/lib/flux-studio/sd-server"));
+    candidates.push(PathBuf::from("/usr/local/lib/imagiflume/sd-server"));
     candidates.push(PathBuf::from("/usr/local/bin/sd-server"));
     candidates.push(PathBuf::from("/usr/bin/sd-server"));
     if let Some(home) = dirs::home_dir() {
         candidates.push(home.join(".local/bin/sd-server"));
-        candidates.push(home.join(".local/lib/flux-studio/sd-server"));
+        candidates.push(home.join(".local/lib/imagiflume/sd-server"));
     }
     candidates
 }
@@ -480,19 +480,19 @@ pub fn system_llama_candidates() -> Vec<PathBuf> {
     {
         candidates.push(dir.join("llama-cli"));
         candidates.push(dir.join("llama.cpp").join("llama-cli"));
-        candidates.push(dir.join("../lib/flux-studio/llama-cli"));
-        candidates.push(dir.join("../libexec/flux-studio/llama-cli"));
+        candidates.push(dir.join("../lib/imagiflume/llama-cli"));
+        candidates.push(dir.join("../libexec/imagiflume/llama-cli"));
     }
-    candidates.push(PathBuf::from("/usr/lib/flux-studio/llama-cli"));
+    candidates.push(PathBuf::from("/usr/lib/imagiflume/llama-cli"));
     candidates.push(PathBuf::from("/usr/lib/llama.cpp/llama-cli"));
     candidates.push(PathBuf::from("/usr/lib64/llama.cpp/llama-cli"));
     candidates.push(PathBuf::from("/usr/libexec/llama.cpp/llama-cli"));
-    candidates.push(PathBuf::from("/usr/local/lib/flux-studio/llama-cli"));
+    candidates.push(PathBuf::from("/usr/local/lib/imagiflume/llama-cli"));
     candidates.push(PathBuf::from("/usr/local/bin/llama-cli"));
     candidates.push(PathBuf::from("/usr/bin/llama-cli"));
     if let Some(home) = dirs::home_dir() {
         candidates.push(home.join(".local/bin/llama-cli"));
-        candidates.push(home.join(".local/lib/flux-studio/llama-cli"));
+        candidates.push(home.join(".local/lib/imagiflume/llama-cli"));
     }
     candidates
 }
@@ -1275,16 +1275,16 @@ GPU UUID: \t GPU-250c6a35
 
     #[test]
     fn bundled_binaries_are_discovered_next_to_the_app() {
-        // The Flatpak installs both backends in /app/lib/flux-studio.
+        // The Flatpak installs both backends in /app/lib/imagiflume.
         assert!(
             system_server_candidates()
                 .iter()
-                .any(|path| path.ends_with("lib/flux-studio/sd-server"))
+                .any(|path| path.ends_with("lib/imagiflume/sd-server"))
         );
         assert!(
             system_llama_candidates()
                 .iter()
-                .any(|path| path.ends_with("lib/flux-studio/llama-cli"))
+                .any(|path| path.ends_with("lib/imagiflume/llama-cli"))
         );
     }
 

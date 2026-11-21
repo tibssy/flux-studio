@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::Config;
-use flux_core::runtime::{self, BackendEntry, BackendManifest, HardwareProfile};
 use gtk::{gdk, glib};
+use imagiflume_core::Config;
+use imagiflume_core::runtime::{self, BackendEntry, BackendManifest, HardwareProfile};
 
 use crate::Ui;
 
@@ -249,7 +249,7 @@ impl Section {
         ui.toast.add_toast(adw::Toast::new(&message));
     }
 
-    fn refresh_message(self, outcome: &flux_models::ManifestRefresh) -> String {
+    fn refresh_message(self, outcome: &imagiflume_models::ManifestRefresh) -> String {
         let mut message = match (outcome.curated_ok, outcome.upstream_ok) {
             (true, true) => match self {
                 Section::StableDiffusion => "Backend manifest updated.".to_string(),
@@ -469,18 +469,18 @@ fn build_section(
             button.set_sensitive(false);
             let url = section.manifest_url(&ui.config.borrow());
             let base = manifest.borrow().clone();
-            let (tx, rx) = async_channel::bounded::<Result<flux_models::ManifestRefresh, String>>(1);
+            let (tx, rx) = async_channel::bounded::<Result<imagiflume_models::ManifestRefresh, String>>(1);
             std::thread::spawn(move || {
-                let result = (|| -> anyhow::Result<flux_models::ManifestRefresh> {
+                let result = (|| -> anyhow::Result<imagiflume_models::ManifestRefresh> {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
                     match section {
                         Section::StableDiffusion => {
-                            runtime.block_on(flux_models::refresh_manifest(&base, &url))
+                            runtime.block_on(imagiflume_models::refresh_manifest(&base, &url))
                         }
                         Section::LlamaCpp => {
-                            runtime.block_on(flux_models::refresh_llama_manifest(&base, &url))
+                            runtime.block_on(imagiflume_models::refresh_llama_manifest(&base, &url))
                         }
                     }
                 })();
@@ -955,7 +955,8 @@ fn install_entry(
     }
     ui.backend_installing.set(true);
 
-    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::BackendProgress>();
+    let (progress_tx, progress_rx) =
+        async_channel::unbounded::<imagiflume_models::BackendProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<PathBuf, String>>(1);
     let root = section.root();
     let entry = entry.clone();
@@ -964,7 +965,11 @@ fn install_entry(
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(flux_models::download_backend(&entry, &root, progress_tx))
+            runtime.block_on(imagiflume_models::download_backend(
+                &entry,
+                &root,
+                progress_tx,
+            ))
         })();
         let _ = done_tx.send_blocking(result.map_err(|error| error.to_string()));
     });
@@ -1119,7 +1124,7 @@ fn previous_dir(entry: &BackendEntry, root: &std::path::Path) -> PathBuf {
 fn previous_info(
     entry: &BackendEntry,
     root: &std::path::Path,
-) -> Option<flux_core::runtime::InstalledBackend> {
+) -> Option<imagiflume_core::runtime::InstalledBackend> {
     runtime::read_installed(&previous_dir(entry, root).join("installed.json"))
 }
 
@@ -1232,7 +1237,7 @@ mod tests {
     fn flatpak_keeps_a_working_installed_backend() {
         let mut config = Config {
             custom_server: Some(PathBuf::from("/run/user/1000/doc/id/sd-server")),
-            sd_server: Some(PathBuf::from("/app/lib/flux-studio/sd-server")),
+            sd_server: Some(PathBuf::from("/app/lib/imagiflume/sd-server")),
             backend_id: Some("upstream-cpu".into()),
             ..Default::default()
         };
@@ -1242,7 +1247,7 @@ mod tests {
         assert!(config.custom_server.is_none());
         assert_eq!(
             config.sd_server,
-            Some(PathBuf::from("/app/lib/flux-studio/sd-server"))
+            Some(PathBuf::from("/app/lib/imagiflume/sd-server"))
         );
         assert_eq!(config.backend_id.as_deref(), Some("upstream-cpu"));
     }

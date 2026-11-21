@@ -3,16 +3,16 @@ use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
-use flux_core::upscaler::{UPSCALERS, UpscalerPreset};
-use flux_core::vision::{VISION_HELPER, VisionHelper};
 use gtk::glib;
+use imagiflume_core::preset::{ModelFileSpec, ModelPreset, PRESETS};
+use imagiflume_core::upscaler::{UPSCALERS, UpscalerPreset};
+use imagiflume_core::vision::{VISION_HELPER, VisionHelper};
 
 use crate::{Ui, active_preset, refresh_model_list};
 
-const REPO_URL: &str = "https://github.com/tibssy/flux-studio";
-const ISSUES_URL: &str = "https://github.com/tibssy/flux-studio/issues";
-const LICENSE_URL: &str = "https://github.com/tibssy/flux-studio/blob/main/LICENSE";
+const REPO_URL: &str = "https://github.com/tibssy/imagiflume";
+const ISSUES_URL: &str = "https://github.com/tibssy/imagiflume/issues";
+const LICENSE_URL: &str = "https://github.com/tibssy/imagiflume/blob/main/LICENSE";
 const FLUX2_KLEIN_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B";
 const FLUX2_KLEIN_9B_URL: &str = "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B";
 const FLUX2_KLEIN_9B_LICENSE_URL: &str =
@@ -603,7 +603,7 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let about_group = adw::PreferencesGroup::new();
     about_group.add(
         &adw::ActionRow::builder()
-            .title(flux_core::APP_NAME)
+            .title(imagiflume_core::APP_NAME)
             .subtitle(concat!("Version ", env!("CARGO_PKG_VERSION")))
             .build(),
     );
@@ -644,12 +644,12 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let project_group = adw::PreferencesGroup::builder().title("Project").build();
     project_group.add(&link_row(
         "Website",
-        "github.com/tibssy/flux-studio",
+        "github.com/tibssy/imagiflume",
         REPO_URL,
     ));
     project_group.add(&link_row(
         "Report an Issue",
-        "github.com/tibssy/flux-studio/issues",
+        "github.com/tibssy/imagiflume/issues",
         ISSUES_URL,
     ));
     about.add(&project_group);
@@ -793,10 +793,10 @@ pub(crate) fn show_preferences(ui: &Rc<Ui>, focus_models: bool) {
     let legal_group = adw::PreferencesGroup::builder()
         .title("Licenses")
         .description(
-            "Model weights are downloaded separately and remain under their authors' licenses. Non-commercial models are marked in Models and require confirmation before download. Flux Studio is not affiliated with Black Forest Labs.",
+            "Model weights are downloaded separately and remain under their authors' licenses. Non-commercial models are marked in Models and require confirmation before download. Imagiflume is not affiliated with Black Forest Labs.",
         )
         .build();
-    legal_group.add(&link_row("Flux Studio", "GPL-3.0-or-later", LICENSE_URL));
+    legal_group.add(&link_row("Imagiflume", "GPL-3.0-or-later", LICENSE_URL));
     legal_group.add(&link_row(
         "FLUX.2 klein 4B weights",
         "Apache-2.0",
@@ -1147,7 +1147,7 @@ fn open_uri(uri: &str) {
 fn confirm_license(
     ui: &Rc<Ui>,
     preset: &'static ModelPreset,
-    license: flux_core::preset::ModelLicense,
+    license: imagiflume_core::preset::ModelLicense,
     parent: &adw::PreferencesDialog,
     on_accept: Rc<dyn Fn()>,
 ) {
@@ -1224,7 +1224,8 @@ fn start_download(
     }
     row.set_subtitle("Downloading…");
 
-    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
+    let (progress_tx, progress_rx) =
+        async_channel::unbounded::<imagiflume_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
     let download_dir = models_dir.clone();
     std::thread::spawn(move || {
@@ -1232,7 +1233,7 @@ fn start_download(
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(flux_models::download_preset(
+            runtime.block_on(imagiflume_models::download_preset(
                 preset,
                 &download_dir,
                 progress_tx,
@@ -1302,7 +1303,8 @@ fn start_upscaler_download(
     }
     row.set_subtitle("Downloading…");
 
-    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
+    let (progress_tx, progress_rx) =
+        async_channel::unbounded::<imagiflume_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
     let models_dir = ui.models_dir.clone();
     std::thread::spawn(move || {
@@ -1310,7 +1312,7 @@ fn start_upscaler_download(
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(flux_models::download_upscaler(
+            runtime.block_on(imagiflume_models::download_upscaler(
                 preset,
                 &models_dir,
                 progress_tx,
@@ -1363,7 +1365,8 @@ fn start_vision_download(
     }
     row.set_subtitle("Downloading…");
 
-    let (progress_tx, progress_rx) = async_channel::unbounded::<flux_models::DownloadProgress>();
+    let (progress_tx, progress_rx) =
+        async_channel::unbounded::<imagiflume_models::DownloadProgress>();
     let (done_tx, done_rx) = async_channel::bounded::<Result<(), String>>(1);
     let models_dir = ui.models_dir.clone();
     std::thread::spawn(move || {
@@ -1371,7 +1374,7 @@ fn start_vision_download(
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(flux_models::download_vision_helper(
+            runtime.block_on(imagiflume_models::download_vision_helper(
                 &VISION_HELPER,
                 &models_dir,
                 progress_tx,
@@ -1512,8 +1515,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let klein = &flux_core::preset::FLUX2_KLEIN_4B;
-        let flux3 = &flux_core::preset::FLUX3_KLEIN;
+        let klein = &imagiflume_core::preset::FLUX2_KLEIN_4B;
+        let flux3 = &imagiflume_core::preset::FLUX3_KLEIN;
 
         install(klein, &dir);
         // FLUX.3 is not installed, so only FLUX.2's own files are non-shared;

@@ -1,7 +1,7 @@
 //! Headless smoke test for the persistent server backend.
 //!
 //! Run from the repository root:
-//!   cargo run -p flux-backend-sdcpp --example smoke
+//!   cargo run -p imagiflume-backend-sdcpp --example smoke
 //!
 //! It generates the same image twice (the second run should reuse the loaded
 //! model) and then performs a reference edit.
@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use flux_backend_sdcpp::{SdServer, SdServerConfig};
-use flux_core::{Backend, GenerateRequest, Progress, Sampler};
+use imagiflume_backend_sdcpp::{SdServer, SdServerConfig};
+use imagiflume_core::{Backend, GenerateRequest, Progress, Sampler};
 
 fn request(prompt: &str, output: &str, references: Vec<PathBuf>) -> GenerateRequest {
     GenerateRequest {
@@ -61,8 +61,8 @@ fn run(backend: &SdServer, request: &GenerateRequest) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let models_dir = std::env::var("FLUX_MODELS_DIR").unwrap_or_else(|_| "models".into());
-    let cli = std::env::var("FLUX_SD_SERVER")
+    let models_dir = std::env::var("IMAGIFLUME_MODELS_DIR").unwrap_or_else(|_| "models".into());
+    let cli = std::env::var("IMAGIFLUME_SD_SERVER")
         .unwrap_or_else(|_| "vendor/stable-diffusion.cpp/build/bin/sd-server".into());
     let backend = SdServer::new(SdServerConfig {
         cli: PathBuf::from(cli),

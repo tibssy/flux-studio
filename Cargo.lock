@@ -623,74 +623,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flux-backend-sdcpp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "base64 0.22.1",
- "flux-core",
- "image",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "flux-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "crc32fast",
- "dirs",
- "libc",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "flux-models"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "flate2",
- "flux-core",
- "futures-util",
- "reqwest",
- "serde_json",
- "sha2",
- "tar",
- "tokio",
- "tracing",
- "zip",
-]
-
-[[package]]
-name = "flux-studio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "flux-backend-sdcpp",
- "flux-core",
- "flux-models",
- "glib",
- "gtk4",
- "image",
- "libadwaita",
- "rusqlite",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1354,6 +1286,74 @@ checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
  "quick-error",
+]
+
+[[package]]
+name = "imagiflume"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "glib",
+ "gtk4",
+ "image",
+ "imagiflume-backend-sdcpp",
+ "imagiflume-core",
+ "imagiflume-models",
+ "libadwaita",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "imagiflume-backend-sdcpp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "image",
+ "imagiflume-core",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "imagiflume-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "crc32fast",
+ "dirs",
+ "libc",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "imagiflume-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "flate2",
+ "futures-util",
+ "imagiflume-core",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tokio",
+ "tracing",
+ "zip",
 ]
 
 [[package]]

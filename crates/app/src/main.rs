@@ -24,12 +24,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
-use flux_backend_sdcpp::{SdServer, SdServerConfig};
-use flux_core::preset::{ModelPreset, PRESETS, default_preset, preset};
-use flux_core::style::STYLES;
-use flux_core::upscaler::{self, UpscaleRequest, UpscaledImage, UpscalerPreset};
-use flux_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 use gtk::{gdk, gio, glib};
+use imagiflume_backend_sdcpp::{SdServer, SdServerConfig};
+use imagiflume_core::preset::{ModelPreset, PRESETS, default_preset, preset};
+use imagiflume_core::style::STYLES;
+use imagiflume_core::upscaler::{self, UpscaleRequest, UpscaledImage, UpscalerPreset};
+use imagiflume_core::{Backend, Config, GenerateRequest, Progress, paths, size};
 
 use history::{Generation, History, NewGeneration};
 use state::{AppState, UndoStack};
@@ -51,12 +51,12 @@ fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "flux_studio=info,flux_backend_sdcpp=info".into()),
+                .unwrap_or_else(|_| "imagiflume=info,imagiflume_backend_sdcpp=info".into()),
         )
         .init();
 
     let app = adw::Application::builder()
-        .application_id(flux_core::APP_ID)
+        .application_id(imagiflume_core::APP_ID)
         .build();
     app.connect_activate(build_ui);
     app.run()
@@ -444,7 +444,7 @@ fn build_ui(app: &adw::Application) {
     let sd_server = resolve_sd_server(&config);
     let needs_backend = config.sd_server.is_none()
         && config.backend_id.is_none()
-        && std::env::var_os("FLUX_SD_SERVER").is_none()
+        && std::env::var_os("IMAGIFLUME_SD_SERVER").is_none()
         && !server_starts(&sd_server);
 
     let lora_dir = config
@@ -515,7 +515,7 @@ fn build_ui(app: &adw::Application) {
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title(flux_core::APP_NAME)
+        .title(imagiflume_core::APP_NAME)
         .default_width(1240)
         .default_height(860)
         .build();
@@ -1397,7 +1397,7 @@ fn wire_events(ui: &Rc<Ui>, preferences_button: &gtk::Button) {
                 (false, count) => format!("{count} jobs are still waiting."),
             };
             let dialog = adw::AlertDialog::builder()
-                .heading("Quit Flux Studio?")
+                .heading("Quit Imagiflume?")
                 .body(format!("{body} Quitting cancels the queue."))
                 .close_response("cancel")
                 .default_response("cancel")
@@ -2209,7 +2209,7 @@ pub(crate) fn update_image_actions(ui: &Rc<Ui>) {
     // Only a live preview is unstable: a pinned history image stays fully
     // usable while jobs run in the background.
     let stable = !(generating && !upscaling && ui.live_view.get());
-    let vision_ready = flux_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
+    let vision_ready = imagiflume_core::vision::VISION_HELPER.is_installed(&ui.models_dir);
 
     ui.nav_up_button
         .set_visible(navigation && position.is_some_and(|(index, _)| index > 0));
@@ -3873,7 +3873,7 @@ fn generate(
         return;
     }
 
-    let effective_prompt = flux_core::style::compose_prompt(&base_prompt, style_id);
+    let effective_prompt = imagiflume_core::style::compose_prompt(&base_prompt, style_id);
 
     let (width, height) = target_size(ui);
     let references = ui.state.borrow().references.clone();
@@ -3887,7 +3887,7 @@ fn generate(
         .borrow()
         .loras
         .iter()
-        .map(|lora| flux_core::LoraConfig {
+        .map(|lora| imagiflume_core::LoraConfig {
             path: lora.path.clone(),
             weight: lora.weight,
         })
@@ -4827,9 +4827,9 @@ pub(crate) fn annotate_image(
     entry: &Generation,
     cfg: f32,
     sampler: &str,
-    loras: &[flux_core::LoraConfig],
+    loras: &[imagiflume_core::LoraConfig],
 ) {
-    let metadata = flux_core::metadata::ImageMetadata {
+    let metadata = imagiflume_core::metadata::ImageMetadata {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         kind: entry.kind.clone(),
         prompt: entry.prompt.clone(),
@@ -4850,7 +4850,7 @@ pub(crate) fn annotate_image(
         created_at: entry.created_at,
         duration_ms: entry.duration_ms,
     };
-    if let Err(error) = flux_core::metadata::write_png(path, &metadata) {
+    if let Err(error) = imagiflume_core::metadata::write_png(path, &metadata) {
         tracing::warn!(%error, path = %path.display(), "failed to write PNG metadata");
     }
 }
@@ -5004,7 +5004,7 @@ fn notify_finished(
 
     let notification = gio::Notification::new(title);
     notification.set_body(Some(&body));
-    notification.set_icon(&gio::ThemedIcon::new(flux_core::APP_ID));
+    notification.set_icon(&gio::ThemedIcon::new(imagiflume_core::APP_ID));
     if error.is_some() {
         notification.set_priority(gio::NotificationPriority::High);
     }
@@ -5051,7 +5051,7 @@ fn notify_upscaled(
 
     let notification = gio::Notification::new(title);
     notification.set_body(Some(&body));
-    notification.set_icon(&gio::ThemedIcon::new(flux_core::APP_ID));
+    notification.set_icon(&gio::ThemedIcon::new(imagiflume_core::APP_ID));
     if error.is_some() {
         notification.set_priority(gio::NotificationPriority::High);
     }
@@ -5225,7 +5225,7 @@ fn auto_lighting(ui: &Rc<Ui>) {
         return;
     };
 
-    let helper = &flux_core::vision::VISION_HELPER;
+    let helper = &imagiflume_core::vision::VISION_HELPER;
     if !helper.is_installed(&ui.models_dir) {
         ui.toast
             .add_toast(adw::Toast::new("Install the vision helper in Preferences."));
@@ -5947,7 +5947,7 @@ pub(crate) fn thumb_path(id: i64) -> PathBuf {
 }
 
 fn resolve_models_dir(config: &Config) -> PathBuf {
-    if let Ok(dir) = std::env::var("FLUX_MODELS_DIR") {
+    if let Ok(dir) = std::env::var("IMAGIFLUME_MODELS_DIR") {
         return PathBuf::from(dir);
     }
     let local = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models");
@@ -5958,14 +5958,14 @@ fn resolve_models_dir(config: &Config) -> PathBuf {
 }
 
 fn resolve_sd_server(config: &Config) -> PathBuf {
-    if let Ok(path) = std::env::var("FLUX_SD_SERVER") {
+    if let Ok(path) = std::env::var("IMAGIFLUME_SD_SERVER") {
         return PathBuf::from(path);
     }
     if let Some(path) = &config.sd_server {
         return path.clone();
     }
     // Older setups configured an sd-cli path; use the sibling server binary.
-    if let Ok(path) = std::env::var("FLUX_SD_CLI")
+    if let Ok(path) = std::env::var("IMAGIFLUME_SD_CLI")
         && let Some(server) = sibling_server(&PathBuf::from(path))
     {
         return server;
@@ -5975,7 +5975,7 @@ fn resolve_sd_server(config: &Config) -> PathBuf {
     {
         return server;
     }
-    if let Some(server) = flux_core::runtime::find_system_server() {
+    if let Some(server) = imagiflume_core::runtime::find_system_server() {
         return server;
     }
     // Development checkouts keep the built server under vendor/.
@@ -5989,7 +5989,7 @@ fn resolve_sd_server(config: &Config) -> PathBuf {
 
 fn server_starts(path: &Path) -> bool {
     let path = if path == Path::new("sd-server") {
-        match flux_core::runtime::find_in_path("sd-server") {
+        match imagiflume_core::runtime::find_in_path("sd-server") {
             Some(path) => path,
             None => return false,
         }
@@ -6253,7 +6253,7 @@ mod tests {
 
         super::annotate_image(&path, &entry, 1.0, "euler", &[]);
 
-        let metadata = flux_core::metadata::read_png(&path).unwrap().unwrap();
+        let metadata = imagiflume_core::metadata::read_png(&path).unwrap().unwrap();
         assert_eq!(metadata.prompt, "a test lighthouse");
         assert_eq!(metadata.model, "flux2-klein-4b");
         assert_eq!(metadata.seed, "42");

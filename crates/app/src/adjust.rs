@@ -9,9 +9,9 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
-use flux_core::adjust::Adjustments;
 use gtk::gdk;
 use gtk::glib;
+use imagiflume_core::adjust::Adjustments;
 
 use crate::history::{Generation, NewGeneration};
 use crate::rounded_paintable::RoundedPaintable;

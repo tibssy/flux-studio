@@ -41,12 +41,12 @@ pub fn to_json(effects: &[CustomEffect]) -> Result<String, serde_json::Error> {
 /// Parse an imported pack.
 pub fn from_json(text: &str) -> Result<Vec<CustomEffect>, String> {
     let raw: RawPack =
-        serde_json::from_str(text).map_err(|_| "Not a Flux Studio effects file.".to_string())?;
+        serde_json::from_str(text).map_err(|_| "Not an Imagiflume effects file.".to_string())?;
     let effects = match raw {
         RawPack::Pack(pack) => {
             if pack.version > PACK_VERSION {
                 return Err(format!(
-                    "This effects file needs a newer Flux Studio (format {}).",
+                    "This effects file needs a newer Imagiflume (format {}).",
                     pack.version
                 ));
             }

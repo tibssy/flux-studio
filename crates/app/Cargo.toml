@@ -1,20 +1,20 @@
 [package]
-name = "flux-studio"
+name = "imagiflume"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "flux-studio"
+name = "imagiflume"
 path = "src/main.rs"
 
 [dependencies]
 adw.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
-flux-backend-sdcpp = { path = "../backend-sdcpp" }
-flux-core = { path = "../core" }
-flux-models = { path = "../models" }
+imagiflume-backend-sdcpp = { path = "../backend-sdcpp" }
+imagiflume-core = { path = "../core" }
+imagiflume-models = { path = "../models" }
 glib.workspace = true
 gtk.workspace = true
 image.workspace = true

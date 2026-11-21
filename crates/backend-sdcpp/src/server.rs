@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use async_channel::Sender;
 use base64::Engine;
-use flux_core::preset::{ModelPreset, ModelRole, preset};
-use flux_core::upscaler::{UpscaleRequest, UpscaledImage};
-use flux_core::{Backend, BackendInfo, GenerateRequest, Progress};
+use imagiflume_core::preset::{ModelPreset, ModelRole, preset};
+use imagiflume_core::upscaler::{UpscaleRequest, UpscaledImage};
+use imagiflume_core::{Backend, BackendInfo, GenerateRequest, Progress};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -60,7 +60,7 @@ struct Inner {
 
 impl SdServer {
     pub fn new(config: SdServerConfig) -> Self {
-        let log = flux_core::paths::cache_dir().join("sd-server.log");
+        let log = imagiflume_core::paths::cache_dir().join("sd-server.log");
         let upscaler = SdUpscaleServer::new(config.clone());
         let inner = Arc::new(Mutex::new(Inner {
             config,
@@ -109,7 +109,7 @@ impl Backend for SdServer {
     fn info(&self) -> BackendInfo {
         BackendInfo {
             name: "stable-diffusion.cpp (server)".into(),
-            device: std::env::var("FLUX_DEVICE").unwrap_or_else(|_| "cuda".into()),
+            device: std::env::var("IMAGIFLUME_DEVICE").unwrap_or_else(|_| "cuda".into()),
             version: None,
         }
     }

@@ -1,4 +1,6 @@
-# Flux Studio
+# Imagiflume
+
+*Where imagination flows into images.*
 
 A GTK4 / libadwaita desktop app for **local image generation and editing**,
 driven by [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
@@ -366,20 +368,20 @@ Data locations:
 
 | Path | Contents |
 |---|---|
-| `~/.local/share/flux-studio/history.db` | SQLite history (prompt, model, style, seed, reference) |
-| `~/.local/share/flux-studio/models/` | downloaded model files |
+| `~/.local/share/imagiflume/history.db` | SQLite history (prompt, model, style, seed, reference) |
+| `~/.local/share/imagiflume/models/` | downloaded model files |
 | `<models folder>/loras/` | LoRA weights, shown by **LoRAs…** |
-| `~/.local/share/flux-studio/backends/` | downloaded `sd-server` backends |
-| `~/.local/share/flux-studio/backends/llama/` | downloaded `llama-cli` backends |
-| `~/.cache/flux-studio/thumbs/` | 128 px thumbnails |
-| `~/.cache/flux-studio/sd-server.log` | backend server log |
-| `~/.cache/flux-studio/crops/` | cropped reference images |
-| `~/.config/flux-studio/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths, user effects |
-| `~/Pictures/Flux Studio/` | generated PNGs |
+| `~/.local/share/imagiflume/backends/` | downloaded `sd-server` backends |
+| `~/.local/share/imagiflume/backends/llama/` | downloaded `llama-cli` backends |
+| `~/.cache/imagiflume/thumbs/` | 128 px thumbnails |
+| `~/.cache/imagiflume/sd-server.log` | backend server log |
+| `~/.cache/imagiflume/crops/` | cropped reference images |
+| `~/.config/imagiflume/config.toml` | output dir, offload, model, style, size, sidebar state, backend, prompt-helper paths, user effects |
+| `~/Pictures/Imagiflume/` | generated PNGs |
 
 ## Licensing and legal
 
-- **Flux Studio** is licensed under **GPL-3.0-or-later** (see `LICENSE`).
+- **Imagiflume** is licensed under **GPL-3.0-or-later** (see `LICENSE`).
 - **FLUX.2 klein 4B** and the FLUX.2 VAE from the Apache-2.0
   [Comfy-Org Klein repository](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B)
   are **Apache-2.0**; commercial use is allowed.
@@ -423,7 +425,7 @@ Data locations:
   outputs; check them before commercial use.
 - `stable-diffusion.cpp` and `llama.cpp` are MIT-licensed; their bundled
   third-party libraries use BSD/MIT licenses.
-- Flux Studio is an independent project and is **not affiliated with Black
+- Imagiflume is an independent project and is **not affiliated with Black
   Forest Labs**. FLUX is a trademark of Black Forest Labs; the model licenses
   do not grant trademark rights.
 
@@ -451,15 +453,15 @@ selector; missing ones can be downloaded or removed from the Models tab.
 60 seconds without activity. Switching the model in the sidebar releases the
 previous context immediately; changing CPU offload does the same. A headless
 check of the backend is available with
-`cargo run -p flux-backend-sdcpp --example smoke`.
+`cargo run -p imagiflume-backend-sdcpp --example smoke`.
 
 Environment overrides:
 
 | Variable | Meaning |
 |---|---|
-| `FLUX_SD_SERVER` | path to the `sd-server` binary (falls back to a sibling of `FLUX_SD_CLI`) |
-| `FLUX_MODELS_DIR` | model directory (defaults to `./models` when run from the repo) |
-| `FLUX_DEVICE` | label shown by the backend info |
+| `IMAGIFLUME_SD_SERVER` | path to the `sd-server` binary (falls back to a sibling of `IMAGIFLUME_SD_CLI`) |
+| `IMAGIFLUME_MODELS_DIR` | model directory (defaults to `./models` when run from the repo) |
+| `IMAGIFLUME_DEVICE` | label shown by the backend info |
 | `CUDA_ARCH` | SM architectures for `build-sdcpp.sh` (default `52`) |
 
 ## Backends
@@ -526,12 +528,12 @@ Excavator/Zen+). Models are still downloaded on first use.
 # working tree (uses the local manifest)
 flatpak-builder --user --install --force-clean \
   --state-dir=.flatpak-builder \
-  build-dir packaging/flatpak/io.github.tibssy.FluxStudio.local.yml
+  build-dir packaging/flatpak/io.github.tibssy.Imagiflume.local.yml
 
-flatpak run io.github.tibssy.FluxStudio
+flatpak run io.github.tibssy.Imagiflume
 ```
 
-`io.github.tibssy.FluxStudio.yml` is the release manifest: it clones `main` and
+`io.github.tibssy.Imagiflume.yml` is the release manifest: it clones `main` and
 is what a Flathub submission would pin to a tag. Both use
 `cargo-sources.json`, generated from `Cargo.lock` with Flathub's
 `flatpak-cargo-generator.py`; regenerate it whenever dependencies change:
@@ -542,8 +544,8 @@ python3 flatpak-cargo-generator.py Cargo.lock \
 ```
 
 Models, history and config live under
-`~/.var/app/io.github.tibssy.FluxStudio/`; the bundled backends are under
-`/app/lib/flux-studio`. The sandbox can read and write `Pictures` and
+`~/.var/app/io.github.tibssy.Imagiflume/`; the bundled backends are under
+`/app/lib/imagiflume`. The sandbox can read and write `Pictures` and
 `Downloads`; everything else goes through the file chooser portal.
 
 Custom backend binaries are hidden in the Flatpak: they link against host
@@ -557,19 +559,19 @@ The package builds the CUDA backend for Maxwell by default:
 ```bash
 # build a source tarball from this checkout (vendor/, models/ and build
 # artifacts are not shipped)
-tar --transform 's,^,flux-studio-0.1.0/,' -czf packaging/flux-studio-0.1.0.tar.gz \
+tar --transform 's,^,imagiflume-0.1.0/,' -czf packaging/imagiflume-0.1.0.tar.gz \
     Cargo.toml Cargo.lock LICENSE README.md .gitignore crates scripts \
-    packaging/PKGBUILD packaging/io.github.tibssy.FluxStudio.desktop \
-    packaging/io.github.tibssy.FluxStudio.svg \
-    packaging/io.github.tibssy.FluxStudio.metainfo.xml
+    packaging/PKGBUILD packaging/io.github.tibssy.Imagiflume.desktop \
+    packaging/io.github.tibssy.Imagiflume.svg \
+    packaging/io.github.tibssy.Imagiflume.metainfo.xml
 
 cd packaging
-FLUX_CUDA_ARCH=52 makepkg -si
+IMAGIFLUME_CUDA_ARCH=52 makepkg -si
 ```
 
-The installed binary discovers a backend in this order: `FLUX_SD_SERVER`,
+The installed binary discovers a backend in this order: `IMAGIFLUME_SD_SERVER`,
 `sd_server` in the config, a sibling of `sd_cli`, a server next to the app
-binary, `/usr/lib/flux-studio`, `/usr/local`, `~/.local`, then `PATH`. If none
+binary, `/usr/lib/imagiflume`, `/usr/local`, `~/.local`, then `PATH`. If none
 is found it downloads the CPU backend automatically.
 
 ## Layout
@@ -615,11 +617,11 @@ The backend archives are self-contained; the app binary is not. If a distro
 reports a missing library, check:
 
 ```bash
-ldd ./flux-studio | grep "not found"
+ldd ./imagiflume | grep "not found"
 ```
 
 On Fedora/Bazzite, `libbz2.so.1.0` comes from `bzip2-libs` (pulled in by
-gdk-pixbuf), not from Flux Studio. Install it with
+gdk-pixbuf), not from Imagiflume. Install it with
 `rpm-ostree install bzip2-libs` and reboot, then check for further missing
 sonames such as `liblzma`, `libzstd` or `libxml2`. For a distro-independent
 install, a Flatpak/AppImage build is the correct long-term solution; a raw

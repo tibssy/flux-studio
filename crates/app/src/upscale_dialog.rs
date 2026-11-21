@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use flux_core::upscaler;
 use gtk::glib;
+use imagiflume_core::upscaler;
 
 use crate::Ui;
 

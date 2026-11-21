@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use flux_core::upscaler::{
+use image::imageops::FilterType;
+use imagiflume_core::upscaler::{
     DEFAULT_TILE_SIZE, FALLBACK_TILE_SIZE, UpscaleRequest, UpscaledImage, upscaler,
 };
-use image::imageops::FilterType;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -44,7 +44,7 @@ struct Inner {
 
 impl SdUpscaleServer {
     pub fn new(config: SdServerConfig) -> Self {
-        let log = flux_core::paths::cache_dir().join("sd-upscale-server.log");
+        let log = imagiflume_core::paths::cache_dir().join("sd-upscale-server.log");
         let inner = Arc::new(Mutex::new(Inner {
             config,
             client: reqwest::blocking::Client::builder()

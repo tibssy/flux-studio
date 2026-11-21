@@ -32,7 +32,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for RoundedPaintable {
-        const NAME: &'static str = "FluxRoundedPaintable";
+        const NAME: &'static str = "ImagiflumeRoundedPaintable";
         type Type = super::RoundedPaintable;
         type ParentType = glib::Object;
         type Interfaces = (gdk::Paintable,);

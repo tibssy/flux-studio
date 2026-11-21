@@ -59,10 +59,10 @@ jobs:
         run: |
           set -eux
           echo "--- max GLIBC requirement ---"
-          objdump -T target/release/flux-studio \
+          objdump -T target/release/imagiflume \
             | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -5
           echo "--- missing shared libraries ---"
-          ldd target/release/flux-studio | grep "not found" || echo "none"
+          ldd target/release/imagiflume | grep "not found" || echo "none"
 
       - name: Resolve release tag
         env:
@@ -83,38 +83,38 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/release/flux-studio dist/
+          cp target/release/imagiflume dist/
           cp README.md CHANGELOG.md LICENSE dist/
-          cp packaging/io.github.tibssy.FluxStudio.desktop dist/
-          cp packaging/io.github.tibssy.FluxStudio.svg dist/
+          cp packaging/io.github.tibssy.Imagiflume.desktop dist/
+          cp packaging/io.github.tibssy.Imagiflume.svg dist/
           # Checksum of the binary, shipped inside the archive.
-          (cd dist && sha256sum flux-studio > flux-studio.sha256)
-          tar -C dist -czf flux-studio-linux-x86_64.tar.gz .
+          (cd dist && sha256sum imagiflume > imagiflume.sha256)
+          tar -C dist -czf imagiflume-linux-x86_64.tar.gz .
           # Checksum of the archive itself, published as a release asset.
-          sha256sum flux-studio-linux-x86_64.tar.gz \
-            > flux-studio-linux-x86_64.tar.gz.sha256
-          ls -lh flux-studio-linux-x86_64.tar.gz ./*.sha256
-          cat flux-studio-linux-x86_64.tar.gz.sha256
+          sha256sum imagiflume-linux-x86_64.tar.gz \
+            > imagiflume-linux-x86_64.tar.gz.sha256
+          ls -lh imagiflume-linux-x86_64.tar.gz ./*.sha256
+          cat imagiflume-linux-x86_64.tar.gz.sha256
 
       - name: Publish alpha release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Flux Studio ${{ env.RELEASE_TAG }} (alpha test)"
+          name: "Imagiflume ${{ env.RELEASE_TAG }} (alpha test)"
           prerelease: true
           fail_on_unmatched_files: true
           body: |
-            **Alpha test build** of Flux Studio. Expect rough edges.
+            **Alpha test build** of Imagiflume. Expect rough edges.
 
             - Built on Debian 13 (trixie) with GTK 4.18 and libadwaita 1.7.
             - The app binary is dynamically linked: it needs a host with
               GTK 4.16+, libadwaita 1.6+ and glibc 2.39+ (Debian 13,
               Ubuntu 24.04 or newer).
-            - `flux-studio-linux-x86_64.tar.gz` contains the binary, README,
+            - `imagiflume-linux-x86_64.tar.gz` contains the binary, README,
               LICENSE, desktop entry and icon.
             - Verify the download with
-              `sha256sum -c flux-studio-linux-x86_64.tar.gz.sha256`, or the
-              extracted binary with `sha256sum -c flux-studio.sha256`.
+              `sha256sum -c imagiflume-linux-x86_64.tar.gz.sha256`, or the
+              extracted binary with `sha256sum -c imagiflume.sha256`.
           files: |
-            flux-studio-linux-x86_64.tar.gz
-            flux-studio-linux-x86_64.tar.gz.sha256
+            imagiflume-linux-x86_64.tar.gz
+            imagiflume-linux-x86_64.tar.gz.sha256

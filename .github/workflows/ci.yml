@@ -69,10 +69,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: AppStream metadata
-        run: appstreamcli validate --no-net --pedantic packaging/io.github.tibssy.FluxStudio.metainfo.xml
+        run: appstreamcli validate --no-net --pedantic packaging/io.github.tibssy.Imagiflume.metainfo.xml
 
       - name: Desktop entry
-        run: desktop-file-validate packaging/io.github.tibssy.FluxStudio.desktop
+        run: desktop-file-validate packaging/io.github.tibssy.Imagiflume.desktop
 
       - name: Flatpak manifests
         run: |
@@ -81,13 +81,13 @@ jobs:
 
           manifests = {}
           for name in (
-              "packaging/flatpak/io.github.tibssy.FluxStudio.yml",
-              "packaging/flatpak/io.github.tibssy.FluxStudio.local.yml",
+              "packaging/flatpak/io.github.tibssy.Imagiflume.yml",
+              "packaging/flatpak/io.github.tibssy.Imagiflume.local.yml",
           ):
               with open(name) as handle:
                   manifest = yaml.safe_load(handle)
-              assert manifest["id"] == "io.github.tibssy.FluxStudio", name
-              assert manifest["command"] == "flux-studio", name
+              assert manifest["id"] == "io.github.tibssy.Imagiflume", name
+              assert manifest["command"] == "imagiflume", name
               assert manifest["sdk-extensions"] == [
                   "org.freedesktop.Sdk.Extension.rust-stable"
               ], name
@@ -95,7 +95,7 @@ jobs:
               assert modules == [
                   "stable-diffusion-cpp",
                   "llama-cpp",
-                  "flux-studio",
+                  "imagiflume",
               ], f"{name}: {modules}"
               manifests[name] = (manifest["runtime"], manifest["runtime-version"])
               print(f"{name}: ok")

@@ -21,8 +21,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use async_channel::Sender;
 
-use flux_core::preset::{ModelPreset, ModelRole, preset};
-use flux_core::{Backend, BackendInfo, GenerateRequest, Progress};
+use imagiflume_core::preset::{ModelPreset, ModelRole, preset};
+use imagiflume_core::{Backend, BackendInfo, GenerateRequest, Progress};
 
 /// How many trailing stderr lines to keep for error reporting.
 const STDERR_TAIL_LINES: usize = 6;
@@ -83,7 +83,7 @@ impl Backend for SdCpp {
     fn info(&self) -> BackendInfo {
         BackendInfo {
             name: "stable-diffusion.cpp".into(),
-            device: std::env::var("FLUX_DEVICE").unwrap_or_else(|_| "cuda".into()),
+            device: std::env::var("IMAGIFLUME_DEVICE").unwrap_or_else(|_| "cuda".into()),
             version: None,
         }
     }
@@ -91,7 +91,7 @@ impl Backend for SdCpp {
     fn generate(&self, request: &GenerateRequest, progress: Sender<Progress>) -> Result<PathBuf> {
         if !self.config.cli.exists() {
             bail!(
-                "sd-cli not found at {} (set FLUX_SD_CLI or build vendor/stable-diffusion.cpp)",
+                "sd-cli not found at {} (set IMAGIFLUME_SD_CLI or build vendor/stable-diffusion.cpp)",
                 self.config.cli.display()
             );
         }
@@ -376,7 +376,7 @@ pub fn parse_progress_line(line: &str, expected_steps: u32) -> Option<Progress> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flux_core::preset::{FLUX2_KLEIN_4B, QWEN_IMAGE_2_1_TURBO};
+    use imagiflume_core::preset::{FLUX2_KLEIN_4B, QWEN_IMAGE_2_1_TURBO};
 
     #[test]
     fn parses_progress_bar() {
@@ -412,7 +412,7 @@ mod tests {
             cfg: 1.0,
             sigmas: Vec::new(),
             seed: 42,
-            sampler: flux_core::Sampler::Euler,
+            sampler: imagiflume_core::Sampler::Euler,
             offload: true,
             reference_images: vec!["/tmp/ref.png".into()],
             loras: Vec::new(),
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn flux1_uses_t5_and_clip_l_instead_of_llm() {
-        let preset = &flux_core::preset::FLUX1_SCHNELL;
+        let preset = &imagiflume_core::preset::FLUX1_SCHNELL;
         let request = GenerateRequest {
             preset_id: preset.id.into(),
             prompt: "a cat".into(),
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn flux3_uses_sixteen_steps_and_vision_encoder() {
-        let preset = &flux_core::preset::FLUX3_KLEIN;
+        let preset = &imagiflume_core::preset::FLUX3_KLEIN;
         let request = GenerateRequest {
             preset_id: preset.id.into(),
             prompt: "a cat".into(),
@@ -567,7 +567,7 @@ mod tests {
             sampler: preset.sampler,
             offload: true,
             reference_images: Vec::new(),
-            loras: vec![flux_core::LoraConfig {
+            loras: vec![imagiflume_core::LoraConfig {
                 path: "styles/watercolor.safetensors".into(),
                 weight: 0.8,
             }],

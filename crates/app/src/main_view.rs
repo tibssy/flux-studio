@@ -243,7 +243,7 @@ pub(crate) fn build() -> MainView {
 
     let effects_import = gtk::Button::builder()
         .label("Import…")
-        .tooltip_text("Load effects from a Flux Studio effects file")
+        .tooltip_text("Load effects from an Imagiflume effects file")
         .css_classes(["flat"])
         .build();
     let effects_export = gtk::Button::builder()

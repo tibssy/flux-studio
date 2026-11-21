@@ -1,35 +1,25 @@
-# Flatpak manifest for Flux Studio.
-#
-# Build (from the repository root):
+# Local Flatpak manifest: builds the working tree instead of cloning `main`.
 #
 #   flatpak-builder --user --install --force-clean \
 #     --state-dir=.flatpak-builder \
-#     build-dir packaging/flatpak/io.github.tibssy.FluxStudio.yml
+#     build-dir packaging/flatpak/io.github.tibssy.Imagiflume.local.yml
 #
-# Models are downloaded on first use. The CPU backends are bundled because the
-# upstream prebuilt binaries are linked against a newer glibc than the runtime
-# provides, and because Flathub builds included dependencies from source.
-# Flathub pins the app with a commit; the branch below is for local builds of
-# `main`.
-id: io.github.tibssy.FluxStudio
+# Keep the finish-args and build-commands in sync with the release manifest.
+id: io.github.tibssy.Imagiflume
 runtime: org.gnome.Platform
 runtime-version: "51"
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: flux-studio
+command: imagiflume
 
 finish-args:
-  # The local sd-server listens on 127.0.0.1, and models/backends are
-  # downloaded from GitHub.
   - --share=network
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
-  # GPU inference. `all` is needed for CUDA devices, not just rendering.
   - --device=dri
   - --device=all
-  # Default output folder and images opened from disk.
   - --filesystem=xdg-pictures
   - --filesystem=xdg-download
   - --talk-name=org.freedesktop.Notifications
@@ -37,7 +27,7 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/flux-studio/cargo
+    CARGO_HOME: /run/build/imagiflume/cargo
 
 modules:
   # Bundle the CPU backend: the upstream prebuilt binaries require a newer
@@ -62,9 +52,9 @@ modules:
         -DGGML_F16C=ON
         -DGGML_OPENMP=ON
       - cmake --build _build --target sd-server -j "$FLATPAK_BUILDER_N_JOBS"
-      - install -Dm755 _build/bin/sd-server /app/lib/flux-studio/sd-server
+      - install -Dm755 _build/bin/sd-server /app/lib/imagiflume/sd-server
       - install -Dm644 LICENSE
-        /app/share/licenses/io.github.tibssy.FluxStudio/LICENSE.stable-diffusion.cpp
+        /app/share/licenses/io.github.tibssy.Imagiflume/LICENSE.stable-diffusion.cpp
     sources:
       - type: git
         url: https://github.com/leejet/stable-diffusion.cpp.git
@@ -94,29 +84,40 @@ modules:
         -DGGML_F16C=ON
         -DGGML_OPENMP=ON
       - cmake --build _build --target llama-cli -j "$FLATPAK_BUILDER_N_JOBS"
-      - install -Dm755 _build/bin/llama-cli /app/lib/flux-studio/llama-cli
+      - install -Dm755 _build/bin/llama-cli /app/lib/imagiflume/llama-cli
       - install -Dm644 LICENSE
-        /app/share/licenses/io.github.tibssy.FluxStudio/LICENSE.llama.cpp
+        /app/share/licenses/io.github.tibssy.Imagiflume/LICENSE.llama.cpp
     sources:
       - type: git
         url: https://github.com/ggml-org/llama.cpp.git
         commit: c56be864f482dc88a6d62a0816a265034941935f
 
-  - name: flux-studio
+  - name: imagiflume
 
     buildsystem: simple
     build-commands:
       - cargo build --release --offline --locked
-      - install -Dm755 target/release/flux-studio /app/bin/flux-studio
-      - install -Dm644 packaging/io.github.tibssy.FluxStudio.desktop
-        /app/share/applications/io.github.tibssy.FluxStudio.desktop
-      - install -Dm644 packaging/io.github.tibssy.FluxStudio.svg
-        /app/share/icons/hicolor/scalable/apps/io.github.tibssy.FluxStudio.svg
-      - install -Dm644 packaging/io.github.tibssy.FluxStudio.metainfo.xml
-        /app/share/metainfo/io.github.tibssy.FluxStudio.metainfo.xml
-      - install -Dm644 LICENSE /app/share/licenses/io.github.tibssy.FluxStudio/LICENSE
+      - install -Dm755 target/release/imagiflume /app/bin/imagiflume
+      - install -Dm644 packaging/io.github.tibssy.Imagiflume.desktop
+        /app/share/applications/io.github.tibssy.Imagiflume.desktop
+      - install -Dm644 packaging/io.github.tibssy.Imagiflume.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.tibssy.Imagiflume.svg
+      - install -Dm644 packaging/io.github.tibssy.Imagiflume.metainfo.xml
+        /app/share/metainfo/io.github.tibssy.Imagiflume.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github.tibssy.Imagiflume/LICENSE
     sources:
-      - type: git
-        url: https://github.com/tibssy/flux-studio.git
-        branch: main
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - build-dir
+          - target
+          - vendor
+          - models
+          - notes
+          - packaging/src
+          - packaging/pkg
+          - "packaging/*.tar.gz"
+          - "packaging/*.pkg.tar.*"
       - cargo-sources.json

@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=Flux Studio
+Name=Imagiflume
 GenericName=Local Image Generator
 Comment=Generate and edit images locally with FLUX and other diffusion models
-Exec=flux-studio
-Icon=io.github.tibssy.FluxStudio
+Exec=imagiflume
+Icon=io.github.tibssy.Imagiflume
 Terminal=false
 Categories=Graphics;2DGraphics;
 Keywords=AI;image;generation;diffusion;FLUX;stable-diffusion;
 StartupNotify=true
-StartupWMClass=io.github.tibssy.FluxStudio
+StartupWMClass=io.github.tibssy.Imagiflume
 X-GNOME-UsesNotifications=true

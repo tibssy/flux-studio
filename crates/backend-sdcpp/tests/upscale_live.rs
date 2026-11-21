@@ -1,23 +1,25 @@
 //! Live upscaler checks. They need `sd-server` and downloaded weights:
 //!
 //! ```text
-//! FLUX_SD_SERVER=vendor/stable-diffusion.cpp/build/bin/sd-server \
-//! FLUX_MODELS_DIR=/tmp/upscale-models \
-//! FLUX_UPSCALE_INPUT=/tmp/lr.png \
-//! cargo test -p flux-backend-sdcpp --test upscale_live -- --ignored
+//! IMAGIFLUME_SD_SERVER=vendor/stable-diffusion.cpp/build/bin/sd-server \
+//! IMAGIFLUME_MODELS_DIR=/tmp/upscale-models \
+//! IMAGIFLUME_UPSCALE_INPUT=/tmp/lr.png \
+//! cargo test -p imagiflume-backend-sdcpp --test upscale_live -- --ignored
 //! ```
 
 use std::path::PathBuf;
 
-use flux_backend_sdcpp::{SdServerConfig, SdUpscaleServer};
-use flux_core::upscaler::{DEFAULT_TILE_SIZE, UpscaleRequest};
+use imagiflume_backend_sdcpp::{SdServerConfig, SdUpscaleServer};
+use imagiflume_core::upscaler::{DEFAULT_TILE_SIZE, UpscaleRequest};
 
 #[test]
 #[ignore = "requires sd-server and downloaded upscaler weights"]
 fn upscales_at_4x_and_2x() {
-    let cli = PathBuf::from(std::env::var("FLUX_SD_SERVER").expect("FLUX_SD_SERVER"));
-    let models_dir = PathBuf::from(std::env::var("FLUX_MODELS_DIR").expect("FLUX_MODELS_DIR"));
-    let input = PathBuf::from(std::env::var("FLUX_UPSCALE_INPUT").expect("FLUX_UPSCALE_INPUT"));
+    let cli = PathBuf::from(std::env::var("IMAGIFLUME_SD_SERVER").expect("IMAGIFLUME_SD_SERVER"));
+    let models_dir =
+        PathBuf::from(std::env::var("IMAGIFLUME_MODELS_DIR").expect("IMAGIFLUME_MODELS_DIR"));
+    let input =
+        PathBuf::from(std::env::var("IMAGIFLUME_UPSCALE_INPUT").expect("IMAGIFLUME_UPSCALE_INPUT"));
     let output = std::env::temp_dir().join("flux-live-upscale-4x.png");
     let output_2x = std::env::temp_dir().join("flux-live-upscale-2x.png");
 
